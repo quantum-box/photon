@@ -64,31 +64,53 @@ const titles: Record<Status, string[]> = {
 
 const priorities: Priority[] = ['urgent', 'high', 'medium', 'low', 'none']
 
+const extraTitles = [
+  'キャッシュ戦略の見直し', 'エラー画面のUX改善', 'ヘルスチェックAPIの追加',
+  'バックアップ自動化', 'セッション管理の改善', 'ページネーションの最適化',
+  'ファイルアップロード機能', 'Webhook配信リトライ', 'メトリクス収集基盤',
+  '通知設定画面', 'データエクスポート改善', 'API v2設計', 'テスト基盤の刷新',
+  'ロギング基盤の刷新', 'マルチテナント対応', 'SSO連携', '監査ログ実装',
+  '検索インデックス最適化', 'レート制限の高度化', 'データ整合性チェック',
+]
+
 let counter = 1
+const statuses: Status[] = ['backlog', 'todo', 'in_progress', 'in_review', 'done', 'cancelled']
 
 function generateIssues(): Issue[] {
   const issues: Issue[] = []
+  // Original titles by status
   for (const [status, titleList] of Object.entries(titles)) {
     for (const title of titleList) {
-      const id = `issue-${counter}`
-      const identifier = `PLT-${100 + counter}`
-      issues.push({
-        id,
-        identifier,
-        title,
-        status: status as Status,
-        priority: priorities[counter % priorities.length],
-        assignee: counter % 3 === 0 ? null : names[counter % names.length],
-        labels: labelSets[counter % labelSets.length],
-        project: projects[counter % projects.length],
-        createdAt: new Date(2026, 2, counter).toISOString(),
-        updatedAt: new Date(2026, 2, 20 + (counter % 10)).toISOString(),
-        description: `${title}の詳細な説明がここに入ります。\n\n## 要件\n- 要件1\n- 要件2\n- 要件3\n\n## 関連\n- ${identifier}`,
-      })
-      counter++
+      issues.push(makeIssue(title, status as Status))
     }
   }
+  // Extra issues for virtual scroll testing (200+ total)
+  for (let i = 0; i < 180; i++) {
+    const title = `${extraTitles[i % extraTitles.length]} #${Math.floor(i / extraTitles.length) + 2}`
+    const status = statuses[i % statuses.length]
+    issues.push(makeIssue(title, status))
+  }
   return issues
+}
+
+function makeIssue(title: string, status: Status): Issue {
+  const id = `issue-${counter}`
+  const identifier = `PLT-${100 + counter}`
+  const issue: Issue = {
+    id,
+    identifier,
+    title,
+    status,
+    priority: priorities[counter % priorities.length],
+    assignee: counter % 3 === 0 ? null : names[counter % names.length],
+    labels: labelSets[counter % labelSets.length],
+    project: projects[counter % projects.length],
+    createdAt: new Date(2026, 2, (counter % 28) + 1).toISOString(),
+    updatedAt: new Date(2026, 2, 20 + (counter % 10)).toISOString(),
+    description: `${title}の詳細な説明がここに入ります。\n\n## 要件\n- 要件1\n- 要件2\n- 要件3\n\n## 関連\n- ${identifier}`,
+  }
+  counter++
+  return issue
 }
 
 export const mockIssues: Issue[] = generateIssues()

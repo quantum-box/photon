@@ -38,6 +38,19 @@ function App() {
     )
   }, [])
 
+  const handleUpdateIssue = useCallback(
+    (issueId: string, field: keyof Issue, value: string) => {
+      setIssues((prev) =>
+        prev.map((i) => (i.id === issueId ? { ...i, [field]: value } : i))
+      )
+      // Also update selected issue if it's the one being edited
+      setSelectedIssue((prev) =>
+        prev?.id === issueId ? { ...prev, [field]: value } : prev
+      )
+    },
+    []
+  )
+
   return (
     <div className="flex h-full">
       <Sidebar
@@ -96,6 +109,7 @@ function App() {
               issues={filteredIssues}
               selectedIssueId={selectedIssue?.id ?? null}
               onSelectIssue={handleSelectIssue}
+              onUpdateIssue={handleUpdateIssue}
             />
           ) : (
             <KanbanView

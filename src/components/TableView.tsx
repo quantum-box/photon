@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, useCallback, useRef, useEffect } from 'react'
 import {
   useReactTable,
   getCoreRowModel,
@@ -9,9 +9,11 @@ import {
   type SortingState,
   type ColumnFiltersState,
 } from '@tanstack/react-table'
+import { useVirtualizer } from '@tanstack/react-virtual'
 import {
   type Issue,
   type Status,
+  type Priority,
   statusConfig,
   priorityConfig,
 } from '../data/mock'
@@ -20,14 +22,205 @@ interface TableViewProps {
   issues: Issue[]
   selectedIssueId: string | null
   onSelectIssue: (issue: Issue) => void
+  onUpdateIssue: (issueId: string, field: keyof Issue, value: string) => void
 }
 
 const columnHelper = createColumnHelper<Issue>()
 
-export function TableView({ issues, selectedIssueId, onSelectIssue }: TableViewProps) {
+// Inline editable cell
+function EditableCell({
+  value,
+  issueId,
+  field,
+  onUpdate,
+}: {
+  value: string
+  issueId: string
+  field: keyof Issue
+  onUpdate: (issueId: string, field: keyof Issue, value: string) => void
+}) {
+  const [editing, setEditing] = useState(false)
+  const [editValue, setEditValue] = useState(value)
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (editing && inputRef.current) {
+      inputRef.current.focus()
+      inputRef.current.select()
+    }
+  }, [editing])
+
+  const commit = useCallback(() => {
+    setEditing(false)
+    if (editValue !== value) {
+      onUpdate(issueId, field, editValue)
+    }
+  }, [editValue, value, issueId, field, onUpdate])
+
+  if (editing) {
+    return (
+      <input
+        ref={inputRef}
+        value={editValue}
+        onChange={(e) => setEditValue(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') commit()
+          if (e.key === 'Escape') {
+            setEditValue(value)
+            setEditing(false)
+          }
+        }}
+        className="w-full px-1 py-0.5 rounded text-sm outline-none"
+        style={{
+          background: 'var(--bg-primary)',
+          border: '1px solid var(--accent)',
+          color: 'var(--text-primary)',
+        }}
+        onClick={(e) => e.stopPropagation()}
+      />
+    )
+  }
+
+  return (
+    <span
+      className="text-sm truncate block cursor-text rounded px-1 py-0.5 -mx-1 transition-colors"
+      onDoubleClick={(e) => {
+        e.stopPropagation()
+        setEditing(true)
+      }}
+      style={{ minHeight: '24px' }}
+      title="ダブルクリックで編集"
+    >
+      {value}
+    </span>
+  )
+}
+
+// Status select cell
+function StatusSelectCell({
+  value,
+  issueId,
+  onUpdate,
+}: {
+  value: Status
+  issueId: string
+  onUpdate: (issueId: string, field: keyof Issue, value: string) => void
+}) {
+  const [editing, setEditing] = useState(false)
+  const config = statusConfig[value]
+
+  if (editing) {
+    return (
+      <select
+        value={value}
+        onChange={(e) => {
+          onUpdate(issueId, 'status', e.target.value)
+          setEditing(false)
+        }}
+        onBlur={() => setEditing(false)}
+        autoFocus
+        className="text-xs outline-none rounded px-1 py-0.5"
+        style={{
+          background: 'var(--bg-primary)',
+          border: '1px solid var(--accent)',
+          color: 'var(--text-primary)',
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        {(Object.entries(statusConfig) as [Status, typeof config][]).map(([key, sc]) => (
+          <option key={key} value={key}>
+            {sc.icon} {sc.label}
+          </option>
+        ))}
+      </select>
+    )
+  }
+
+  return (
+    <span
+      className="flex items-center gap-1.5 cursor-pointer rounded px-1 py-0.5 -mx-1 transition-colors"
+      onDoubleClick={(e) => {
+        e.stopPropagation()
+        setEditing(true)
+      }}
+      title="ダブルクリックで変更"
+    >
+      <span style={{ color: config.color }}>{config.icon}</span>
+      <span className="text-xs">{config.label}</span>
+    </span>
+  )
+}
+
+// Priority select cell
+function PrioritySelectCell({
+  value,
+  issueId,
+  onUpdate,
+}: {
+  value: Priority
+  issueId: string
+  onUpdate: (issueId: string, field: keyof Issue, value: string) => void
+}) {
+  const [editing, setEditing] = useState(false)
+  const config = priorityConfig[value]
+
+  if (editing) {
+    return (
+      <select
+        value={value}
+        onChange={(e) => {
+          onUpdate(issueId, 'priority', e.target.value)
+          setEditing(false)
+        }}
+        onBlur={() => setEditing(false)}
+        autoFocus
+        className="text-xs outline-none rounded px-1 py-0.5"
+        style={{
+          background: 'var(--bg-primary)',
+          border: '1px solid var(--accent)',
+          color: 'var(--text-primary)',
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        {(Object.entries(priorityConfig) as [Priority, typeof config][]).map(
+          ([key, pc]) => (
+            <option key={key} value={key}>
+              {pc.icon} {pc.label}
+            </option>
+          )
+        )}
+      </select>
+    )
+  }
+
+  return (
+    <span
+      className="flex items-center gap-1.5 cursor-pointer rounded px-1 py-0.5 -mx-1 transition-colors"
+      onDoubleClick={(e) => {
+        e.stopPropagation()
+        setEditing(true)
+      }}
+      title="ダブルクリックで変更"
+    >
+      <span style={{ color: config.color }}>{config.icon}</span>
+      <span className="text-xs">{config.label}</span>
+    </span>
+  )
+}
+
+const ROW_HEIGHT = 40
+
+export function TableView({
+  issues,
+  selectedIssueId,
+  onSelectIssue,
+  onUpdateIssue,
+}: TableViewProps) {
   const [sorting, setSorting] = useState<SortingState>([])
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([])
   const [globalFilter, setGlobalFilter] = useState('')
+  const parentRef = useRef<HTMLDivElement>(null)
 
   const columns = useMemo(
     () => [
@@ -35,45 +228,48 @@ export function TableView({ issues, selectedIssueId, onSelectIssue }: TableViewP
         header: 'ID',
         size: 90,
         cell: (info) => (
-          <span className="font-mono text-xs" style={{ color: 'var(--text-muted)' }}>
+          <span
+            className="font-mono text-xs"
+            style={{ color: 'var(--text-muted)' }}
+          >
             {info.getValue()}
           </span>
         ),
       }),
       columnHelper.accessor('status', {
         header: 'Status',
-        size: 130,
-        cell: (info) => {
-          const s = statusConfig[info.getValue()]
-          return (
-            <span className="flex items-center gap-1.5">
-              <span style={{ color: s.color }}>{s.icon}</span>
-              <span className="text-xs">{s.label}</span>
-            </span>
-          )
-        },
-        filterFn: (row, _id, filterValue: Status) => {
-          return row.original.status === filterValue
-        },
+        size: 140,
+        cell: (info) => (
+          <StatusSelectCell
+            value={info.getValue()}
+            issueId={info.row.original.id}
+            onUpdate={onUpdateIssue}
+          />
+        ),
+        filterFn: (row, _id, filterValue: Status) =>
+          row.original.status === filterValue,
       }),
       columnHelper.accessor('priority', {
         header: 'Priority',
-        size: 100,
-        cell: (info) => {
-          const p = priorityConfig[info.getValue()]
-          return (
-            <span className="flex items-center gap-1.5">
-              <span style={{ color: p.color }}>{p.icon}</span>
-              <span className="text-xs">{p.label}</span>
-            </span>
-          )
-        },
+        size: 110,
+        cell: (info) => (
+          <PrioritySelectCell
+            value={info.getValue()}
+            issueId={info.row.original.id}
+            onUpdate={onUpdateIssue}
+          />
+        ),
       }),
       columnHelper.accessor('title', {
         header: 'Title',
         size: 400,
         cell: (info) => (
-          <span className="text-sm truncate block">{info.getValue()}</span>
+          <EditableCell
+            value={info.getValue()}
+            issueId={info.row.original.id}
+            field="title"
+            onUpdate={onUpdateIssue}
+          />
         ),
       }),
       columnHelper.accessor('assignee', {
@@ -125,9 +321,12 @@ export function TableView({ issues, selectedIssueId, onSelectIssue }: TableViewP
         header: 'Project',
         size: 130,
         cell: (info) => (
-          <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>
-            {info.getValue()}
-          </span>
+          <EditableCell
+            value={info.getValue()}
+            issueId={info.row.original.id}
+            field="project"
+            onUpdate={onUpdateIssue}
+          />
         ),
       }),
       columnHelper.accessor('updatedAt', {
@@ -143,7 +342,7 @@ export function TableView({ issues, selectedIssueId, onSelectIssue }: TableViewP
         ),
       }),
     ],
-    []
+    [onUpdateIssue]
   )
 
   const table = useReactTable({
@@ -159,11 +358,20 @@ export function TableView({ issues, selectedIssueId, onSelectIssue }: TableViewP
     columnResizeMode: 'onChange',
   })
 
+  const { rows } = table.getRowModel()
+
+  const virtualizer = useVirtualizer({
+    count: rows.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => ROW_HEIGHT,
+    overscan: 20,
+  })
+
   return (
     <div className="flex flex-col h-full">
       {/* Toolbar */}
       <div
-        className="flex items-center gap-2 px-4 py-2 border-b"
+        className="flex items-center gap-3 px-4 py-2 border-b shrink-0"
         style={{ borderColor: 'var(--border-color)' }}
       >
         <div className="relative flex-1 max-w-xs">
@@ -181,14 +389,17 @@ export function TableView({ issues, selectedIssueId, onSelectIssue }: TableViewP
           />
         </div>
         <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
-          {table.getFilteredRowModel().rows.length} issues
+          {rows.length} issues
+        </span>
+        <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+          · double-click to edit
         </span>
       </div>
 
-      {/* Table */}
-      <div className="flex-1 overflow-auto">
+      {/* Table with virtual scroll */}
+      <div ref={parentRef} className="flex-1 overflow-auto">
         <table className="w-full" style={{ minWidth: '900px' }}>
-          <thead>
+          <thead className="sticky top-0 z-10">
             {table.getHeaderGroups().map((headerGroup) => (
               <tr key={headerGroup.id}>
                 {headerGroup.headers.map((header) => (
@@ -200,12 +411,17 @@ export function TableView({ issues, selectedIssueId, onSelectIssue }: TableViewP
                       color: 'var(--text-muted)',
                       background: 'var(--bg-surface)',
                       borderBottom: '1px solid var(--border-color)',
-                      cursor: header.column.getCanSort() ? 'pointer' : 'default',
+                      cursor: header.column.getCanSort()
+                        ? 'pointer'
+                        : 'default',
                     }}
                     onClick={header.column.getToggleSortingHandler()}
                   >
                     <div className="flex items-center gap-1">
-                      {flexRender(header.column.columnDef.header, header.getContext())}
+                      {flexRender(
+                        header.column.columnDef.header,
+                        header.getContext()
+                      )}
                       {{
                         asc: ' ↑',
                         desc: ' ↓',
@@ -222,7 +438,8 @@ export function TableView({ issues, selectedIssueId, onSelectIssue }: TableViewP
                           : 'transparent',
                       }}
                       onMouseEnter={(e) =>
-                        (e.currentTarget.style.background = 'var(--border-color)')
+                        (e.currentTarget.style.background =
+                          'var(--border-color)')
                       }
                       onMouseLeave={(e) => {
                         if (!header.column.getIsResizing())
@@ -235,38 +452,73 @@ export function TableView({ issues, selectedIssueId, onSelectIssue }: TableViewP
             ))}
           </thead>
           <tbody>
-            {table.getRowModel().rows.map((row) => (
-              <tr
-                key={row.id}
-                className="cursor-pointer transition-colors"
-                style={{
-                  background:
-                    row.original.id === selectedIssueId
-                      ? 'var(--bg-hover)'
-                      : 'transparent',
-                  borderBottom: '1px solid var(--border-color)',
-                }}
-                onClick={() => onSelectIssue(row.original)}
-                onMouseEnter={(e) => {
-                  if (row.original.id !== selectedIssueId)
-                    e.currentTarget.style.background = 'var(--bg-surface)'
-                }}
-                onMouseLeave={(e) => {
-                  if (row.original.id !== selectedIssueId)
-                    e.currentTarget.style.background = 'transparent'
-                }}
-              >
-                {row.getVisibleCells().map((cell) => (
-                  <td
-                    key={cell.id}
-                    className="px-3 py-2"
-                    style={{ width: cell.column.getSize() }}
-                  >
-                    {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                  </td>
-                ))}
+            {/* Virtual spacer top */}
+            {virtualizer.getVirtualItems().length > 0 && (
+              <tr>
+                <td
+                  style={{
+                    height: virtualizer.getVirtualItems()[0]?.start ?? 0,
+                    padding: 0,
+                    border: 'none',
+                  }}
+                />
               </tr>
-            ))}
+            )}
+            {virtualizer.getVirtualItems().map((virtualRow) => {
+              const row = rows[virtualRow.index]
+              return (
+                <tr
+                  key={row.id}
+                  data-index={virtualRow.index}
+                  ref={virtualizer.measureElement}
+                  className="cursor-pointer transition-colors"
+                  style={{
+                    height: ROW_HEIGHT,
+                    background:
+                      row.original.id === selectedIssueId
+                        ? 'var(--bg-hover)'
+                        : 'transparent',
+                    borderBottom: '1px solid var(--border-color)',
+                  }}
+                  onClick={() => onSelectIssue(row.original)}
+                  onMouseEnter={(e) => {
+                    if (row.original.id !== selectedIssueId)
+                      e.currentTarget.style.background = 'var(--bg-surface)'
+                  }}
+                  onMouseLeave={(e) => {
+                    if (row.original.id !== selectedIssueId)
+                      e.currentTarget.style.background = 'transparent'
+                  }}
+                >
+                  {row.getVisibleCells().map((cell) => (
+                    <td
+                      key={cell.id}
+                      className="px-3 py-1.5"
+                      style={{ width: cell.column.getSize() }}
+                    >
+                      {flexRender(
+                        cell.column.columnDef.cell,
+                        cell.getContext()
+                      )}
+                    </td>
+                  ))}
+                </tr>
+              )
+            })}
+            {/* Virtual spacer bottom */}
+            {virtualizer.getVirtualItems().length > 0 && (
+              <tr>
+                <td
+                  style={{
+                    height:
+                      virtualizer.getTotalSize() -
+                      (virtualizer.getVirtualItems().at(-1)?.end ?? 0),
+                    padding: 0,
+                    border: 'none',
+                  }}
+                />
+              </tr>
+            )}
           </tbody>
         </table>
       </div>
