@@ -1,4 +1,4 @@
-import { memo } from 'react'
+import { memo, useState } from 'react'
 import { MarkdownRenderer } from './MarkdownRenderer'
 import { useStreamingText } from './useStreamingText'
 
@@ -25,16 +25,76 @@ function StreamingMessage({ content, isStreaming }: { content: string; isStreami
   )
 }
 
+function ActionButton({ icon, title, onClick }: { icon: React.ReactNode; title: string; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      className="w-7 h-7 rounded-md flex items-center justify-center transition-colors cursor-pointer hover:bg-[var(--bg-hover)]"
+      style={{ color: 'var(--text-muted)' }}
+      onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--text-primary)')}
+      onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--text-muted)')}
+    >
+      {icon}
+    </button>
+  )
+}
+
+const CopyIcon = (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+  </svg>
+)
+
+const CheckIcon = (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="20 6 9 17 4 12" />
+  </svg>
+)
+
+const RegenerateIcon = (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="23 4 23 10 17 10" />
+    <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
+  </svg>
+)
+
+const DeleteIcon = (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="3 6 5 6 21 6" />
+    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+  </svg>
+)
+
 interface ChatMessageProps {
   message: Message
   isStreaming?: boolean
+  isLastAssistant?: boolean
+  onRegenerate?: () => void
+  onDelete?: () => void
 }
 
-export const ChatMessage = memo(function ChatMessage({ message, isStreaming = false }: ChatMessageProps) {
+export const ChatMessage = memo(function ChatMessage({
+  message,
+  isStreaming = false,
+  isLastAssistant = false,
+  onRegenerate,
+  onDelete,
+}: ChatMessageProps) {
   const isUser = message.role === 'user'
+  const [copied, setCopied] = useState(false)
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(message.content)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 1500)
+  }
+
+  const showActions = !isStreaming && message.content.length > 0
 
   return (
-    <div className={`flex gap-3 px-4 py-3 ${isUser ? '' : 'bg-[var(--bg-surface)]/30'}`}>
+    <div className={`group relative flex gap-3 px-4 py-3 ${isUser ? '' : 'bg-[var(--bg-surface)]/30'}`}>
       {/* Avatar */}
       <div
         className="w-7 h-7 rounded-full flex-shrink-0 flex items-center justify-center text-xs font-semibold mt-0.5"
@@ -63,6 +123,25 @@ export const ChatMessage = memo(function ChatMessage({ message, isStreaming = fa
           </div>
         ) : (
           <StreamingMessage content={message.content} isStreaming={isStreaming} />
+        )}
+
+        {/* Action bar */}
+        {showActions && (
+          <div
+            className="flex items-center gap-0.5 mt-1 opacity-0 group-hover:opacity-100 transition-opacity"
+          >
+            <ActionButton
+              icon={copied ? CheckIcon : CopyIcon}
+              title={copied ? 'Copied!' : 'Copy message'}
+              onClick={handleCopy}
+            />
+            {!isUser && isLastAssistant && onRegenerate && (
+              <ActionButton icon={RegenerateIcon} title="Regenerate" onClick={onRegenerate} />
+            )}
+            {onDelete && (
+              <ActionButton icon={DeleteIcon} title="Delete message" onClick={onDelete} />
+            )}
+          </div>
         )}
       </div>
     </div>

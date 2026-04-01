@@ -78,6 +78,64 @@ export function ChatView() {
     setStreamingId(null)
   }, [])
 
+  const handleDelete = useCallback((messageId: string) => {
+    setMessages((prev) => {
+      const idx = prev.findIndex((m) => m.id === messageId)
+      if (idx === -1) return prev
+      const msg = prev[idx]
+      // Delete assistant message and its preceding user message as a pair
+      if (msg.role === 'assistant' && idx > 0 && prev[idx - 1].role === 'user') {
+        return [...prev.slice(0, idx - 1), ...prev.slice(idx + 1)]
+      }
+      // Delete user message and its following assistant message as a pair
+      if (msg.role === 'user' && idx < prev.length - 1 && prev[idx + 1].role === 'assistant') {
+        return [...prev.slice(0, idx), ...prev.slice(idx + 2)]
+      }
+      return prev.filter((m) => m.id !== messageId)
+    })
+  }, [])
+
+  const handleRegenerate = useCallback(() => {
+    if (isStreaming) return
+    // Find the last user message to re-send
+    const lastUserIdx = messages.findLastIndex((m) => m.role === 'user')
+    if (lastUserIdx === -1) return
+
+    const userText = messages[lastUserIdx].content
+
+    // Remove the last assistant message
+    const newMessages = messages.slice(0, messages.length - 1)
+
+    // Create new assistant placeholder
+    const assistantId = genId()
+    setStreamingId(assistantId)
+    const assistantMsg: Message = {
+      id: assistantId,
+      role: 'assistant',
+      content: '',
+      timestamp: Date.now(),
+    }
+
+    setMessages([...newMessages, assistantMsg])
+    setIsStreaming(true)
+
+    const controller = startMockSSE(userText, {
+      onChunk(chunk) {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantId ? { ...m, content: m.content + chunk } : m
+          )
+        )
+      },
+      onDone() {
+        setIsStreaming(false)
+        setStreamingId(null)
+      },
+    })
+
+    abortRef.current = controller
+  }, [isStreaming, messages])
+
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
       if (e.key === 'Enter' && !e.shiftKey) {
@@ -123,13 +181,21 @@ export function ChatView() {
           </div>
         ) : (
           <div className="py-2">
-            {messages.map((msg) => (
-              <ChatMessage
-                key={msg.id}
-                message={msg}
-                isStreaming={isStreaming && msg.id === streamingId}
-              />
-            ))}
+            {messages.map((msg, idx) => {
+              const isLastAssistant =
+                msg.role === 'assistant' &&
+                idx === messages.length - 1
+              return (
+                <ChatMessage
+                  key={msg.id}
+                  message={msg}
+                  isStreaming={isStreaming && msg.id === streamingId}
+                  isLastAssistant={isLastAssistant}
+                  onRegenerate={isLastAssistant ? handleRegenerate : undefined}
+                  onDelete={() => handleDelete(msg.id)}
+                />
+              )
+            })}
 
             {/* Streaming indicator */}
             {isStreaming && (
