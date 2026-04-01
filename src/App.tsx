@@ -3,10 +3,11 @@ import { Sidebar } from './components/Sidebar'
 import { TableView } from './components/TableView'
 import { KanbanView } from './components/KanbanView'
 import { DetailPanel } from './components/DetailPanel'
+import { ChatView } from './components/chat/ChatView'
 import { mockIssues, type Issue, type Status } from './data/mock'
 
 function App() {
-  const [currentView, setCurrentView] = useState<'table' | 'kanban'>('table')
+  const [currentView, setCurrentView] = useState<'table' | 'kanban' | 'chat'>('table')
   const [selectedIssue, setSelectedIssue] = useState<Issue | null>(null)
   const [statusFilter, setStatusFilter] = useState<Status | null>(null)
   const [issues, setIssues] = useState<Issue[]>(mockIssues)
@@ -104,7 +105,9 @@ function App() {
 
         {/* View */}
         <div className="flex-1 min-h-0">
-          {currentView === 'table' ? (
+          {currentView === 'chat' ? (
+            <ChatView />
+          ) : currentView === 'table' ? (
             <TableView
               issues={filteredIssues}
               selectedIssueId={selectedIssue?.id ?? null}

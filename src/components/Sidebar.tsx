@@ -1,8 +1,8 @@
 import { statusConfig, type Status } from '../data/mock'
 
 interface SidebarProps {
-  currentView: 'table' | 'kanban'
-  onViewChange: (view: 'table' | 'kanban') => void
+  currentView: 'table' | 'kanban' | 'chat'
+  onViewChange: (view: 'table' | 'kanban' | 'chat') => void
   statusFilter: Status | null
   onStatusFilter: (status: Status | null) => void
   issueCountByStatus: Record<Status, number>
@@ -84,34 +84,23 @@ export function Sidebar({
           </span>
         </div>
         <div className="flex gap-1 px-1">
-          <button
-            className="flex-1 px-2 py-1 rounded text-xs font-medium transition-colors"
-            style={{
-              background:
-                currentView === 'table' ? 'var(--accent)' : 'transparent',
-              color:
-                currentView === 'table'
-                  ? '#fff'
-                  : 'var(--text-secondary)',
-            }}
-            onClick={() => onViewChange('table')}
-          >
-            Table
-          </button>
-          <button
-            className="flex-1 px-2 py-1 rounded text-xs font-medium transition-colors"
-            style={{
-              background:
-                currentView === 'kanban' ? 'var(--accent)' : 'transparent',
-              color:
-                currentView === 'kanban'
-                  ? '#fff'
-                  : 'var(--text-secondary)',
-            }}
-            onClick={() => onViewChange('kanban')}
-          >
-            Board
-          </button>
+          {(['table', 'kanban', 'chat'] as const).map((view) => (
+            <button
+              key={view}
+              className="flex-1 px-2 py-1 rounded text-xs font-medium transition-colors"
+              style={{
+                background:
+                  currentView === view ? 'var(--accent)' : 'transparent',
+                color:
+                  currentView === view
+                    ? '#fff'
+                    : 'var(--text-secondary)',
+              }}
+              onClick={() => onViewChange(view)}
+            >
+              {view === 'table' ? 'Table' : view === 'kanban' ? 'Board' : 'Chat'}
+            </button>
+          ))}
         </div>
       </div>
 
