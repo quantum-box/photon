@@ -1,12 +1,18 @@
 import { memo, useState } from 'react'
 import { MarkdownRenderer } from './MarkdownRenderer'
 import { useStreamingText } from './useStreamingText'
+import { ToolResultCard } from './tools/ToolResultCard'
+import { FileChip } from '../files/FileChip'
+import type { ToolCall } from './tools/types'
+import type { FileAttachment } from '../files/types'
 
 export interface Message {
   id: string
   role: 'user' | 'assistant'
   content: string
   timestamp: number
+  toolCalls?: ToolCall[]
+  attachments?: FileAttachment[]
 }
 
 function StreamingMessage({ content, isStreaming }: { content: string; isStreaming: boolean }) {
@@ -73,6 +79,7 @@ interface ChatMessageProps {
   isLastAssistant?: boolean
   onRegenerate?: () => void
   onDelete?: () => void
+  onPreviewFile?: (file: FileAttachment) => void
 }
 
 export const ChatMessage = memo(function ChatMessage({
@@ -81,6 +88,7 @@ export const ChatMessage = memo(function ChatMessage({
   isLastAssistant = false,
   onRegenerate,
   onDelete,
+  onPreviewFile,
 }: ChatMessageProps) {
   const isUser = message.role === 'user'
   const [copied, setCopied] = useState(false)
@@ -116,6 +124,28 @@ export const ChatMessage = memo(function ChatMessage({
             {new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
           </span>
         </div>
+
+        {/* File attachments */}
+        {message.attachments && message.attachments.length > 0 && (
+          <div className="flex flex-wrap gap-2 mb-2">
+            {message.attachments.map((att) => (
+              <FileChip
+                key={att.id}
+                file={att}
+                onPreview={onPreviewFile ?? (() => {})}
+              />
+            ))}
+          </div>
+        )}
+
+        {/* Tool calls (rendered before text content) */}
+        {message.toolCalls && message.toolCalls.length > 0 && (
+          <div className="mb-2">
+            {message.toolCalls.map((tc) => (
+              <ToolResultCard key={tc.id} toolCall={tc} />
+            ))}
+          </div>
+        )}
 
         {isUser ? (
           <div className="text-sm" style={{ color: 'var(--text-primary)' }}>

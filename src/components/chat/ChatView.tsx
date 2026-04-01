@@ -2,10 +2,32 @@ import { useState, useCallback, useRef, type KeyboardEvent } from 'react'
 import { ChatMessage, type Message } from './ChatMessage'
 import { useAutoScroll } from './useAutoScroll'
 import { startMockSSE } from './mockSSE'
+import { FileChip } from '../files/FileChip'
+import { FilePreviewModal } from '../files/FilePreviewModal'
+import { type FileAttachment, detectFileType } from '../files/types'
+import type { ToolCall } from './tools/types'
+
+const ACCEPTED_TYPES = '.pdf,.xlsx,.xls,.csv,.docx,.pptx'
 
 let nextId = 1
 function genId() {
   return `msg-${nextId++}`
+}
+
+let fileNextId = 1
+function genFileId() {
+  return `file-${fileNextId++}`
+}
+
+function createFileAttachment(file: File): FileAttachment {
+  return {
+    id: genFileId(),
+    name: file.name,
+    size: file.size,
+    type: file.type,
+    url: URL.createObjectURL(file),
+    file,
+  }
 }
 
 export function ChatView() {
@@ -13,26 +35,52 @@ export function ChatView() {
   const [input, setInput] = useState('')
   const [isStreaming, setIsStreaming] = useState(false)
   const [streamingId, setStreamingId] = useState<string | null>(null)
+  const [pendingFiles, setPendingFiles] = useState<FileAttachment[]>([])
+  const [previewFile, setPreviewFile] = useState<FileAttachment | null>(null)
+  const [isDragOver, setIsDragOver] = useState(false)
   const abortRef = useRef<AbortController | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   // Auto-scroll follows the latest message content
   const latestContent = messages[messages.length - 1]?.content ?? ''
+  const latestToolCalls = messages[messages.length - 1]?.toolCalls?.length ?? 0
   const { containerRef, handleScroll, scrollToBottom } = useAutoScroll([
     messages.length,
     latestContent.length,
+    latestToolCalls,
   ])
+
+  const handleFilesSelected = useCallback((files: FileList | File[]) => {
+    const fileArray = Array.from(files)
+    const supported = fileArray.filter((f) => {
+      const type = detectFileType(f)
+      return type !== 'unknown'
+    })
+    if (supported.length > 0) {
+      setPendingFiles((prev) => [...prev, ...supported.map(createFileAttachment)])
+    }
+  }, [])
+
+  const handleRemovePendingFile = useCallback((fileId: string) => {
+    setPendingFiles((prev) => {
+      const file = prev.find((f) => f.id === fileId)
+      if (file) URL.revokeObjectURL(file.url)
+      return prev.filter((f) => f.id !== fileId)
+    })
+  }, [])
 
   const handleSend = useCallback(() => {
     const text = input.trim()
-    if (!text || isStreaming) return
+    if ((!text && pendingFiles.length === 0) || isStreaming) return
 
-    // Add user message
+    // Add user message with attachments
     const userMsg: Message = {
       id: genId(),
       role: 'user',
       content: text,
       timestamp: Date.now(),
+      attachments: pendingFiles.length > 0 ? [...pendingFiles] : undefined,
     }
 
     // Prepare assistant message placeholder
@@ -47,6 +95,7 @@ export function ChatView() {
 
     setMessages((prev) => [...prev, userMsg, assistantMsg])
     setInput('')
+    setPendingFiles([])
     setIsStreaming(true)
 
     // Auto-resize textarea back
@@ -54,8 +103,14 @@ export function ChatView() {
       textareaRef.current.style.height = 'auto'
     }
 
-    // Start SSE stream
-    const controller = startMockSSE(text, {
+    // Build prompt with file context
+    const fileContext = userMsg.attachments
+      ? userMsg.attachments.map((f) => `[Attached file: ${f.name}]`).join(' ')
+      : ''
+    const prompt = fileContext ? `${fileContext}\n${text}` : text
+
+    // Start SSE stream with tool call support
+    const controller = startMockSSE(prompt, {
       onChunk(chunk) {
         setMessages((prev) =>
           prev.map((m) =>
@@ -67,10 +122,30 @@ export function ChatView() {
         setIsStreaming(false)
         setStreamingId(null)
       },
+      onToolCallStart(toolCall: ToolCall) {
+        setMessages((prev) =>
+          prev.map((m) => {
+            if (m.id !== assistantId) return m
+            const existing = m.toolCalls || []
+            return { ...m, toolCalls: [...existing, toolCall] }
+          })
+        )
+      },
+      onToolCallUpdate(toolCall: ToolCall) {
+        setMessages((prev) =>
+          prev.map((m) => {
+            if (m.id !== assistantId) return m
+            const updated = (m.toolCalls || []).map((tc) =>
+              tc.id === toolCall.id ? toolCall : tc
+            )
+            return { ...m, toolCalls: updated }
+          })
+        )
+      },
     })
 
     abortRef.current = controller
-  }, [input, isStreaming])
+  }, [input, isStreaming, pendingFiles])
 
   const handleStop = useCallback(() => {
     abortRef.current?.abort()
@@ -83,11 +158,9 @@ export function ChatView() {
       const idx = prev.findIndex((m) => m.id === messageId)
       if (idx === -1) return prev
       const msg = prev[idx]
-      // Delete assistant message and its preceding user message as a pair
       if (msg.role === 'assistant' && idx > 0 && prev[idx - 1].role === 'user') {
         return [...prev.slice(0, idx - 1), ...prev.slice(idx + 1)]
       }
-      // Delete user message and its following assistant message as a pair
       if (msg.role === 'user' && idx < prev.length - 1 && prev[idx + 1].role === 'assistant') {
         return [...prev.slice(0, idx), ...prev.slice(idx + 2)]
       }
@@ -97,16 +170,12 @@ export function ChatView() {
 
   const handleRegenerate = useCallback(() => {
     if (isStreaming) return
-    // Find the last user message to re-send
     const lastUserIdx = messages.findLastIndex((m) => m.role === 'user')
     if (lastUserIdx === -1) return
 
     const userText = messages[lastUserIdx].content
-
-    // Remove the last assistant message
     const newMessages = messages.slice(0, messages.length - 1)
 
-    // Create new assistant placeholder
     const assistantId = genId()
     setStreamingId(assistantId)
     const assistantMsg: Message = {
@@ -131,6 +200,26 @@ export function ChatView() {
         setIsStreaming(false)
         setStreamingId(null)
       },
+      onToolCallStart(toolCall: ToolCall) {
+        setMessages((prev) =>
+          prev.map((m) => {
+            if (m.id !== assistantId) return m
+            const existing = m.toolCalls || []
+            return { ...m, toolCalls: [...existing, toolCall] }
+          })
+        )
+      },
+      onToolCallUpdate(toolCall: ToolCall) {
+        setMessages((prev) =>
+          prev.map((m) => {
+            if (m.id !== assistantId) return m
+            const updated = (m.toolCalls || []).map((tc) =>
+              tc.id === toolCall.id ? toolCall : tc
+            )
+            return { ...m, toolCalls: updated }
+          })
+        )
+      },
     })
 
     abortRef.current = controller
@@ -148,14 +237,60 @@ export function ChatView() {
 
   const handleInput = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setInput(e.target.value)
-    // Auto-resize
     const el = e.target
     el.style.height = 'auto'
     el.style.height = Math.min(el.scrollHeight, 200) + 'px'
   }, [])
 
+  // Drag & drop handlers
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDragOver(true)
+  }, [])
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDragOver(false)
+  }, [])
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDragOver(false)
+    if (e.dataTransfer.files.length > 0) {
+      handleFilesSelected(e.dataTransfer.files)
+    }
+  }, [handleFilesSelected])
+
   return (
-    <div className="flex flex-col h-full">
+    <div
+      className="flex flex-col h-full relative"
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
+      {/* Drag overlay */}
+      {isDragOver && (
+        <div
+          className="absolute inset-0 z-40 flex items-center justify-center rounded-lg"
+          style={{
+            background: 'rgba(91, 91, 247, 0.08)',
+            border: '2px dashed var(--accent)',
+          }}
+        >
+          <div className="text-center">
+            <p className="text-lg font-medium" style={{ color: 'var(--accent)' }}>
+              Drop files here
+            </p>
+            <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
+              PDF, XLSX, CSV, DOCX, PPTX
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Messages */}
       <div
         ref={containerRef}
@@ -174,9 +309,32 @@ export function ChatView() {
               <h2 className="text-lg font-semibold mb-1" style={{ color: 'var(--text-primary)' }}>
                 Photon Chat
               </h2>
-              <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
+              <p className="text-sm mb-4" style={{ color: 'var(--text-muted)' }}>
                 Send a message to start a conversation
               </p>
+
+              {/* Tool capability hints */}
+              <div className="flex flex-wrap gap-2 justify-center max-w-md mx-auto">
+                {[
+                  { icon: '\u{1F50D}', label: 'Web Search', hint: 'Search for React 19 features' },
+                  { icon: '\u{1F50C}', label: 'API Calls', hint: 'Check API status' },
+                  { icon: '\u{1F4CE}', label: 'File Upload', hint: 'PDF, XLSX, CSV, DOCX, PPTX' },
+                ].map((tool) => (
+                  <button
+                    key={tool.label}
+                    onClick={() => tool.hint.startsWith('PDF') ? fileInputRef.current?.click() : setInput(tool.hint)}
+                    className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs transition-colors cursor-pointer hover:bg-[var(--bg-hover)]"
+                    style={{
+                      background: 'var(--bg-surface)',
+                      border: '1px solid var(--border-color)',
+                      color: 'var(--text-secondary)',
+                    }}
+                  >
+                    <span>{tool.icon}</span>
+                    <span>{tool.label}</span>
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
         ) : (
@@ -193,6 +351,7 @@ export function ChatView() {
                   isLastAssistant={isLastAssistant}
                   onRegenerate={isLastAssistant ? handleRegenerate : undefined}
                   onDelete={() => handleDelete(msg.id)}
+                  onPreviewFile={setPreviewFile}
                 />
               )
             })}
@@ -236,16 +395,55 @@ export function ChatView() {
 
       {/* Input area */}
       <div className="border-t px-4 py-3" style={{ borderColor: 'var(--border-color)' }}>
+        {/* Pending file attachments */}
+        {pendingFiles.length > 0 && (
+          <div className="flex flex-wrap gap-2 mb-2">
+            {pendingFiles.map((f) => (
+              <FileChip
+                key={f.id}
+                file={f}
+                onPreview={setPreviewFile}
+                onRemove={handleRemovePendingFile}
+              />
+            ))}
+          </div>
+        )}
+
         <div
           className="flex items-end gap-2 rounded-xl px-4 py-3"
           style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-color)' }}
         >
+          {/* File upload button */}
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            className="flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center transition-colors cursor-pointer"
+            style={{ color: 'var(--text-muted)' }}
+            onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--text-primary)')}
+            onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--text-muted)')}
+            title="Attach file (PDF, Excel, CSV, DOCX, PPTX)"
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48" />
+            </svg>
+          </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept={ACCEPTED_TYPES}
+            multiple
+            className="hidden"
+            onChange={(e) => {
+              if (e.target.files) handleFilesSelected(e.target.files)
+              e.target.value = ''
+            }}
+          />
+
           <textarea
             ref={textareaRef}
             value={input}
             onChange={handleInput}
             onKeyDown={handleKeyDown}
-            placeholder="Send a message..."
+            placeholder="Send a message... (try: 'search for React 19')"
             rows={1}
             className="flex-1 bg-transparent outline-none resize-none text-sm leading-relaxed"
             style={{
@@ -267,10 +465,10 @@ export function ChatView() {
           ) : (
             <button
               onClick={handleSend}
-              disabled={!input.trim()}
+              disabled={!input.trim() && pendingFiles.length === 0}
               className="flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center transition-colors cursor-pointer disabled:opacity-30"
               style={{
-                background: input.trim() ? 'var(--accent)' : 'var(--bg-hover)',
+                background: (input.trim() || pendingFiles.length > 0) ? 'var(--accent)' : 'var(--bg-hover)',
                 color: '#fff',
               }}
               title="Send message"
@@ -285,6 +483,14 @@ export function ChatView() {
           Photon AI can make mistakes. Verify important information.
         </p>
       </div>
+
+      {/* File preview modal */}
+      {previewFile && (
+        <FilePreviewModal
+          file={previewFile}
+          onClose={() => setPreviewFile(null)}
+        />
+      )}
     </div>
   )
 }
