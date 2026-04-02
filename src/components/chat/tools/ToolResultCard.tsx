@@ -98,7 +98,7 @@ function ApiCallCard({ toolCall }: { toolCall: ToolCall }) {
           className="px-3 py-2 text-xs font-mono overflow-x-auto"
           style={{
             borderTop: '1px solid var(--border-color)',
-            background: '#1a1a2e',
+            background: 'var(--bg-code)',
             color: 'var(--text-primary)',
           }}
         >
@@ -163,7 +163,7 @@ function CodeExecCard({ toolCall }: { toolCall: ToolCall }) {
           className="px-3 py-2 text-xs font-mono overflow-x-auto"
           style={{
             borderTop: '1px solid var(--border-color)',
-            background: '#1a1a2e',
+            background: 'var(--bg-code)',
             color: 'var(--text-primary)',
           }}
         >
