@@ -3,6 +3,7 @@ import { statusConfig, type Status } from '../data/mock'
 import { useIssues } from '../contexts/IssuesContext'
 import { useTheme } from '../contexts/ThemeContext'
 import type { ThemeMode } from '../contexts/ThemeContext'
+import { useConnectionStatus } from '../lib/yjs/useYjsIssues'
 
 const navItems = [
   { id: 'my-issues', label: 'My Issues', icon: '👤' },
@@ -64,9 +65,22 @@ function ThemeToggle() {
   )
 }
 
+const statusColors: Record<string, string> = {
+  connected: '#34c759',
+  connecting: '#f5a623',
+  disconnected: '#ff3b30',
+}
+
+const statusLabels: Record<string, string> = {
+  connected: 'Synced',
+  connecting: 'Connecting...',
+  disconnected: 'Offline',
+}
+
 export function Sidebar() {
   const { issueCountByStatus } = useIssues()
   const navigate = useNavigate()
+  const connStatus = useConnectionStatus()
 
   const pathname = useRouterState({ select: (s) => s.location.pathname })
   const search = useRouterState({ select: (s) => s.location.search }) as {
@@ -110,6 +124,15 @@ export function Sidebar() {
           T
         </div>
         <span className="text-sm font-semibold">Tachyon</span>
+        <div className="ml-auto flex items-center gap-1" title={statusLabels[connStatus]}>
+          <span
+            className="w-2 h-2 rounded-full inline-block"
+            style={{ background: statusColors[connStatus] }}
+          />
+          <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+            {connStatus === 'connected' ? '' : statusLabels[connStatus]}
+          </span>
+        </div>
       </div>
 
       {/* Navigation */}

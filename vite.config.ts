@@ -16,5 +16,11 @@ export default defineConfig({
     watch: {
       ignored: ['**/src-tauri/**'],
     },
+    proxy: {
+      '/ws': {
+        target: 'http://localhost:3001',
+        ws: true,
+      },
+    },
   },
 })

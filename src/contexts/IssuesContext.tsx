@@ -2,11 +2,14 @@
 import {
   createContext,
   useContext,
-  useState,
   useMemo,
   useCallback,
+  useEffect,
   type ReactNode,
 } from 'react'
+import * as Y from 'yjs'
+import { ydoc, issuesArray } from '../lib/yjs/yjsProvider'
+import { useYjsIssues } from '../lib/yjs/useYjsIssues'
 import { mockIssues, type Issue, type Status } from '../data/mock'
 
 interface IssuesContextValue {
@@ -19,8 +22,51 @@ interface IssuesContextValue {
 
 const IssuesContext = createContext<IssuesContextValue | null>(null)
 
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function findYMap(id: string): Y.Map<string> | null {
+  for (let i = 0; i < issuesArray.length; i++) {
+    const ymap = issuesArray.get(i)
+    if (ymap.get('id') === id) return ymap
+  }
+  return null
+}
+
+function seedMockData() {
+  ydoc.transact(() => {
+    for (const issue of mockIssues) {
+      const ymap = new Y.Map<string>()
+      ymap.set('id', issue.id)
+      ymap.set('identifier', issue.identifier)
+      ymap.set('title', issue.title)
+      ymap.set('status', issue.status)
+      ymap.set('priority', issue.priority)
+      ymap.set('assignee', issue.assignee ?? '')
+      ymap.set('labels', JSON.stringify(issue.labels))
+      ymap.set('project', issue.project)
+      ymap.set('createdAt', issue.createdAt)
+      ymap.set('updatedAt', issue.updatedAt)
+      ymap.set('description', issue.description)
+      issuesArray.push([ymap])
+    }
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Provider
+// ---------------------------------------------------------------------------
+
 export function IssuesProvider({ children }: { children: ReactNode }) {
-  const [issues, setIssues] = useState<Issue[]>(mockIssues)
+  const { issues, ready } = useYjsIssues()
+
+  // Seed mock data on very first load (empty doc)
+  useEffect(() => {
+    if (ready && issuesArray.length === 0) {
+      seedMockData()
+    }
+  }, [ready])
 
   const issueCountByStatus = useMemo(
     () =>
@@ -35,41 +81,54 @@ export function IssuesProvider({ children }: { children: ReactNode }) {
   )
 
   const handleMoveIssue = useCallback((issueId: string, newStatus: Status) => {
-    setIssues((prev) =>
-      prev.map((i) => (i.id === issueId ? { ...i, status: newStatus } : i))
-    )
+    ydoc.transact(() => {
+      const ymap = findYMap(issueId)
+      if (!ymap) return
+      ymap.set('status', newStatus)
+      ymap.set('updatedAt', new Date().toISOString())
+    })
   }, [])
 
   const handleUpdateIssue = useCallback(
     (issueId: string, field: keyof Issue, value: string) => {
-      const resolved = field === 'assignee' && value === '' ? null : value
-      setIssues((prev) =>
-        prev.map((i) => (i.id === issueId ? { ...i, [field]: resolved } : i))
-      )
+      ydoc.transact(() => {
+        const ymap = findYMap(issueId)
+        if (!ymap) return
+        if (field === 'labels') {
+          // value is already a string from the caller; ensure it's valid JSON array
+          ymap.set('labels', value)
+        } else if (field === 'assignee') {
+          ymap.set('assignee', value === '' ? '' : value)
+        } else {
+          ymap.set(field, value)
+        }
+        ymap.set('updatedAt', new Date().toISOString())
+      })
     },
     []
   )
 
   const handleCreateIssue = useCallback((title: string) => {
-    setIssues((prev) => {
-      const maxNum = prev.reduce((max, i) => {
-        const num = parseInt(i.identifier.split('-')[1], 10)
-        return num > max ? num : max
-      }, 0)
-      const newIssue: Issue = {
-        id: `issue-${Date.now()}`,
-        identifier: `PLT-${maxNum + 1}`,
-        title,
-        status: 'todo',
-        priority: 'none',
-        assignee: null,
-        labels: [],
-        project: 'Tachyon UI',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        description: '',
+    ydoc.transact(() => {
+      let maxNum = 0
+      for (let i = 0; i < issuesArray.length; i++) {
+        const identifier = issuesArray.get(i).get('identifier') as string
+        const num = parseInt(identifier.split('-')[1], 10)
+        if (num > maxNum) maxNum = num
       }
-      return [...prev, newIssue]
+      const ymap = new Y.Map<string>()
+      ymap.set('id', `issue-${Date.now()}`)
+      ymap.set('identifier', `PLT-${maxNum + 1}`)
+      ymap.set('title', title)
+      ymap.set('status', 'todo')
+      ymap.set('priority', 'none')
+      ymap.set('assignee', '')
+      ymap.set('labels', '[]')
+      ymap.set('project', 'Tachyon UI')
+      ymap.set('createdAt', new Date().toISOString())
+      ymap.set('updatedAt', new Date().toISOString())
+      ymap.set('description', '')
+      issuesArray.push([ymap])
     })
   }, [])
 

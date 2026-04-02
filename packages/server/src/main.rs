@@ -13,7 +13,7 @@ use axum::{
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use sqlx::{sqlite::SqlitePoolOptions, SqlitePool};
-use tokio::sync::RwLock;
+use tokio::sync::{broadcast, RwLock};
 use tower_http::cors::{Any, CorsLayer};
 use tracing::info;
 use utoipa::{OpenApi, ToSchema};
@@ -112,6 +112,7 @@ pub struct ListParams {
 pub struct AppState {
     pub db: SqlitePool,
     pub doc: RwLock<Doc>,
+    pub broadcast_tx: broadcast::Sender<Vec<u8>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -328,7 +329,7 @@ async fn ws_handler(
 }
 
 async fn handle_ws(socket: WebSocket, state: Arc<AppState>) {
-    let (mut sender, mut receiver) = socket.split();
+    let (mut ws_sender, mut ws_receiver) = socket.split();
 
     // Send initial state — scope the transaction so it's dropped before await
     let initial_update = {
@@ -336,7 +337,7 @@ async fn handle_ws(socket: WebSocket, state: Arc<AppState>) {
         let txn = doc.transact();
         txn.encode_state_as_update_v1(&StateVector::default())
     };
-    if sender
+    if ws_sender
         .send(Message::Binary(initial_update))
         .await
         .is_err()
@@ -344,22 +345,44 @@ async fn handle_ws(socket: WebSocket, state: Arc<AppState>) {
         return;
     }
 
-    // Process incoming updates
-    while let Some(Ok(msg)) = receiver.next().await {
-        match msg {
-            Message::Binary(data) => {
-                let doc = state.doc.write().await;
-                if let Ok(update) = Update::decode_v1(&data) {
-                    let mut txn = doc.transact_mut();
-                    if txn.apply_update(update).is_err() {
-                        tracing::warn!("Failed to apply yrs update");
-                    }
-                }
-                drop(doc);
+    // Subscribe to broadcast channel for updates from other clients
+    let mut broadcast_rx = state.broadcast_tx.subscribe();
+
+    // Task: forward broadcast messages to this client's WebSocket
+    let send_task = tokio::spawn(async move {
+        while let Ok(data) = broadcast_rx.recv().await {
+            if ws_sender.send(Message::Binary(data)).await.is_err() {
+                break;
             }
-            Message::Close(_) => break,
-            _ => {}
         }
+    });
+
+    // Task: receive updates from this client, apply to doc, broadcast
+    let recv_state = state.clone();
+    let recv_task = tokio::spawn(async move {
+        while let Some(Ok(msg)) = ws_receiver.next().await {
+            match msg {
+                Message::Binary(data) => {
+                    let doc = recv_state.doc.write().await;
+                    if let Ok(update) = Update::decode_v1(&data) {
+                        let mut txn = doc.transact_mut();
+                        if txn.apply_update(update).is_ok() {
+                            // Broadcast to all connected clients
+                            let _ = recv_state.broadcast_tx.send(data.to_vec());
+                        }
+                    }
+                    drop(doc);
+                }
+                Message::Close(_) => break,
+                _ => {}
+            }
+        }
+    });
+
+    // Wait for either task to finish, then clean up
+    tokio::select! {
+        _ = send_task => {},
+        _ = recv_task => {},
     }
 }
 
@@ -471,9 +494,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     init_db(&pool).await?;
     seed_if_empty(&pool).await?;
 
+    let (broadcast_tx, _) = broadcast::channel::<Vec<u8>>(256);
+
     let state = Arc::new(AppState {
         db: pool,
         doc: RwLock::new(Doc::new()),
+        broadcast_tx,
     });
 
     let cors = CorsLayer::new()
@@ -529,9 +555,12 @@ mod tests {
 
         init_db(&pool).await.unwrap();
 
+        let (broadcast_tx, _) = broadcast::channel::<Vec<u8>>(256);
+
         let state = Arc::new(AppState {
             db: pool,
             doc: RwLock::new(Doc::new()),
+            broadcast_tx,
         });
 
         let app = Router::new()
