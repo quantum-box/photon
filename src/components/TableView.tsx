@@ -9,6 +9,7 @@ import {
   createColumnHelper,
   type SortingState,
   type ColumnFiltersState,
+  type OnChangeFn,
 } from '@tanstack/react-table'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import {
@@ -26,6 +27,8 @@ interface TableViewProps {
   onSelectIssue: (issue: Issue) => void
   onUpdateIssue: (issueId: string, field: keyof Issue, value: string) => void
   onCreateIssue: (title: string) => void
+  sorting?: SortingState
+  onSortingChange?: OnChangeFn<SortingState>
 }
 
 const columnHelper = createColumnHelper<Issue>()
@@ -392,8 +395,12 @@ export function TableView({
   onSelectIssue,
   onUpdateIssue,
   onCreateIssue,
+  sorting: controlledSorting,
+  onSortingChange: controlledOnSortingChange,
 }: TableViewProps) {
-  const [sorting, setSorting] = useState<SortingState>([])
+  const [internalSorting, setInternalSorting] = useState<SortingState>([])
+  const sorting = controlledSorting ?? internalSorting
+  const onSortingChange = controlledOnSortingChange ?? setInternalSorting
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([])
   const [globalFilter, setGlobalFilter] = useState('')
   const [creatingIssue, setCreatingIssue] = useState(false)
@@ -521,7 +528,7 @@ export function TableView({
     data: issues,
     columns,
     state: { sorting, columnFilters, globalFilter },
-    onSortingChange: setSorting,
+    onSortingChange,
     onColumnFiltersChange: setColumnFilters,
     onGlobalFilterChange: setGlobalFilter,
     getCoreRowModel: getCoreRowModel(),
