@@ -15,7 +15,7 @@ export interface Issue {
   description: string
 }
 
-const names = ['田中太郎', '鈴木花子', '佐藤健', '山田美咲', '高橋翔']
+export const mockUsers = ['田中太郎', '鈴木花子', '佐藤健', '山田美咲', '高橋翔']
 const projects = ['Tachyon Core', 'Tachyon UI', 'API Gateway', 'Auth Service']
 const labelSets = [
   ['bug'], ['feature'], ['improvement'], ['bug', 'critical'],
@@ -102,7 +102,7 @@ function makeIssue(title: string, status: Status): Issue {
     title,
     status,
     priority: priorities[counter % priorities.length],
-    assignee: counter % 3 === 0 ? null : names[counter % names.length],
+    assignee: counter % 3 === 0 ? null : mockUsers[counter % mockUsers.length],
     labels: labelSets[counter % labelSets.length],
     project: projects[counter % projects.length],
     createdAt: new Date(2026, 2, (counter % 28) + 1).toISOString(),

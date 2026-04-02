@@ -41,16 +41,40 @@ function App() {
 
   const handleUpdateIssue = useCallback(
     (issueId: string, field: keyof Issue, value: string) => {
+      const resolved = field === 'assignee' && value === '' ? null : value
       setIssues((prev) =>
-        prev.map((i) => (i.id === issueId ? { ...i, [field]: value } : i))
+        prev.map((i) => (i.id === issueId ? { ...i, [field]: resolved } : i))
       )
       // Also update selected issue if it's the one being edited
       setSelectedIssue((prev) =>
-        prev?.id === issueId ? { ...prev, [field]: value } : prev
+        prev?.id === issueId ? { ...prev, [field]: resolved } : prev
       )
     },
     []
   )
+
+  const handleCreateIssue = useCallback((title: string) => {
+    setIssues((prev) => {
+      const maxNum = prev.reduce((max, i) => {
+        const num = parseInt(i.identifier.split('-')[1], 10)
+        return num > max ? num : max
+      }, 0)
+      const newIssue: Issue = {
+        id: `issue-${Date.now()}`,
+        identifier: `PLT-${maxNum + 1}`,
+        title,
+        status: 'todo',
+        priority: 'none',
+        assignee: null,
+        labels: [],
+        project: 'Tachyon UI',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        description: '',
+      }
+      return [...prev, newIssue]
+    })
+  }, [])
 
   return (
     <div className="flex h-full">
@@ -63,7 +87,7 @@ function App() {
       />
 
       {/* Main Content */}
-      <div className="flex-1 flex flex-col min-w-0">
+      <div className="flex-1 flex flex-col min-w-0 p-2">
         {/* Header */}
         <div
           className="flex items-center justify-between px-4 py-3 border-b"
@@ -104,7 +128,7 @@ function App() {
         </div>
 
         {/* View */}
-        <div className="flex-1 min-h-0">
+        <div className="flex-1 min-h-0 mt-1">
           {currentView === 'chat' ? (
             <ChatView />
           ) : currentView === 'table' ? (
@@ -113,6 +137,7 @@ function App() {
               selectedIssueId={selectedIssue?.id ?? null}
               onSelectIssue={handleSelectIssue}
               onUpdateIssue={handleUpdateIssue}
+              onCreateIssue={handleCreateIssue}
             />
           ) : (
             <KanbanView

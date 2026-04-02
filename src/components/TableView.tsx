@@ -1,4 +1,5 @@
 import { useMemo, useState, useCallback, useRef, useEffect } from 'react'
+import { createPortal } from 'react-dom'
 import {
   useReactTable,
   getCoreRowModel,
@@ -16,6 +17,7 @@ import {
   type Priority,
   statusConfig,
   priorityConfig,
+  mockUsers,
 } from '../data/mock'
 
 interface TableViewProps {
@@ -23,11 +25,12 @@ interface TableViewProps {
   selectedIssueId: string | null
   onSelectIssue: (issue: Issue) => void
   onUpdateIssue: (issueId: string, field: keyof Issue, value: string) => void
+  onCreateIssue: (title: string) => void
 }
 
 const columnHelper = createColumnHelper<Issue>()
 
-// Inline editable cell
+// Inline editable cell (double-click to edit text fields)
 function EditableCell({
   value,
   issueId,
@@ -97,8 +100,107 @@ function EditableCell({
   )
 }
 
-// Status select cell
-function StatusSelectCell({
+// Portal-based dropdown for cell editing (escapes overflow:auto container)
+function CellDropdown({
+  open,
+  anchorRef,
+  onClose,
+  children,
+}: {
+  open: boolean
+  anchorRef: React.RefObject<HTMLDivElement | null>
+  onClose: () => void
+  children: React.ReactNode
+}) {
+  const menuRef = useRef<HTMLDivElement>(null)
+  const [pos, setPos] = useState({ top: 0, left: 0 })
+
+  useEffect(() => {
+    if (open && anchorRef.current) {
+      const rect = anchorRef.current.getBoundingClientRect()
+      const menuHeight = 240
+      const spaceBelow = window.innerHeight - rect.bottom
+      const top =
+        spaceBelow < menuHeight ? rect.top - menuHeight : rect.bottom + 2
+      setPos({ top, left: rect.left })
+    }
+  }, [open, anchorRef])
+
+  useEffect(() => {
+    if (!open) return
+    const handler = (e: MouseEvent) => {
+      if (
+        menuRef.current &&
+        !menuRef.current.contains(e.target as Node) &&
+        anchorRef.current &&
+        !anchorRef.current.contains(e.target as Node)
+      ) {
+        onClose()
+      }
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [open, onClose, anchorRef])
+
+  if (!open) return null
+
+  return createPortal(
+    <div
+      ref={menuRef}
+      style={{
+        position: 'fixed',
+        top: pos.top,
+        left: pos.left,
+        zIndex: 9999,
+        background: 'var(--bg-surface)',
+        border: '1px solid var(--border-color)',
+        borderRadius: '6px',
+        boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+        padding: '4px 0',
+        minWidth: '160px',
+        maxHeight: '240px',
+        overflowY: 'auto',
+      }}
+    >
+      {children}
+    </div>,
+    document.body
+  )
+}
+
+function DropdownItem({
+  selected,
+  onClick,
+  children,
+}: {
+  selected?: boolean
+  onClick: (e: React.MouseEvent) => void
+  children: React.ReactNode
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className="w-full px-3 py-1.5 text-left text-xs flex items-center gap-2 transition-colors"
+      style={{
+        color: 'var(--text-primary)',
+        background: selected ? 'var(--bg-hover)' : 'transparent',
+      }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.background = 'var(--bg-hover)'
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.background = selected
+          ? 'var(--bg-hover)'
+          : 'transparent'
+      }}
+    >
+      {children}
+    </button>
+  )
+}
+
+// Status dropdown cell (single click, color badge)
+function StatusDropdownCell({
   value,
   issueId,
   onUpdate,
@@ -107,53 +209,57 @@ function StatusSelectCell({
   issueId: string
   onUpdate: (issueId: string, field: keyof Issue, value: string) => void
 }) {
-  const [editing, setEditing] = useState(false)
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
   const config = statusConfig[value]
 
-  if (editing) {
-    return (
-      <select
-        value={value}
-        onChange={(e) => {
-          onUpdate(issueId, 'status', e.target.value)
-          setEditing(false)
-        }}
-        onBlur={() => setEditing(false)}
-        autoFocus
-        className="text-xs outline-none rounded px-1 py-0.5"
-        style={{
-          background: 'var(--bg-primary)',
-          border: '1px solid var(--accent)',
-          color: 'var(--text-primary)',
-        }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        {(Object.entries(statusConfig) as [Status, typeof config][]).map(([key, sc]) => (
-          <option key={key} value={key}>
-            {sc.icon} {sc.label}
-          </option>
-        ))}
-      </select>
-    )
-  }
-
   return (
-    <span
-      className="flex items-center gap-1.5 cursor-pointer rounded px-1 py-0.5 -mx-1 transition-colors"
-      onDoubleClick={(e) => {
-        e.stopPropagation()
-        setEditing(true)
-      }}
-      title="ダブルクリックで変更"
-    >
-      <span style={{ color: config.color }}>{config.icon}</span>
-      <span className="text-xs">{config.label}</span>
-    </span>
+    <div ref={ref}>
+      <span
+        className="inline-flex items-center gap-1.5 cursor-pointer rounded-full px-2 py-0.5 transition-colors"
+        style={{ color: config.color }}
+        onClick={(e) => {
+          e.stopPropagation()
+          setOpen(!open)
+        }}
+      >
+        <span
+          className="w-2 h-2 rounded-full shrink-0"
+          style={{ background: config.color }}
+        />
+        <span className="text-xs font-medium">{config.label}</span>
+      </span>
+      <CellDropdown open={open} anchorRef={ref} onClose={() => setOpen(false)}>
+        {(
+          Object.entries(statusConfig) as [
+            Status,
+            (typeof statusConfig)[Status],
+          ][]
+        ).map(([key, sc]) => (
+          <DropdownItem
+            key={key}
+            selected={key === value}
+            onClick={(e) => {
+              e.stopPropagation()
+              onUpdate(issueId, 'status', key)
+              setOpen(false)
+            }}
+          >
+            <span
+              className="w-2 h-2 rounded-full shrink-0"
+              style={{ background: sc.color }}
+            />
+            <span>{sc.icon}</span>
+            <span>{sc.label}</span>
+          </DropdownItem>
+        ))}
+      </CellDropdown>
+    </div>
   )
 }
 
-// Priority select cell
-function PrioritySelectCell({
+// Priority dropdown cell (single click)
+function PriorityDropdownCell({
   value,
   issueId,
   onUpdate,
@@ -162,50 +268,119 @@ function PrioritySelectCell({
   issueId: string
   onUpdate: (issueId: string, field: keyof Issue, value: string) => void
 }) {
-  const [editing, setEditing] = useState(false)
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
   const config = priorityConfig[value]
 
-  if (editing) {
-    return (
-      <select
-        value={value}
-        onChange={(e) => {
-          onUpdate(issueId, 'priority', e.target.value)
-          setEditing(false)
+  return (
+    <div ref={ref}>
+      <span
+        className="flex items-center gap-1.5 cursor-pointer rounded px-1 py-0.5 -mx-1 transition-colors"
+        onClick={(e) => {
+          e.stopPropagation()
+          setOpen(!open)
         }}
-        onBlur={() => setEditing(false)}
-        autoFocus
-        className="text-xs outline-none rounded px-1 py-0.5"
-        style={{
-          background: 'var(--bg-primary)',
-          border: '1px solid var(--accent)',
-          color: 'var(--text-primary)',
-        }}
-        onClick={(e) => e.stopPropagation()}
       >
-        {(Object.entries(priorityConfig) as [Priority, typeof config][]).map(
-          ([key, pc]) => (
-            <option key={key} value={key}>
-              {pc.icon} {pc.label}
-            </option>
-          )
-        )}
-      </select>
-    )
-  }
+        <span style={{ color: config.color }}>{config.icon}</span>
+        <span className="text-xs">{config.label}</span>
+      </span>
+      <CellDropdown open={open} anchorRef={ref} onClose={() => setOpen(false)}>
+        {(
+          Object.entries(priorityConfig) as [
+            Priority,
+            (typeof priorityConfig)[Priority],
+          ][]
+        ).map(([key, pc]) => (
+          <DropdownItem
+            key={key}
+            selected={key === value}
+            onClick={(e) => {
+              e.stopPropagation()
+              onUpdate(issueId, 'priority', key)
+              setOpen(false)
+            }}
+          >
+            <span style={{ color: pc.color }}>{pc.icon}</span>
+            <span>{pc.label}</span>
+          </DropdownItem>
+        ))}
+      </CellDropdown>
+    </div>
+  )
+}
+
+// Assignee dropdown cell (single click, avatar + name)
+function AssigneeDropdownCell({
+  value,
+  issueId,
+  onUpdate,
+}: {
+  value: string | null
+  issueId: string
+  onUpdate: (issueId: string, field: keyof Issue, value: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
 
   return (
-    <span
-      className="flex items-center gap-1.5 cursor-pointer rounded px-1 py-0.5 -mx-1 transition-colors"
-      onDoubleClick={(e) => {
-        e.stopPropagation()
-        setEditing(true)
-      }}
-      title="ダブルクリックで変更"
-    >
-      <span style={{ color: config.color }}>{config.icon}</span>
-      <span className="text-xs">{config.label}</span>
-    </span>
+    <div ref={ref}>
+      <span
+        className="flex items-center gap-1.5 cursor-pointer rounded px-1 py-0.5 -mx-1 transition-colors"
+        onClick={(e) => {
+          e.stopPropagation()
+          setOpen(!open)
+        }}
+      >
+        {value ? (
+          <>
+            <span
+              className="w-5 h-5 rounded-full flex items-center justify-center text-xs shrink-0"
+              style={{ background: 'var(--accent)', color: '#fff' }}
+            >
+              {value[0]}
+            </span>
+            <span className="text-xs truncate">{value}</span>
+          </>
+        ) : (
+          <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+            —
+          </span>
+        )}
+      </span>
+      <CellDropdown open={open} anchorRef={ref} onClose={() => setOpen(false)}>
+        <DropdownItem
+          selected={value === null}
+          onClick={(e) => {
+            e.stopPropagation()
+            onUpdate(issueId, 'assignee', '')
+            setOpen(false)
+          }}
+        >
+          <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+            None
+          </span>
+        </DropdownItem>
+        {mockUsers.map((name) => (
+          <DropdownItem
+            key={name}
+            selected={name === value}
+            onClick={(e) => {
+              e.stopPropagation()
+              onUpdate(issueId, 'assignee', name)
+              setOpen(false)
+            }}
+          >
+            <span
+              className="w-5 h-5 rounded-full flex items-center justify-center text-xs shrink-0"
+              style={{ background: 'var(--accent)', color: '#fff' }}
+            >
+              {name[0]}
+            </span>
+            <span>{name}</span>
+          </DropdownItem>
+        ))}
+      </CellDropdown>
+    </div>
   )
 }
 
@@ -216,11 +391,21 @@ export function TableView({
   selectedIssueId,
   onSelectIssue,
   onUpdateIssue,
+  onCreateIssue,
 }: TableViewProps) {
   const [sorting, setSorting] = useState<SortingState>([])
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([])
   const [globalFilter, setGlobalFilter] = useState('')
+  const [creatingIssue, setCreatingIssue] = useState(false)
+  const [newIssueTitle, setNewIssueTitle] = useState('')
   const parentRef = useRef<HTMLDivElement>(null)
+  const newIssueInputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (creatingIssue && newIssueInputRef.current) {
+      newIssueInputRef.current.focus()
+    }
+  }, [creatingIssue])
 
   const columns = useMemo(
     () => [
@@ -240,7 +425,7 @@ export function TableView({
         header: 'Status',
         size: 140,
         cell: (info) => (
-          <StatusSelectCell
+          <StatusDropdownCell
             value={info.getValue()}
             issueId={info.row.original.id}
             onUpdate={onUpdateIssue}
@@ -253,7 +438,7 @@ export function TableView({
         header: 'Priority',
         size: 110,
         cell: (info) => (
-          <PrioritySelectCell
+          <PriorityDropdownCell
             value={info.getValue()}
             issueId={info.row.original.id}
             onUpdate={onUpdateIssue}
@@ -275,26 +460,13 @@ export function TableView({
       columnHelper.accessor('assignee', {
         header: 'Assignee',
         size: 140,
-        cell: (info) => {
-          const name = info.getValue()
-          if (!name)
-            return (
-              <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                —
-              </span>
-            )
-          return (
-            <span className="flex items-center gap-1.5">
-              <span
-                className="w-5 h-5 rounded-full flex items-center justify-center text-xs shrink-0"
-                style={{ background: 'var(--accent)', color: '#fff' }}
-              >
-                {name[0]}
-              </span>
-              <span className="text-xs truncate">{name}</span>
-            </span>
-          )
-        },
+        cell: (info) => (
+          <AssigneeDropdownCell
+            value={info.getValue()}
+            issueId={info.row.original.id}
+            onUpdate={onUpdateIssue}
+          />
+        ),
       }),
       columnHelper.accessor('labels', {
         header: 'Labels',
@@ -367,6 +539,15 @@ export function TableView({
     overscan: 20,
   })
 
+  const handleCreateSubmit = useCallback(() => {
+    const trimmed = newIssueTitle.trim()
+    if (trimmed) {
+      onCreateIssue(trimmed)
+      setNewIssueTitle('')
+      setCreatingIssue(false)
+    }
+  }, [newIssueTitle, onCreateIssue])
+
   return (
     <div className="flex flex-col h-full">
       {/* Toolbar */}
@@ -390,9 +571,6 @@ export function TableView({
         </div>
         <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
           {rows.length} issues
-        </span>
-        <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
-          · double-click to edit
         </span>
       </div>
 
@@ -519,6 +697,60 @@ export function TableView({
                 />
               </tr>
             )}
+            {/* New Issue row */}
+            <tr
+              style={{
+                height: ROW_HEIGHT,
+                borderBottom: '1px solid var(--border-color)',
+              }}
+            >
+              <td colSpan={columns.length} className="px-3 py-1.5">
+                {creatingIssue ? (
+                  <input
+                    ref={newIssueInputRef}
+                    type="text"
+                    value={newIssueTitle}
+                    onChange={(e) => setNewIssueTitle(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') handleCreateSubmit()
+                      if (e.key === 'Escape') {
+                        setCreatingIssue(false)
+                        setNewIssueTitle('')
+                      }
+                    }}
+                    onBlur={() => {
+                      if (!newIssueTitle.trim()) {
+                        setCreatingIssue(false)
+                        setNewIssueTitle('')
+                      }
+                    }}
+                    placeholder="Issue title を入力して Enter..."
+                    className="w-full px-2 py-1 rounded text-sm outline-none"
+                    style={{
+                      background: 'var(--bg-primary)',
+                      border: '1px solid var(--accent)',
+                      color: 'var(--text-primary)',
+                      maxWidth: '500px',
+                    }}
+                  />
+                ) : (
+                  <button
+                    className="flex items-center gap-1 text-xs cursor-pointer transition-colors"
+                    style={{ color: 'var(--text-muted)' }}
+                    onClick={() => setCreatingIssue(true)}
+                    onMouseEnter={(e) =>
+                      (e.currentTarget.style.color = 'var(--text-primary)')
+                    }
+                    onMouseLeave={(e) =>
+                      (e.currentTarget.style.color = 'var(--text-muted)')
+                    }
+                  >
+                    <span>+</span>
+                    <span>New Issue</span>
+                  </button>
+                )}
+              </td>
+            </tr>
           </tbody>
         </table>
       </div>
