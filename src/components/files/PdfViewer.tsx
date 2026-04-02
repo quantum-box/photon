@@ -113,7 +113,7 @@ export function PdfViewer({ url, name }: PdfViewerProps) {
       </div>
 
       {/* Canvas */}
-      <div className="flex-1 overflow-auto flex justify-center p-4" style={{ background: '#1a1a24' }}>
+      <div className="flex-1 overflow-auto flex justify-center p-4" style={{ background: 'var(--bg-primary)' }}>
         {pdf ? (
           <canvas ref={canvasRef} className="shadow-lg" style={{ maxWidth: '100%', height: 'auto' }} />
         ) : (

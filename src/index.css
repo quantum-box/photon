@@ -4,6 +4,8 @@
 :root {
   --sidebar-width: 220px;
   --detail-width: 380px;
+
+  /* Dark theme (default) */
   --bg-primary: #0a0a0f;
   --bg-sidebar: #111118;
   --bg-surface: #16161f;
@@ -22,12 +24,46 @@
   --priority-high: #f5a623;
   --priority-medium: #5b5bf7;
   --priority-low: #8a8a9a;
+  --bg-code: #1a1a2e;
+  --text-code: #e0a0ff;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+}
+
+/* Light theme */
+:root[data-theme="light"] {
+  --bg-primary: #f8f9fa;
+  --bg-sidebar: #ffffff;
+  --bg-surface: #ffffff;
+  --bg-hover: #f0f1f3;
+  --border-color: #e0e0e6;
+  --text-primary: #1a1a2e;
+  --text-secondary: #5c5c72;
+  --text-muted: #9898ab;
+  --accent: #5b5bf7;
+  --accent-hover: #4a4ae0;
+  --status-todo: #8a8a9a;
+  --status-progress: #e09400;
+  --status-done: #28a745;
+  --status-cancelled: #dc3545;
+  --priority-urgent: #dc3545;
+  --priority-high: #e09400;
+  --priority-medium: #5b5bf7;
+  --priority-low: #8a8a9a;
+  --bg-code: #f0f0f5;
+  --text-code: #7c3aed;
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.08);
 }
 
 * {
   margin: 0;
   padding: 0;
   box-sizing: border-box;
+}
+
+/* Smooth theme transitions */
+body,
+body * {
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
 
 body {

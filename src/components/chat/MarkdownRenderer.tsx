@@ -1,57 +1,62 @@
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
-import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism'
+import { oneDark, oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import type { Components } from 'react-markdown'
+import { useTheme } from '../../contexts/ThemeContext'
 
-const components: Components = {
-  code({ className, children, ...props }) {
-    const match = /language-(\w+)/.exec(className || '')
-    const codeString = String(children).replace(/\n$/, '')
+function useMarkdownComponents(): Components {
+  const { resolved } = useTheme()
+  const syntaxTheme = resolved === 'dark' ? oneDark : oneLight
 
-    if (match) {
-      return (
-        <div className="my-2 rounded-lg overflow-hidden" style={{ background: '#1a1a2e' }}>
-          <div
-            className="flex items-center justify-between px-3 py-1.5 text-xs"
-            style={{ background: 'var(--bg-hover)', color: 'var(--text-muted)' }}
-          >
-            <span>{match[1]}</span>
-            <button
-              onClick={() => navigator.clipboard.writeText(codeString)}
-              className="hover:opacity-80 transition-opacity cursor-pointer"
-              style={{ color: 'var(--text-secondary)' }}
+  return {
+    code({ className, children, ...props }) {
+      const match = /language-(\w+)/.exec(className || '')
+      const codeString = String(children).replace(/\n$/, '')
+
+      if (match) {
+        return (
+          <div className="my-2 rounded-lg overflow-hidden" style={{ background: 'var(--bg-code)' }}>
+            <div
+              className="flex items-center justify-between px-3 py-1.5 text-xs"
+              style={{ background: 'var(--bg-hover)', color: 'var(--text-muted)' }}
             >
-              Copy
-            </button>
+              <span>{match[1]}</span>
+              <button
+                onClick={() => navigator.clipboard.writeText(codeString)}
+                className="hover:opacity-80 transition-opacity cursor-pointer"
+                style={{ color: 'var(--text-secondary)' }}
+              >
+                Copy
+              </button>
+            </div>
+            <SyntaxHighlighter
+              style={syntaxTheme}
+              language={match[1]}
+              PreTag="div"
+              customStyle={{
+                margin: 0,
+                padding: '12px 16px',
+                background: 'var(--bg-code)',
+                fontSize: '13px',
+              }}
+            >
+              {codeString}
+            </SyntaxHighlighter>
           </div>
-          <SyntaxHighlighter
-            style={oneDark}
-            language={match[1]}
-            PreTag="div"
-            customStyle={{
-              margin: 0,
-              padding: '12px 16px',
-              background: '#1a1a2e',
-              fontSize: '13px',
-            }}
-          >
-            {codeString}
-          </SyntaxHighlighter>
-        </div>
-      )
-    }
+        )
+      }
 
-    return (
-      <code
-        className="px-1.5 py-0.5 rounded text-sm"
-        style={{ background: 'var(--bg-hover)', color: '#e0a0ff' }}
-        {...props}
-      >
-        {children}
-      </code>
-    )
-  },
+      return (
+        <code
+          className="px-1.5 py-0.5 rounded text-sm"
+          style={{ background: 'var(--bg-hover)', color: 'var(--text-code)' }}
+          {...props}
+        >
+          {children}
+        </code>
+      )
+    },
   p({ children }) {
     return <p className="mb-3 leading-relaxed last:mb-0">{children}</p>
   },
@@ -123,12 +128,14 @@ const components: Components = {
       </a>
     )
   },
-  hr() {
-    return <hr className="my-4" style={{ borderColor: 'var(--border-color)' }} />
-  },
+    hr() {
+      return <hr className="my-4" style={{ borderColor: 'var(--border-color)' }} />
+    },
+  }
 }
 
 export function MarkdownRenderer({ content }: { content: string }) {
+  const components = useMarkdownComponents()
   return (
     <div className="text-sm" style={{ color: 'var(--text-primary)' }}>
       <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>

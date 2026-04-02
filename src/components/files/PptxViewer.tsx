@@ -107,7 +107,7 @@ export function PptxViewer({ file, name }: PptxViewerProps) {
       </div>
 
       {/* Slide content */}
-      <div className="flex-1 overflow-auto flex items-center justify-center p-6" style={{ background: '#1a1a24' }}>
+      <div className="flex-1 overflow-auto flex items-center justify-center p-6" style={{ background: 'var(--bg-primary)' }}>
         <div
           className="rounded-lg shadow-xl p-8"
           style={{

@@ -1,6 +1,8 @@
 import { useNavigate, useRouterState, Link } from '@tanstack/react-router'
 import { statusConfig, type Status } from '../data/mock'
 import { useIssues } from '../contexts/IssuesContext'
+import { useTheme } from '../contexts/ThemeContext'
+import type { ThemeMode } from '../contexts/ThemeContext'
 
 const navItems = [
   { id: 'my-issues', label: 'My Issues', icon: '👤' },
@@ -20,6 +22,47 @@ const views = [
   { id: 'kanban' as const, label: 'Board', to: '/kanban' as const },
   { id: 'chat' as const, label: 'Chat', to: '/chat' as const },
 ] as const
+
+const themeOptions: { mode: ThemeMode; icon: string; label: string }[] = [
+  { mode: 'light', icon: '☀️', label: 'Light' },
+  { mode: 'dark', icon: '🌙', label: 'Dark' },
+  { mode: 'system', icon: '💻', label: 'System' },
+]
+
+function ThemeToggle() {
+  const { mode, setMode } = useTheme()
+
+  return (
+    <div
+      className="px-2 py-3 border-t"
+      style={{ borderColor: 'var(--border-color)' }}
+    >
+      <div className="flex gap-1 px-1">
+        {themeOptions.map((opt) => (
+          <button
+            key={opt.mode}
+            onClick={() => setMode(opt.mode)}
+            className="flex-1 px-1 py-1 rounded text-xs font-medium transition-colors text-center"
+            style={{
+              background:
+                mode === opt.mode ? 'var(--bg-hover)' : 'transparent',
+              color:
+                mode === opt.mode
+                  ? 'var(--text-primary)'
+                  : 'var(--text-muted)',
+            }}
+            title={opt.label}
+          >
+            <span className="block text-sm leading-none">{opt.icon}</span>
+            <span className="block mt-0.5" style={{ fontSize: '9px' }}>
+              {opt.label}
+            </span>
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
 
 export function Sidebar() {
   const { issueCountByStatus } = useIssues()
@@ -226,6 +269,9 @@ export function Sidebar() {
           </button>
         ))}
       </div>
+
+      {/* Theme Toggle */}
+      <ThemeToggle />
     </aside>
   )
 }
