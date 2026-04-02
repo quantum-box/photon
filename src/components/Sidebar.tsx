@@ -1,12 +1,6 @@
+import { useNavigate, useRouterState, Link } from '@tanstack/react-router'
 import { statusConfig, type Status } from '../data/mock'
-
-interface SidebarProps {
-  currentView: 'table' | 'kanban' | 'chat'
-  onViewChange: (view: 'table' | 'kanban' | 'chat') => void
-  statusFilter: Status | null
-  onStatusFilter: (status: Status | null) => void
-  issueCountByStatus: Record<Status, number>
-}
+import { useIssues } from '../contexts/IssuesContext'
 
 const navItems = [
   { id: 'my-issues', label: 'My Issues', icon: '👤' },
@@ -21,13 +15,36 @@ const teamItems = [
   { id: 'auth-service', label: 'Auth Service' },
 ]
 
-export function Sidebar({
-  currentView,
-  onViewChange,
-  statusFilter,
-  onStatusFilter,
-  issueCountByStatus,
-}: SidebarProps) {
+const views = [
+  { id: 'table' as const, label: 'Table', to: '/issues' as const },
+  { id: 'kanban' as const, label: 'Board', to: '/kanban' as const },
+  { id: 'chat' as const, label: 'Chat', to: '/chat' as const },
+] as const
+
+export function Sidebar() {
+  const { issueCountByStatus } = useIssues()
+  const navigate = useNavigate()
+
+  const pathname = useRouterState({ select: (s) => s.location.pathname })
+  const search = useRouterState({ select: (s) => s.location.search }) as {
+    status?: Status
+  }
+  const statusFilter = search.status ?? null
+
+  const currentView = pathname.startsWith('/kanban')
+    ? 'kanban'
+    : pathname.startsWith('/chat')
+      ? 'chat'
+      : 'table'
+
+  const handleStatusFilter = (status: Status | null) => {
+    const to = currentView === 'kanban' ? '/kanban' : '/issues'
+    void navigate({
+      to,
+      search: status ? { status } : {},
+    })
+  }
+
   return (
     <aside
       className="flex flex-col h-full border-r"
@@ -84,22 +101,26 @@ export function Sidebar({
           </span>
         </div>
         <div className="flex gap-1 px-1">
-          {(['table', 'kanban', 'chat'] as const).map((view) => (
-            <button
-              key={view}
-              className="flex-1 px-2 py-1 rounded text-xs font-medium transition-colors"
+          {views.map((view) => (
+            <Link
+              key={view.id}
+              to={view.to}
+              search={
+                view.id !== 'chat' && statusFilter
+                  ? { status: statusFilter }
+                  : {}
+              }
+              className="flex-1 px-2 py-1 rounded text-xs font-medium transition-colors text-center block"
               style={{
                 background:
-                  currentView === view ? 'var(--accent)' : 'transparent',
+                  currentView === view.id ? 'var(--accent)' : 'transparent',
                 color:
-                  currentView === view
-                    ? '#fff'
-                    : 'var(--text-secondary)',
+                  currentView === view.id ? '#fff' : 'var(--text-secondary)',
+                textDecoration: 'none',
               }}
-              onClick={() => onViewChange(view)}
             >
-              {view === 'table' ? 'Table' : view === 'kanban' ? 'Board' : 'Chat'}
-            </button>
+              {view.label}
+            </Link>
           ))}
         </div>
       </div>
@@ -117,45 +138,61 @@ export function Sidebar({
         <button
           className="flex items-center justify-between w-full px-2 py-1.5 rounded text-sm transition-colors"
           style={{
-            color: statusFilter === null ? 'var(--text-primary)' : 'var(--text-secondary)',
-            background: statusFilter === null ? 'var(--bg-hover)' : 'transparent',
+            color:
+              statusFilter === null
+                ? 'var(--text-primary)'
+                : 'var(--text-secondary)',
+            background:
+              statusFilter === null ? 'var(--bg-hover)' : 'transparent',
           }}
-          onClick={() => onStatusFilter(null)}
+          onClick={() => handleStatusFilter(null)}
         >
           <span>All</span>
           <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
-            {Object.values(issueCountByStatus).reduce((a, b) => a + b, 0)}
+            {Object.values(issueCountByStatus).reduce(
+              (a, b) => a + b,
+              0
+            )}
           </span>
         </button>
-        {(Object.entries(statusConfig) as [Status, typeof statusConfig[Status]][]).map(
-          ([key, config]) => (
-            <button
-              key={key}
-              className="flex items-center justify-between w-full px-2 py-1.5 rounded text-sm transition-colors"
-              style={{
-                color: statusFilter === key ? 'var(--text-primary)' : 'var(--text-secondary)',
-                background: statusFilter === key ? 'var(--bg-hover)' : 'transparent',
-              }}
-              onClick={() => onStatusFilter(statusFilter === key ? null : key)}
-              onMouseEnter={(e) => {
-                if (statusFilter !== key)
-                  e.currentTarget.style.background = 'var(--bg-hover)'
-              }}
-              onMouseLeave={(e) => {
-                if (statusFilter !== key)
-                  e.currentTarget.style.background = ''
-              }}
-            >
-              <span className="flex items-center gap-2">
-                <span style={{ color: config.color }}>{config.icon}</span>
-                <span>{config.label}</span>
-              </span>
-              <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                {issueCountByStatus[key] || 0}
-              </span>
-            </button>
-          )
-        )}
+        {(
+          Object.entries(statusConfig) as [
+            Status,
+            (typeof statusConfig)[Status],
+          ][]
+        ).map(([key, config]) => (
+          <button
+            key={key}
+            className="flex items-center justify-between w-full px-2 py-1.5 rounded text-sm transition-colors"
+            style={{
+              color:
+                statusFilter === key
+                  ? 'var(--text-primary)'
+                  : 'var(--text-secondary)',
+              background:
+                statusFilter === key ? 'var(--bg-hover)' : 'transparent',
+            }}
+            onClick={() =>
+              handleStatusFilter(statusFilter === key ? null : key)
+            }
+            onMouseEnter={(e) => {
+              if (statusFilter !== key)
+                e.currentTarget.style.background = 'var(--bg-hover)'
+            }}
+            onMouseLeave={(e) => {
+              if (statusFilter !== key)
+                e.currentTarget.style.background = ''
+            }}
+          >
+            <span className="flex items-center gap-2">
+              <span style={{ color: config.color }}>{config.icon}</span>
+              <span>{config.label}</span>
+            </span>
+            <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+              {issueCountByStatus[key] || 0}
+            </span>
+          </button>
+        ))}
       </div>
 
       {/* Teams */}

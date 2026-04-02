@@ -266,7 +266,7 @@ export function ChatView() {
 
   return (
     <div
-      className="flex flex-col h-full relative"
+      className="flex flex-col h-full relative px-4 py-2"
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}

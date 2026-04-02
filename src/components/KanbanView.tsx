@@ -337,7 +337,7 @@ export function KanbanView({
   }
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full p-2">
       {/* Toolbar */}
       <div
         className="flex items-center gap-2 px-4 py-2 border-b shrink-0"
