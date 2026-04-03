@@ -8,11 +8,12 @@ import {
   useNavigate,
   useMatch,
 } from '@tanstack/react-router'
-import { useMemo, useCallback, useState } from 'react'
+import { useMemo, useCallback, useState, createContext, useContext } from 'react'
 import { Sidebar } from './components/Sidebar'
 import { TableView } from './components/TableView'
 import { KanbanView } from './components/KanbanView'
 import { DetailPanel } from './components/DetailPanel'
+import { CreateIssueModal } from './components/CreateIssueModal'
 import { ChatView } from './components/chat/ChatView'
 import { IssuesProvider, useIssues } from './contexts/IssuesContext'
 import type { Status, Issue } from './data/mock'
@@ -34,16 +35,30 @@ function validateIssueSearch(search: Record<string, unknown>): IssueSearchParams
   }
 }
 
+// ── Create Issue Modal context ─────────────────────────────────
+
+const CreateModalContext = createContext<{
+  open: boolean
+  setOpen: (v: boolean) => void
+}>({ open: false, setOpen: () => {} })
+
+function useCreateModal() {
+  return useContext(CreateModalContext)
+}
+
 // ── Root Route ─────────────────────────────────────────────────
 
 const rootRoute = createRootRoute({
   component: function RootLayout() {
+    const [createModalOpen, setCreateModalOpen] = useState(false)
     return (
       <IssuesProvider>
-        <div className="flex h-full">
-          <Sidebar />
-          <Outlet />
-        </div>
+        <CreateModalContext.Provider value={{ open: createModalOpen, setOpen: setCreateModalOpen }}>
+          <div className="flex h-full">
+            <Sidebar />
+            <Outlet />
+          </div>
+        </CreateModalContext.Provider>
       </IssuesProvider>
     )
   },
@@ -72,6 +87,7 @@ function IssuesLayout() {
   const { status, sort, desc } = issuesRoute.useSearch()
   const { issues, handleUpdateIssue, handleCreateIssue } = useIssues()
   const navigate = useNavigate()
+  const { open: createModalOpen, setOpen: setCreateModalOpen } = useCreateModal()
 
   // Get selected issue ID from child detail route
   const detailMatch = useMatch({
@@ -183,6 +199,7 @@ function IssuesLayout() {
             <button
               className="px-3 py-1.5 rounded text-xs font-medium"
               style={{ background: 'var(--accent)', color: '#fff' }}
+              onClick={() => setCreateModalOpen(true)}
             >
               + New Issue
             </button>
@@ -203,6 +220,11 @@ function IssuesLayout() {
         </div>
       </div>
       <Outlet />
+      <CreateIssueModal
+        open={createModalOpen}
+        onClose={() => setCreateModalOpen(false)}
+        onCreate={handleCreateIssue}
+      />
     </>
   )
 }
@@ -226,7 +248,7 @@ const issueDetailRoute = createRoute({
 function IssueDetailPanel() {
   const { issueId } = issueDetailRoute.useParams()
   const { status, sort, desc } = issuesRoute.useSearch()
-  const { issues } = useIssues()
+  const { issues, handleUpdateIssue, handleDeleteIssue } = useIssues()
   const navigate = useNavigate()
 
   const issue = useMemo(
@@ -240,6 +262,8 @@ function IssueDetailPanel() {
       onClose={() =>
         void navigate({ to: '/issues', search: { status, sort, desc } })
       }
+      onUpdateIssue={handleUpdateIssue}
+      onDeleteIssue={handleDeleteIssue}
     />
   )
 }
@@ -257,13 +281,20 @@ const kanbanRoute = createRoute({
 
 function KanbanPage() {
   const { status } = kanbanRoute.useSearch()
-  const { issues, handleMoveIssue } = useIssues()
+  const { issues, handleMoveIssue, handleUpdateIssue, handleDeleteIssue, handleCreateIssue } = useIssues()
   const [selectedIssue, setSelectedIssue] = useState<Issue | null>(null)
   const navigate = useNavigate()
+  const { open: createModalOpen, setOpen: setCreateModalOpen } = useCreateModal()
 
   const filteredIssues = useMemo(
     () => (status ? issues.filter((i) => i.status === status) : issues),
     [issues, status]
+  )
+
+  // Keep selectedIssue in sync with live issues (handles edits & deletes)
+  const liveSelectedIssue = useMemo(
+    () => (selectedIssue ? issues.find((i) => i.id === selectedIssue.id) ?? null : null),
+    [issues, selectedIssue]
   )
 
   const handleSelectIssue = useCallback(
@@ -308,6 +339,7 @@ function KanbanPage() {
             <button
               className="px-3 py-1.5 rounded text-xs font-medium"
               style={{ background: 'var(--accent)', color: '#fff' }}
+              onClick={() => setCreateModalOpen(true)}
             >
               + New Issue
             </button>
@@ -324,12 +356,22 @@ function KanbanPage() {
           />
         </div>
       </div>
-      {selectedIssue && (
+      {liveSelectedIssue && (
         <DetailPanel
-          issue={selectedIssue}
+          issue={liveSelectedIssue}
           onClose={() => setSelectedIssue(null)}
+          onUpdateIssue={handleUpdateIssue}
+          onDeleteIssue={(id) => {
+            handleDeleteIssue(id)
+            setSelectedIssue(null)
+          }}
         />
       )}
+      <CreateIssueModal
+        open={createModalOpen}
+        onClose={() => setCreateModalOpen(false)}
+        onCreate={handleCreateIssue}
+      />
     </>
   )
 }
