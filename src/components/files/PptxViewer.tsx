@@ -53,7 +53,7 @@ export function PptxViewer({ file, name }: PptxViewerProps) {
 
   if (error) {
     return (
-      <div className="flex items-center justify-center h-full" style={{ color: 'var(--priority-urgent)' }}>
+      <div className="flex items-center justify-center h-full text-priority-urgent">
         <p>Failed to load presentation: {error}</p>
       </div>
     )
@@ -63,9 +63,9 @@ export function PptxViewer({ file, name }: PptxViewerProps) {
     return (
       <div className="flex items-center justify-center h-full">
         <div className="flex gap-1">
-          <span className="w-2 h-2 rounded-full animate-bounce-dot" style={{ background: 'var(--accent)', animationDelay: '0ms' }} />
-          <span className="w-2 h-2 rounded-full animate-bounce-dot" style={{ background: 'var(--accent)', animationDelay: '150ms' }} />
-          <span className="w-2 h-2 rounded-full animate-bounce-dot" style={{ background: 'var(--accent)', animationDelay: '300ms' }} />
+          <span className="w-2 h-2 rounded-full animate-bounce-dot bg-accent" style={{ animationDelay: '0ms' }} />
+          <span className="w-2 h-2 rounded-full animate-bounce-dot bg-accent" style={{ animationDelay: '150ms' }} />
+          <span className="w-2 h-2 rounded-full animate-bounce-dot bg-accent" style={{ animationDelay: '300ms' }} />
         </div>
       </div>
     )
@@ -76,30 +76,25 @@ export function PptxViewer({ file, name }: PptxViewerProps) {
   return (
     <div className="flex flex-col h-full">
       {/* Toolbar */}
-      <div
-        className="flex items-center justify-between px-4 py-2 border-b flex-shrink-0"
-        style={{ borderColor: 'var(--border-color)', background: 'var(--bg-surface)' }}
-      >
-        <span className="text-xs font-medium truncate mr-2" style={{ color: 'var(--text-secondary)' }}>
+      <div className="flex items-center justify-between px-4 py-2 border-b border-border flex-shrink-0 bg-surface">
+        <span className="text-xs font-medium truncate mr-2 text-muted">
           {name}
         </span>
         <div className="flex items-center gap-2">
           <button
             onClick={() => setActiveSlide((s) => Math.max(0, s - 1))}
             disabled={activeSlide <= 0}
-            className="px-2 py-0.5 rounded text-xs cursor-pointer disabled:opacity-30"
-            style={{ background: 'var(--bg-hover)', color: 'var(--text-secondary)' }}
+            className="px-2 py-0.5 rounded text-xs cursor-pointer disabled:opacity-30 bg-surface-hover text-muted"
           >
             Prev
           </button>
-          <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+          <span className="text-xs text-muted">
             Slide {activeSlide + 1} / {slides.length}
           </span>
           <button
             onClick={() => setActiveSlide((s) => Math.min(slides.length - 1, s + 1))}
             disabled={activeSlide >= slides.length - 1}
-            className="px-2 py-0.5 rounded text-xs cursor-pointer disabled:opacity-30"
-            style={{ background: 'var(--bg-hover)', color: 'var(--text-secondary)' }}
+            className="px-2 py-0.5 rounded text-xs cursor-pointer disabled:opacity-30 bg-surface-hover text-muted"
           >
             Next
           </button>
@@ -107,27 +102,20 @@ export function PptxViewer({ file, name }: PptxViewerProps) {
       </div>
 
       {/* Slide content */}
-      <div className="flex-1 overflow-auto flex items-center justify-center p-6" style={{ background: 'var(--bg-primary)' }}>
+      <div className="flex-1 overflow-auto flex items-center justify-center p-6 bg-canvas">
         <div
-          className="rounded-lg shadow-xl p-8"
+          className="rounded-lg shadow-xl p-8 bg-surface border border-border flex flex-col justify-center items-center"
           style={{
-            background: 'var(--bg-surface)',
-            border: '1px solid var(--border-color)',
             width: '100%',
             maxWidth: 720,
             aspectRatio: '16 / 9',
-            display: 'flex',
-            flexDirection: 'column',
-            justifyContent: 'center',
-            alignItems: 'center',
           }}
         >
           {slide.texts.map((text, i) => (
             <p
               key={i}
-              className="mb-2 text-center"
+              className="mb-2 text-center text-foreground"
               style={{
-                color: 'var(--text-primary)',
                 fontSize: i === 0 ? '1.25rem' : '0.875rem',
                 fontWeight: i === 0 ? 600 : 400,
               }}
@@ -140,20 +128,17 @@ export function PptxViewer({ file, name }: PptxViewerProps) {
 
       {/* Slide thumbnails */}
       {slides.length > 1 && (
-        <div
-          className="flex gap-2 px-4 py-2 overflow-x-auto border-t flex-shrink-0"
-          style={{ borderColor: 'var(--border-color)', background: 'var(--bg-surface)' }}
-        >
+        <div className="flex gap-2 px-4 py-2 overflow-x-auto border-t border-border flex-shrink-0 bg-surface">
           {slides.map((s, i) => (
             <button
               key={i}
               onClick={() => setActiveSlide(i)}
-              className="flex-shrink-0 rounded px-3 py-2 text-xs cursor-pointer transition-colors"
-              style={{
-                background: i === activeSlide ? 'var(--accent)' : 'var(--bg-hover)',
-                color: i === activeSlide ? '#fff' : 'var(--text-muted)',
-                minWidth: 60,
-              }}
+              className={`flex-shrink-0 rounded px-3 py-2 text-xs cursor-pointer transition-colors ${
+                i === activeSlide
+                  ? 'bg-accent text-white'
+                  : 'bg-surface-hover text-subtle'
+              }`}
+              style={{ minWidth: 60 }}
             >
               {s.index}
             </button>

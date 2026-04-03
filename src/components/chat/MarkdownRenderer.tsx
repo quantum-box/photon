@@ -16,16 +16,12 @@ function useMarkdownComponents(): Components {
 
       if (match) {
         return (
-          <div className="my-2 rounded-lg overflow-hidden" style={{ background: 'var(--bg-code)' }}>
-            <div
-              className="flex items-center justify-between px-3 py-1.5 text-xs"
-              style={{ background: 'var(--bg-hover)', color: 'var(--text-muted)' }}
-            >
+          <div className="my-2 rounded-lg overflow-hidden bg-code">
+            <div className="flex items-center justify-between px-3 py-1.5 text-xs bg-surface-hover text-subtle">
               <span>{match[1]}</span>
               <button
                 onClick={() => navigator.clipboard.writeText(codeString)}
-                className="hover:opacity-80 transition-opacity cursor-pointer"
-                style={{ color: 'var(--text-secondary)' }}
+                className="hover:opacity-80 transition-opacity cursor-pointer text-muted"
               >
                 Copy
               </button>
@@ -49,8 +45,7 @@ function useMarkdownComponents(): Components {
 
       return (
         <code
-          className="px-1.5 py-0.5 rounded text-sm"
-          style={{ background: 'var(--bg-hover)', color: 'var(--text-code)' }}
+          className="px-1.5 py-0.5 rounded text-sm bg-surface-hover text-code-text"
           {...props}
         >
           {children}
@@ -80,37 +75,28 @@ function useMarkdownComponents(): Components {
   },
   blockquote({ children }) {
     return (
-      <blockquote
-        className="my-3 pl-4 border-l-2 italic"
-        style={{ borderColor: 'var(--accent)', color: 'var(--text-secondary)' }}
-      >
+      <blockquote className="my-3 pl-4 border-l-2 italic border-accent text-muted">
         {children}
       </blockquote>
     )
   },
   table({ children }) {
     return (
-      <div className="my-3 overflow-x-auto rounded-lg" style={{ border: '1px solid var(--border-color)' }}>
+      <div className="my-3 overflow-x-auto rounded-lg border border-border">
         <table className="w-full text-sm">{children}</table>
       </div>
     )
   },
   th({ children }) {
     return (
-      <th
-        className="px-3 py-2 text-left text-xs font-semibold"
-        style={{ background: 'var(--bg-hover)', color: 'var(--text-secondary)', borderBottom: '1px solid var(--border-color)' }}
-      >
+      <th className="px-3 py-2 text-left text-xs font-semibold bg-surface-hover text-muted border-b border-border">
         {children}
       </th>
     )
   },
   td({ children }) {
     return (
-      <td
-        className="px-3 py-2"
-        style={{ borderBottom: '1px solid var(--border-color)' }}
-      >
+      <td className="px-3 py-2 border-b border-border">
         {children}
       </td>
     )
@@ -121,15 +107,14 @@ function useMarkdownComponents(): Components {
         href={href}
         target="_blank"
         rel="noopener noreferrer"
-        className="underline underline-offset-2 hover:opacity-80 transition-opacity"
-        style={{ color: 'var(--accent)' }}
+        className="underline underline-offset-2 hover:opacity-80 transition-opacity text-accent"
       >
         {children}
       </a>
     )
   },
     hr() {
-      return <hr className="my-4" style={{ borderColor: 'var(--border-color)' }} />
+      return <hr className="my-4 border-border" />
     },
   }
 }
@@ -137,7 +122,7 @@ function useMarkdownComponents(): Components {
 export function MarkdownRenderer({ content }: { content: string }) {
   const components = useMarkdownComponents()
   return (
-    <div className="text-sm" style={{ color: 'var(--text-primary)' }}>
+    <div className="text-sm text-foreground">
       <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
         {content}
       </ReactMarkdown>

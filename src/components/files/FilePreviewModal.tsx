@@ -26,7 +26,7 @@ export function FilePreviewModal({ file, onClose }: FilePreviewModalProps) {
       default:
         return (
           <div className="flex items-center justify-center h-full">
-            <p style={{ color: 'var(--text-muted)' }}>Preview not available for this file type</p>
+            <p className="text-subtle">Preview not available for this file type</p>
           </div>
         )
     }
@@ -34,15 +34,12 @@ export function FilePreviewModal({ file, onClose }: FilePreviewModalProps) {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center"
-      style={{ background: 'rgba(0,0,0,0.7)' }}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-overlay"
       onClick={onClose}
     >
       <div
-        className="rounded-xl overflow-hidden flex flex-col"
+        className="rounded-xl overflow-hidden flex flex-col bg-canvas border border-border"
         style={{
-          background: 'var(--bg-primary)',
-          border: '1px solid var(--border-color)',
           width: '85vw',
           height: '85vh',
           maxWidth: 1100,
@@ -50,15 +47,12 @@ export function FilePreviewModal({ file, onClose }: FilePreviewModalProps) {
         onClick={(e) => e.stopPropagation()}
       >
         {/* Modal header */}
-        <div
-          className="flex items-center justify-between px-4 py-2.5 border-b flex-shrink-0"
-          style={{ borderColor: 'var(--border-color)', background: 'var(--bg-sidebar)' }}
-        >
+        <div className="flex items-center justify-between px-4 py-2.5 border-b border-border flex-shrink-0 bg-panel">
           <div className="flex items-center gap-2">
             <span className="text-sm">
               {fileType === 'pdf' ? '📄' : fileType === 'excel' || fileType === 'csv' ? '📊' : fileType === 'docx' ? '📝' : fileType === 'pptx' ? '📑' : '📎'}
             </span>
-            <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
+            <span className="text-sm font-medium text-foreground">
               {file.name}
             </span>
           </div>
@@ -66,17 +60,13 @@ export function FilePreviewModal({ file, onClose }: FilePreviewModalProps) {
             <a
               href={file.url}
               download={file.name}
-              className="px-3 py-1 rounded text-xs cursor-pointer"
-              style={{ background: 'var(--bg-hover)', color: 'var(--text-secondary)' }}
+              className="px-3 py-1 rounded text-xs cursor-pointer bg-surface-hover text-muted"
             >
               Download
             </a>
             <button
               onClick={onClose}
-              className="w-7 h-7 rounded flex items-center justify-center text-sm cursor-pointer transition-colors"
-              style={{ color: 'var(--text-muted)' }}
-              onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--bg-hover)')}
-              onMouseLeave={(e) => (e.currentTarget.style.background = '')}
+              className="w-7 h-7 rounded flex items-center justify-center text-sm cursor-pointer transition-colors text-subtle hover:bg-surface-hover hover:text-foreground"
             >
               ✕
             </button>

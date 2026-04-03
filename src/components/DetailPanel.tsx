@@ -16,29 +16,15 @@ export function DetailPanel({ issue, onClose }: DetailPanelProps) {
   const priority = priorityConfig[issue.priority]
 
   return (
-    <div
-      className="flex flex-col h-full border-l"
-      style={{
-        width: 'var(--detail-width)',
-        minWidth: 'var(--detail-width)',
-        background: 'var(--bg-sidebar)',
-        borderColor: 'var(--border-color)',
-      }}
-    >
+    <div className="flex flex-col h-full border-l border-border w-detail min-w-detail bg-panel">
       {/* Header */}
-      <div
-        className="flex items-center justify-between px-4 py-3 border-b"
-        style={{ borderColor: 'var(--border-color)' }}
-      >
-        <span className="text-xs font-mono" style={{ color: 'var(--text-muted)' }}>
+      <div className="flex items-center justify-between px-4 py-3 border-b border-border">
+        <span className="text-xs font-mono text-subtle">
           {issue.identifier}
         </span>
         <button
           onClick={onClose}
-          className="w-6 h-6 flex items-center justify-center rounded transition-colors text-sm"
-          style={{ color: 'var(--text-muted)' }}
-          onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--bg-hover)')}
-          onMouseLeave={(e) => (e.currentTarget.style.background = '')}
+          className="w-6 h-6 flex items-center justify-center rounded transition-colors text-sm text-subtle hover:bg-surface-hover hover:text-foreground"
         >
           ✕
         </button>
@@ -68,26 +54,20 @@ export function DetailPanel({ issue, onClose }: DetailPanelProps) {
             <span className="text-sm">
               {issue.assignee ? (
                 <span className="flex items-center gap-1.5">
-                  <span
-                    className="w-5 h-5 rounded-full flex items-center justify-center text-xs"
-                    style={{ background: 'var(--accent)', color: '#fff' }}
-                  >
+                  <span className="w-5 h-5 rounded-full flex items-center justify-center text-xs bg-accent text-white">
                     {issue.assignee[0]}
                   </span>
                   {issue.assignee}
                 </span>
               ) : (
-                <span style={{ color: 'var(--text-muted)' }}>Unassigned</span>
+                <span className="text-subtle">Unassigned</span>
               )}
             </span>
           </PropertyRow>
 
           <PropertyRow label="Project">
             <span className="text-sm flex items-center gap-1.5">
-              <span
-                className="w-2 h-2 rounded-full"
-                style={{ background: 'var(--accent)' }}
-              />
+              <span className="w-2 h-2 rounded-full bg-accent" />
               {issue.project}
             </span>
           </PropertyRow>
@@ -97,11 +77,7 @@ export function DetailPanel({ issue, onClose }: DetailPanelProps) {
               {issue.labels.map((label) => (
                 <span
                   key={label}
-                  className="px-1.5 py-0.5 rounded text-xs"
-                  style={{
-                    background: 'var(--bg-hover)',
-                    color: 'var(--text-secondary)',
-                  }}
+                  className="px-1.5 py-0.5 rounded text-xs bg-surface-hover text-muted"
                 >
                   {label}
                 </span>
@@ -110,33 +86,24 @@ export function DetailPanel({ issue, onClose }: DetailPanelProps) {
           </PropertyRow>
 
           <PropertyRow label="Created">
-            <span className="text-sm" style={{ color: 'var(--text-secondary)' }}>
+            <span className="text-sm text-muted">
               {new Date(issue.createdAt).toLocaleDateString('ja-JP')}
             </span>
           </PropertyRow>
 
           <PropertyRow label="Updated">
-            <span className="text-sm" style={{ color: 'var(--text-secondary)' }}>
+            <span className="text-sm text-muted">
               {new Date(issue.updatedAt).toLocaleDateString('ja-JP')}
             </span>
           </PropertyRow>
         </div>
 
         {/* Description */}
-        <div
-          className="border-t pt-4"
-          style={{ borderColor: 'var(--border-color)' }}
-        >
-          <h3
-            className="text-xs font-medium uppercase tracking-wider mb-2"
-            style={{ color: 'var(--text-muted)' }}
-          >
+        <div className="border-t border-border pt-4">
+          <h3 className="text-xs font-medium uppercase tracking-wider mb-2 text-subtle">
             Description
           </h3>
-          <div
-            className="text-sm leading-relaxed whitespace-pre-wrap"
-            style={{ color: 'var(--text-secondary)' }}
-          >
+          <div className="text-sm leading-relaxed whitespace-pre-wrap text-muted">
             {issue.description}
           </div>
         </div>
@@ -154,10 +121,7 @@ function PropertyRow({
 }) {
   return (
     <div className="flex items-start">
-      <span
-        className="text-xs w-20 shrink-0 pt-0.5"
-        style={{ color: 'var(--text-muted)' }}
-      >
+      <span className="text-xs w-20 shrink-0 pt-0.5 text-subtle">
         {label}
       </span>
       <div className="flex-1">{children}</div>

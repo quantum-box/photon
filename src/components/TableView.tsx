@@ -77,12 +77,7 @@ function EditableCell({
             setEditing(false)
           }
         }}
-        className="w-full px-1 py-0.5 rounded text-sm outline-none"
-        style={{
-          background: 'var(--bg-primary)',
-          border: '1px solid var(--accent)',
-          color: 'var(--text-primary)',
-        }}
+        className="w-full px-1 py-0.5 rounded text-sm outline-none bg-canvas border border-accent text-foreground"
         onClick={(e) => e.stopPropagation()}
       />
     )
@@ -150,19 +145,13 @@ function CellDropdown({
   return createPortal(
     <div
       ref={menuRef}
+      className="bg-surface border border-border rounded-md shadow-soft min-w-40 max-h-60 overflow-y-auto"
       style={{
         position: 'fixed',
         top: pos.top,
         left: pos.left,
         zIndex: 9999,
-        background: 'var(--bg-surface)',
-        border: '1px solid var(--border-color)',
-        borderRadius: '6px',
-        boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
         padding: '4px 0',
-        minWidth: '160px',
-        maxHeight: '240px',
-        overflowY: 'auto',
       }}
     >
       {children}
@@ -183,19 +172,9 @@ function DropdownItem({
   return (
     <button
       onClick={onClick}
-      className="w-full px-3 py-1.5 text-left text-xs flex items-center gap-2 transition-colors"
-      style={{
-        color: 'var(--text-primary)',
-        background: selected ? 'var(--bg-hover)' : 'transparent',
-      }}
-      onMouseEnter={(e) => {
-        e.currentTarget.style.background = 'var(--bg-hover)'
-      }}
-      onMouseLeave={(e) => {
-        e.currentTarget.style.background = selected
-          ? 'var(--bg-hover)'
-          : 'transparent'
-      }}
+      className={`w-full px-3 py-1.5 text-left text-xs flex items-center gap-2 transition-colors text-foreground hover:bg-surface-hover ${
+        selected ? 'bg-surface-hover' : ''
+      }`}
     >
       {children}
     </button>
@@ -336,16 +315,13 @@ function AssigneeDropdownCell({
       >
         {value ? (
           <>
-            <span
-              className="w-5 h-5 rounded-full flex items-center justify-center text-xs shrink-0"
-              style={{ background: 'var(--accent)', color: '#fff' }}
-            >
+            <span className="w-5 h-5 rounded-full flex items-center justify-center text-xs shrink-0 bg-accent text-white">
               {value[0]}
             </span>
             <span className="text-xs truncate">{value}</span>
           </>
         ) : (
-          <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+          <span className="text-xs text-subtle">
             —
           </span>
         )}
@@ -359,7 +335,7 @@ function AssigneeDropdownCell({
             setOpen(false)
           }}
         >
-          <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+          <span className="text-xs text-subtle">
             None
           </span>
         </DropdownItem>
@@ -373,10 +349,7 @@ function AssigneeDropdownCell({
               setOpen(false)
             }}
           >
-            <span
-              className="w-5 h-5 rounded-full flex items-center justify-center text-xs shrink-0"
-              style={{ background: 'var(--accent)', color: '#fff' }}
-            >
+            <span className="w-5 h-5 rounded-full flex items-center justify-center text-xs shrink-0 bg-accent text-white">
               {name[0]}
             </span>
             <span>{name}</span>
@@ -420,10 +393,7 @@ export function TableView({
         header: 'ID',
         size: 90,
         cell: (info) => (
-          <span
-            className="font-mono text-xs"
-            style={{ color: 'var(--text-muted)' }}
-          >
+          <span className="font-mono text-xs text-subtle">
             {info.getValue()}
           </span>
         ),
@@ -483,11 +453,7 @@ export function TableView({
             {info.getValue().map((label) => (
               <span
                 key={label}
-                className="px-1.5 py-0.5 rounded text-xs"
-                style={{
-                  background: 'var(--bg-hover)',
-                  color: 'var(--text-secondary)',
-                }}
+                className="px-1.5 py-0.5 rounded text-xs bg-surface-hover text-muted"
               >
                 {label}
               </span>
@@ -512,7 +478,7 @@ export function TableView({
         header: 'Updated',
         size: 100,
         cell: (info) => (
-          <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+          <span className="text-xs text-subtle">
             {new Date(info.getValue()).toLocaleDateString('ja-JP', {
               month: 'short',
               day: 'numeric',
@@ -558,25 +524,17 @@ export function TableView({
   return (
     <div className="flex flex-col h-full">
       {/* Toolbar */}
-      <div
-        className="flex items-center gap-3 px-4 py-2 border-b shrink-0"
-        style={{ borderColor: 'var(--border-color)' }}
-      >
+      <div className="flex items-center gap-3 px-4 py-2 border-b border-border shrink-0">
         <div className="relative flex-1 max-w-xs">
           <input
             type="text"
             placeholder="Filter issues..."
             value={globalFilter}
             onChange={(e) => setGlobalFilter(e.target.value)}
-            className="w-full px-3 py-1.5 rounded text-sm outline-none"
-            style={{
-              background: 'var(--bg-surface)',
-              border: '1px solid var(--border-color)',
-              color: 'var(--text-primary)',
-            }}
+            className="w-full px-3 py-1.5 rounded text-sm outline-none bg-surface border border-border text-foreground"
           />
         </div>
-        <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+        <span className="text-xs text-subtle">
           {rows.length} issues
         </span>
       </div>
@@ -590,12 +548,9 @@ export function TableView({
                 {headerGroup.headers.map((header) => (
                   <th
                     key={header.id}
-                    className="text-left text-xs font-medium px-3 py-2 select-none relative"
+                    className="text-left text-xs font-medium px-3 py-2 select-none relative text-subtle bg-surface border-b border-border"
                     style={{
                       width: header.getSize(),
-                      color: 'var(--text-muted)',
-                      background: 'var(--bg-surface)',
-                      borderBottom: '1px solid var(--border-color)',
                       cursor: header.column.getCanSort()
                         ? 'pointer'
                         : 'default',
@@ -616,19 +571,11 @@ export function TableView({
                     <div
                       onMouseDown={header.getResizeHandler()}
                       onTouchStart={header.getResizeHandler()}
-                      className="absolute right-0 top-0 h-full w-1 cursor-col-resize select-none touch-none"
+                      className="absolute right-0 top-0 h-full w-1 cursor-col-resize select-none touch-none hover:bg-border"
                       style={{
                         background: header.column.getIsResizing()
                           ? 'var(--accent)'
                           : 'transparent',
-                      }}
-                      onMouseEnter={(e) =>
-                        (e.currentTarget.style.background =
-                          'var(--border-color)')
-                      }
-                      onMouseLeave={(e) => {
-                        if (!header.column.getIsResizing())
-                          e.currentTarget.style.background = 'transparent'
                       }}
                     />
                   </th>
@@ -656,24 +603,13 @@ export function TableView({
                   key={row.id}
                   data-index={virtualRow.index}
                   ref={virtualizer.measureElement}
-                  className="cursor-pointer transition-colors"
-                  style={{
-                    height: ROW_HEIGHT,
-                    background:
-                      row.original.id === selectedIssueId
-                        ? 'var(--bg-hover)'
-                        : 'transparent',
-                    borderBottom: '1px solid var(--border-color)',
-                  }}
+                  className={`cursor-pointer transition-colors border-b border-border ${
+                    row.original.id === selectedIssueId
+                      ? 'bg-surface-hover'
+                      : 'hover:bg-surface'
+                  }`}
+                  style={{ height: ROW_HEIGHT }}
                   onClick={() => onSelectIssue(row.original)}
-                  onMouseEnter={(e) => {
-                    if (row.original.id !== selectedIssueId)
-                      e.currentTarget.style.background = 'var(--bg-surface)'
-                  }}
-                  onMouseLeave={(e) => {
-                    if (row.original.id !== selectedIssueId)
-                      e.currentTarget.style.background = 'transparent'
-                  }}
                 >
                   {row.getVisibleCells().map((cell) => (
                     <td
@@ -705,12 +641,7 @@ export function TableView({
               </tr>
             )}
             {/* New Issue row */}
-            <tr
-              style={{
-                height: ROW_HEIGHT,
-                borderBottom: '1px solid var(--border-color)',
-              }}
-            >
+            <tr className="border-b border-border" style={{ height: ROW_HEIGHT }}>
               <td colSpan={columns.length} className="px-3 py-1.5">
                 {creatingIssue ? (
                   <input
@@ -732,25 +663,12 @@ export function TableView({
                       }
                     }}
                     placeholder="Issue title を入力して Enter..."
-                    className="w-full px-2 py-1 rounded text-sm outline-none"
-                    style={{
-                      background: 'var(--bg-primary)',
-                      border: '1px solid var(--accent)',
-                      color: 'var(--text-primary)',
-                      maxWidth: '500px',
-                    }}
+                    className="w-full px-2 py-1 rounded text-sm outline-none bg-canvas border border-accent text-foreground max-w-lg"
                   />
                 ) : (
                   <button
-                    className="flex items-center gap-1 text-xs cursor-pointer transition-colors"
-                    style={{ color: 'var(--text-muted)' }}
+                    className="flex items-center gap-1 text-xs cursor-pointer transition-colors text-subtle hover:text-foreground"
                     onClick={() => setCreatingIssue(true)}
-                    onMouseEnter={(e) =>
-                      (e.currentTarget.style.color = 'var(--text-primary)')
-                    }
-                    onMouseLeave={(e) =>
-                      (e.currentTarget.style.color = 'var(--text-muted)')
-                    }
                   >
                     <span>+</span>
                     <span>New Issue</span>

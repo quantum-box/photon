@@ -15,26 +15,20 @@ function SearchResultItem({ result }: { result: WebSearchResult }) {
       href={result.url}
       target="_blank"
       rel="noopener noreferrer"
-      className="block px-3 py-2.5 transition-colors rounded-lg hover:bg-[var(--bg-hover)]"
+      className="block px-3 py-2.5 transition-colors rounded-lg hover:bg-surface-hover"
     >
       <div className="flex items-center gap-2 mb-1">
-        <div
-          className="w-4 h-4 rounded flex items-center justify-center text-[9px] font-bold flex-shrink-0"
-          style={{ background: 'var(--bg-hover)', color: 'var(--text-muted)' }}
-        >
+        <div className="w-4 h-4 rounded flex items-center justify-center text-[9px] font-bold flex-shrink-0 bg-surface-hover text-subtle">
           {domain.charAt(0).toUpperCase()}
         </div>
-        <span className="text-xs truncate" style={{ color: 'var(--text-muted)' }}>
+        <span className="text-xs truncate text-subtle">
           {domain}
         </span>
       </div>
-      <div
-        className="text-sm font-medium mb-0.5 line-clamp-1 hover:underline"
-        style={{ color: 'var(--accent)' }}
-      >
+      <div className="text-sm font-medium mb-0.5 line-clamp-1 hover:underline text-accent">
         {result.title}
       </div>
-      <p className="text-xs line-clamp-2 leading-relaxed" style={{ color: 'var(--text-secondary)' }}>
+      <p className="text-xs line-clamp-2 leading-relaxed text-muted">
         {result.snippet}
       </p>
     </a>
@@ -47,11 +41,11 @@ function SearchSkeleton() {
       {[1, 2, 3].map((i) => (
         <div key={i} className="space-y-1.5">
           <div className="flex items-center gap-2">
-            <div className="w-4 h-4 rounded shimmer" style={{ background: 'var(--bg-hover)' }} />
-            <div className="h-3 w-24 rounded shimmer" style={{ background: 'var(--bg-hover)' }} />
+            <div className="w-4 h-4 rounded shimmer bg-surface-hover" />
+            <div className="h-3 w-24 rounded shimmer bg-surface-hover" />
           </div>
-          <div className="h-4 w-3/4 rounded shimmer" style={{ background: 'var(--bg-hover)' }} />
-          <div className="h-3 w-full rounded shimmer" style={{ background: 'var(--bg-hover)' }} />
+          <div className="h-4 w-3/4 rounded shimmer bg-surface-hover" />
+          <div className="h-3 w-full rounded shimmer bg-surface-hover" />
         </div>
       ))}
     </div>
@@ -69,15 +63,9 @@ export const WebSearchCard = memo(function WebSearchCard({ toolCall }: WebSearch
   const response = toolCall.result?.data as WebSearchResponse | undefined
 
   return (
-    <div
-      className="my-2 rounded-xl overflow-hidden"
-      style={{ border: '1px solid var(--border-color)', background: 'var(--bg-surface)' }}
-    >
+    <div className="my-2 rounded-xl overflow-hidden border border-border bg-surface">
       {/* Header */}
-      <div
-        className="flex items-center gap-2 px-3 py-2"
-        style={{ borderBottom: '1px solid var(--border-color)' }}
-      >
+      <div className="flex items-center gap-2 px-3 py-2 border-b border-border">
         <div className="flex items-center gap-2 flex-1 min-w-0">
           <svg
             width="14"
@@ -88,19 +76,16 @@ export const WebSearchCard = memo(function WebSearchCard({ toolCall }: WebSearch
             strokeWidth="2"
             strokeLinecap="round"
             strokeLinejoin="round"
-            style={{ color: 'var(--accent)', flexShrink: 0 }}
+            className="text-accent flex-shrink-0"
           >
             <circle cx="11" cy="11" r="8" />
             <line x1="21" y1="21" x2="16.65" y2="16.65" />
           </svg>
-          <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
+          <span className="text-xs font-medium text-foreground">
             Web Search
           </span>
           {query && (
-            <span
-              className="text-xs truncate px-1.5 py-0.5 rounded"
-              style={{ color: 'var(--text-secondary)', background: 'var(--bg-hover)' }}
-            >
+            <span className="text-xs truncate px-1.5 py-0.5 rounded text-muted bg-surface-hover">
               "{query}"
             </span>
           )}
@@ -111,17 +96,17 @@ export const WebSearchCard = memo(function WebSearchCard({ toolCall }: WebSearch
           {isLoading && (
             <>
               <div className="tool-spinner" />
-              <span className="text-xs" style={{ color: 'var(--text-muted)' }}>Searching…</span>
+              <span className="text-xs text-subtle">Searching…</span>
             </>
           )}
           {toolCall.status === 'completed' && response && (
-            <span className="text-xs" style={{ color: 'var(--status-done)' }}>
+            <span className="text-xs text-status-done">
               {response.results.length} results
               {toolCall.result?.duration && ` · ${(toolCall.result.duration / 1000).toFixed(1)}s`}
             </span>
           )}
           {isError && (
-            <span className="text-xs" style={{ color: 'var(--priority-urgent)' }}>
+            <span className="text-xs text-priority-urgent">
               {toolCall.result?.error || 'Search failed'}
             </span>
           )}
@@ -132,7 +117,7 @@ export const WebSearchCard = memo(function WebSearchCard({ toolCall }: WebSearch
       {isLoading && <SearchSkeleton />}
 
       {toolCall.status === 'completed' && response && (
-        <div className="divide-y" style={{ borderColor: 'var(--border-color)' }}>
+        <div className="divide-y divide-border">
           {response.results.map((result, idx) => (
             <SearchResultItem key={idx} result={result} />
           ))}
@@ -140,7 +125,7 @@ export const WebSearchCard = memo(function WebSearchCard({ toolCall }: WebSearch
       )}
 
       {isError && (
-        <div className="px-3 py-3 text-xs" style={{ color: 'var(--text-muted)' }}>
+        <div className="px-3 py-3 text-xs text-subtle">
           Could not complete the search. Please try again.
         </div>
       )}

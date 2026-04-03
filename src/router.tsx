@@ -149,20 +149,11 @@ function IssuesLayout() {
     <>
       <div className="flex-1 flex flex-col min-w-0 p-2">
         {/* Header */}
-        <div
-          className="flex items-center justify-between px-4 py-3 border-b"
-          style={{ borderColor: 'var(--border-color)' }}
-        >
+        <div className="flex items-center justify-between px-4 py-3 border-b border-border">
           <div className="flex items-center gap-3">
             <h1 className="text-sm font-semibold">Issues</h1>
             {status && (
-              <span
-                className="text-xs px-2 py-0.5 rounded-full flex items-center gap-1"
-                style={{
-                  background: 'var(--bg-hover)',
-                  color: 'var(--text-secondary)',
-                }}
-              >
+              <span className="text-xs px-2 py-0.5 rounded-full flex items-center gap-1 bg-surface-hover text-muted">
                 {status}
                 <button
                   onClick={() =>
@@ -171,8 +162,7 @@ function IssuesLayout() {
                       search: { sort, desc },
                     })
                   }
-                  className="ml-1 hover:opacity-75"
-                  style={{ color: 'var(--text-muted)' }}
+                  className="ml-1 text-subtle hover:opacity-75"
                 >
                   ✕
                 </button>
@@ -180,10 +170,7 @@ function IssuesLayout() {
             )}
           </div>
           <div className="flex items-center gap-2">
-            <button
-              className="px-3 py-1.5 rounded text-xs font-medium"
-              style={{ background: 'var(--accent)', color: '#fff' }}
-            >
+            <button className="px-3 py-1.5 rounded text-xs font-medium bg-accent text-white">
               + New Issue
             </button>
           </div>
@@ -277,27 +264,17 @@ function KanbanPage() {
     <>
       <div className="flex-1 flex flex-col min-w-0 p-2">
         {/* Header */}
-        <div
-          className="flex items-center justify-between px-4 py-3 border-b"
-          style={{ borderColor: 'var(--border-color)' }}
-        >
+        <div className="flex items-center justify-between px-4 py-3 border-b border-border">
           <div className="flex items-center gap-3">
             <h1 className="text-sm font-semibold">Board</h1>
             {status && (
-              <span
-                className="text-xs px-2 py-0.5 rounded-full flex items-center gap-1"
-                style={{
-                  background: 'var(--bg-hover)',
-                  color: 'var(--text-secondary)',
-                }}
-              >
+              <span className="text-xs px-2 py-0.5 rounded-full flex items-center gap-1 bg-surface-hover text-muted">
                 {status}
                 <button
                   onClick={() =>
                     void navigate({ to: '/kanban', search: {} })
                   }
-                  className="ml-1 hover:opacity-75"
-                  style={{ color: 'var(--text-muted)' }}
+                  className="ml-1 text-subtle hover:opacity-75"
                 >
                   ✕
                 </button>
@@ -305,10 +282,7 @@ function KanbanPage() {
             )}
           </div>
           <div className="flex items-center gap-2">
-            <button
-              className="px-3 py-1.5 rounded text-xs font-medium"
-              style={{ background: 'var(--accent)', color: '#fff' }}
-            >
+            <button className="px-3 py-1.5 rounded text-xs font-medium bg-accent text-white">
               + New Issue
             </button>
           </div>
@@ -346,10 +320,7 @@ function ChatPage() {
   return (
     <div className="flex-1 flex flex-col min-w-0 p-2">
       {/* Header */}
-      <div
-        className="flex items-center justify-between px-4 py-3 border-b"
-        style={{ borderColor: 'var(--border-color)' }}
-      >
+      <div className="flex items-center justify-between px-4 py-3 border-b border-border">
         <div className="flex items-center gap-3">
           <h1 className="text-sm font-semibold">Chat</h1>
         </div>
