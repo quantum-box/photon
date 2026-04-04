@@ -22,10 +22,7 @@ function StreamingMessage({ content, isStreaming }: { content: string; isStreami
     <div className="relative">
       <MarkdownRenderer content={displayed} />
       {isStreaming && displayed.length < content.length && (
-        <span
-          className="inline-block w-0.5 h-4 ml-0.5 align-text-bottom animate-blink"
-          style={{ background: 'var(--accent)' }}
-        />
+        <span className="inline-block w-0.5 h-4 ml-0.5 align-text-bottom animate-blink bg-accent" />
       )}
     </div>
   )
@@ -36,10 +33,7 @@ function ActionButton({ icon, title, onClick }: { icon: React.ReactNode; title: 
     <button
       onClick={onClick}
       title={title}
-      className="w-7 h-7 rounded-md flex items-center justify-center transition-colors cursor-pointer hover:bg-[var(--bg-hover)]"
-      style={{ color: 'var(--text-muted)' }}
-      onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--text-primary)')}
-      onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--text-muted)')}
+      className="w-7 h-7 rounded-md flex items-center justify-center transition-colors cursor-pointer text-subtle hover:text-foreground hover:bg-surface-hover"
     >
       {icon}
     </button>
@@ -102,14 +96,12 @@ export const ChatMessage = memo(function ChatMessage({
   const showActions = !isStreaming && message.content.length > 0
 
   return (
-    <div className={`group relative flex gap-3 px-4 py-3 ${isUser ? '' : 'bg-[var(--bg-surface)]/30'}`}>
+    <div className={`group relative flex gap-3 px-4 py-3 ${isUser ? '' : 'bg-surface/30'}`}>
       {/* Avatar */}
       <div
-        className="w-7 h-7 rounded-full flex-shrink-0 flex items-center justify-center text-xs font-semibold mt-0.5"
-        style={{
-          background: isUser ? 'var(--bg-hover)' : 'var(--accent)',
-          color: isUser ? 'var(--text-secondary)' : '#fff',
-        }}
+        className={`w-7 h-7 rounded-full flex-shrink-0 flex items-center justify-center text-xs font-semibold mt-0.5 ${
+          isUser ? 'bg-surface-hover text-muted' : 'bg-accent text-white'
+        }`}
       >
         {isUser ? 'U' : 'A'}
       </div>
@@ -117,10 +109,10 @@ export const ChatMessage = memo(function ChatMessage({
       {/* Content */}
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 mb-1">
-          <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
+          <span className="text-xs font-medium text-foreground">
             {isUser ? 'You' : 'Assistant'}
           </span>
-          <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+          <span className="text-xs text-subtle">
             {new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
           </span>
         </div>
@@ -148,7 +140,7 @@ export const ChatMessage = memo(function ChatMessage({
         )}
 
         {isUser ? (
-          <div className="text-sm" style={{ color: 'var(--text-primary)' }}>
+          <div className="text-sm text-foreground">
             {message.content}
           </div>
         ) : (
@@ -157,9 +149,7 @@ export const ChatMessage = memo(function ChatMessage({
 
         {/* Action bar */}
         {showActions && (
-          <div
-            className="flex items-center gap-0.5 mt-1 opacity-0 group-hover:opacity-100 transition-opacity"
-          >
+          <div className="flex items-center gap-0.5 mt-1 opacity-0 group-hover:opacity-100 transition-opacity">
             <ActionButton
               icon={copied ? CheckIcon : CopyIcon}
               title={copied ? 'Copied!' : 'Copy message'}

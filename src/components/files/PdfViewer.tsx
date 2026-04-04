@@ -55,7 +55,7 @@ export function PdfViewer({ url, name }: PdfViewerProps) {
 
   if (error) {
     return (
-      <div className="flex items-center justify-center h-full" style={{ color: 'var(--priority-urgent)' }}>
+      <div className="flex items-center justify-center h-full text-priority-urgent">
         <p>Failed to load PDF: {error}</p>
       </div>
     )
@@ -64,48 +64,41 @@ export function PdfViewer({ url, name }: PdfViewerProps) {
   return (
     <div className="flex flex-col h-full">
       {/* Toolbar */}
-      <div
-        className="flex items-center justify-between px-4 py-2 border-b flex-shrink-0"
-        style={{ borderColor: 'var(--border-color)', background: 'var(--bg-surface)' }}
-      >
-        <span className="text-xs font-medium truncate mr-2" style={{ color: 'var(--text-secondary)' }}>
+      <div className="flex items-center justify-between px-4 py-2 border-b border-border flex-shrink-0 bg-surface">
+        <span className="text-xs font-medium truncate mr-2 text-muted">
           {name}
         </span>
         <div className="flex items-center gap-2">
           <button
             onClick={() => setScale((s) => Math.max(0.5, s - 0.2))}
-            className="px-2 py-0.5 rounded text-xs cursor-pointer"
-            style={{ background: 'var(--bg-hover)', color: 'var(--text-secondary)' }}
+            className="px-2 py-0.5 rounded text-xs cursor-pointer bg-surface-hover text-muted"
           >
             -
           </button>
-          <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+          <span className="text-xs text-subtle">
             {Math.round(scale * 100)}%
           </span>
           <button
             onClick={() => setScale((s) => Math.min(3, s + 0.2))}
-            className="px-2 py-0.5 rounded text-xs cursor-pointer"
-            style={{ background: 'var(--bg-hover)', color: 'var(--text-secondary)' }}
+            className="px-2 py-0.5 rounded text-xs cursor-pointer bg-surface-hover text-muted"
           >
             +
           </button>
-          <span className="mx-2 text-xs" style={{ color: 'var(--border-color)' }}>|</span>
+          <span className="mx-2 text-xs text-border">|</span>
           <button
             onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
             disabled={currentPage <= 1}
-            className="px-2 py-0.5 rounded text-xs cursor-pointer disabled:opacity-30"
-            style={{ background: 'var(--bg-hover)', color: 'var(--text-secondary)' }}
+            className="px-2 py-0.5 rounded text-xs cursor-pointer disabled:opacity-30 bg-surface-hover text-muted"
           >
             Prev
           </button>
-          <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+          <span className="text-xs text-muted">
             {currentPage} / {totalPages}
           </span>
           <button
             onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
             disabled={currentPage >= totalPages}
-            className="px-2 py-0.5 rounded text-xs cursor-pointer disabled:opacity-30"
-            style={{ background: 'var(--bg-hover)', color: 'var(--text-secondary)' }}
+            className="px-2 py-0.5 rounded text-xs cursor-pointer disabled:opacity-30 bg-surface-hover text-muted"
           >
             Next
           </button>
@@ -113,15 +106,15 @@ export function PdfViewer({ url, name }: PdfViewerProps) {
       </div>
 
       {/* Canvas */}
-      <div className="flex-1 overflow-auto flex justify-center p-4" style={{ background: 'var(--bg-primary)' }}>
+      <div className="flex-1 overflow-auto flex justify-center p-4 bg-canvas">
         {pdf ? (
           <canvas ref={canvasRef} className="shadow-lg" style={{ maxWidth: '100%', height: 'auto' }} />
         ) : (
           <div className="flex items-center justify-center h-full">
             <div className="flex gap-1">
-              <span className="w-2 h-2 rounded-full animate-bounce-dot" style={{ background: 'var(--accent)', animationDelay: '0ms' }} />
-              <span className="w-2 h-2 rounded-full animate-bounce-dot" style={{ background: 'var(--accent)', animationDelay: '150ms' }} />
-              <span className="w-2 h-2 rounded-full animate-bounce-dot" style={{ background: 'var(--accent)', animationDelay: '300ms' }} />
+              <span className="w-2 h-2 rounded-full animate-bounce-dot bg-accent" style={{ animationDelay: '0ms' }} />
+              <span className="w-2 h-2 rounded-full animate-bounce-dot bg-accent" style={{ animationDelay: '150ms' }} />
+              <span className="w-2 h-2 rounded-full animate-bounce-dot bg-accent" style={{ animationDelay: '300ms' }} />
             </div>
           </div>
         )}

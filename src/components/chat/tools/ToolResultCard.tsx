@@ -47,16 +47,13 @@ function ApiCallCard({ toolCall }: { toolCall: ToolCall }) {
   const response = toolCall.result?.data as ApiCallResponse | undefined
 
   return (
-    <div
-      className="my-2 rounded-xl overflow-hidden"
-      style={{ border: '1px solid var(--border-color)', background: 'var(--bg-surface)' }}
-    >
+    <div className="my-2 rounded-xl overflow-hidden border border-border bg-surface">
       <button
         onClick={() => !isLoading && setExpanded(!expanded)}
-        className="w-full flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-[var(--bg-hover)] transition-colors"
+        className="w-full flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-surface-hover transition-colors"
       >
-        <span style={{ color: 'var(--accent)' }}>{ApiIcon}</span>
-        <span className="text-xs font-medium flex-1 text-left" style={{ color: 'var(--text-primary)' }}>
+        <span className="text-accent">{ApiIcon}</span>
+        <span className="text-xs font-medium flex-1 text-left text-foreground">
           API Call
         </span>
 
@@ -71,7 +68,7 @@ function ApiCallCard({ toolCall }: { toolCall: ToolCall }) {
             >
               {response.statusCode}
             </span>
-            <span className="text-xs font-mono" style={{ color: 'var(--text-muted)' }}>
+            <span className="text-xs font-mono text-subtle">
               {response.method} {response.endpoint}
             </span>
           </span>
@@ -80,12 +77,12 @@ function ApiCallCard({ toolCall }: { toolCall: ToolCall }) {
         {isLoading && (
           <span className="flex items-center gap-1.5">
             <div className="tool-spinner" />
-            <span className="text-xs" style={{ color: 'var(--text-muted)' }}>Calling…</span>
+            <span className="text-xs text-subtle">Calling…</span>
           </span>
         )}
 
         {toolCall.result?.duration && (
-          <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+          <span className="text-xs text-subtle">
             {(toolCall.result.duration / 1000).toFixed(1)}s
           </span>
         )}
@@ -94,14 +91,7 @@ function ApiCallCard({ toolCall }: { toolCall: ToolCall }) {
       </button>
 
       {expanded && response && (
-        <div
-          className="px-3 py-2 text-xs font-mono overflow-x-auto"
-          style={{
-            borderTop: '1px solid var(--border-color)',
-            background: 'var(--bg-code)',
-            color: 'var(--text-primary)',
-          }}
-        >
+        <div className="px-3 py-2 text-xs font-mono overflow-x-auto border-t border-border bg-code text-foreground">
           <pre className="whitespace-pre-wrap">{JSON.stringify(response.body, null, 2)}</pre>
         </div>
       )}
@@ -117,16 +107,13 @@ function CodeExecCard({ toolCall }: { toolCall: ToolCall }) {
   const result = toolCall.result?.data as { code: string; output: string; exitCode: number } | undefined
 
   return (
-    <div
-      className="my-2 rounded-xl overflow-hidden"
-      style={{ border: '1px solid var(--border-color)', background: 'var(--bg-surface)' }}
-    >
+    <div className="my-2 rounded-xl overflow-hidden border border-border bg-surface">
       <button
         onClick={() => !isLoading && setExpanded(!expanded)}
-        className="w-full flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-[var(--bg-hover)] transition-colors"
+        className="w-full flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-surface-hover transition-colors"
       >
-        <span style={{ color: 'var(--accent)' }}>{CodeIcon}</span>
-        <span className="text-xs font-medium flex-1 text-left" style={{ color: 'var(--text-primary)' }}>
+        <span className="text-accent">{CodeIcon}</span>
+        <span className="text-xs font-medium flex-1 text-left text-foreground">
           Code Execution
         </span>
 
@@ -145,12 +132,12 @@ function CodeExecCard({ toolCall }: { toolCall: ToolCall }) {
         {isLoading && (
           <span className="flex items-center gap-1.5">
             <div className="tool-spinner" />
-            <span className="text-xs" style={{ color: 'var(--text-muted)' }}>Executing…</span>
+            <span className="text-xs text-subtle">Executing…</span>
           </span>
         )}
 
         {toolCall.result?.duration && (
-          <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+          <span className="text-xs text-subtle">
             {(toolCall.result.duration / 1000).toFixed(1)}s
           </span>
         )}
@@ -159,14 +146,7 @@ function CodeExecCard({ toolCall }: { toolCall: ToolCall }) {
       </button>
 
       {expanded && result && (
-        <div
-          className="px-3 py-2 text-xs font-mono overflow-x-auto"
-          style={{
-            borderTop: '1px solid var(--border-color)',
-            background: 'var(--bg-code)',
-            color: 'var(--text-primary)',
-          }}
-        >
+        <div className="px-3 py-2 text-xs font-mono overflow-x-auto border-t border-border bg-code text-foreground">
           <pre className="whitespace-pre-wrap">{result.output}</pre>
         </div>
       )}
@@ -190,10 +170,7 @@ export const ToolResultCard = memo(function ToolResultCard({ toolCall }: ToolRes
       return <CodeExecCard toolCall={toolCall} />
     default:
       return (
-        <div
-          className="my-2 px-3 py-2 rounded-xl text-xs"
-          style={{ border: '1px solid var(--border-color)', color: 'var(--text-muted)' }}
-        >
+        <div className="my-2 px-3 py-2 rounded-xl text-xs border border-border text-subtle">
           Unknown tool: {toolCall.type}
         </div>
       )

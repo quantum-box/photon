@@ -1,7 +1,10 @@
 @import "tailwindcss";
 @import "@radix-ui/themes/styles.css";
 
+/* ─── Photon Design Tokens ─────────────────────────────────────── */
+
 :root {
+  /* Layout */
   --sidebar-width: 220px;
   --detail-width: 380px;
 
@@ -27,6 +30,8 @@
   --bg-code: #1a1a2e;
   --text-code: #e0a0ff;
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --ring-color: rgba(91, 91, 247, 0.5);
+  --overlay: rgba(0, 0, 0, 0.7);
 }
 
 /* Light theme */
@@ -52,7 +57,62 @@
   --bg-code: #f0f0f5;
   --text-code: #7c3aed;
   --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.08);
+  --ring-color: rgba(91, 91, 247, 0.3);
+  --overlay: rgba(0, 0, 0, 0.5);
 }
+
+/* ─── Tailwind Theme Mapping ───────────────────────────────────── */
+
+@theme inline {
+  /* Backgrounds */
+  --color-canvas: var(--bg-primary);
+  --color-panel: var(--bg-sidebar);
+  --color-surface: var(--bg-surface);
+  --color-surface-hover: var(--bg-hover);
+
+  /* Text */
+  --color-foreground: var(--text-primary);
+  --color-muted: var(--text-secondary);
+  --color-subtle: var(--text-muted);
+
+  /* Accent */
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+
+  /* Border */
+  --color-border: var(--border-color);
+
+  /* Code */
+  --color-code: var(--bg-code);
+  --color-code-text: var(--text-code);
+
+  /* Focus ring */
+  --color-ring: var(--ring-color);
+
+  /* Overlay */
+  --color-overlay: var(--overlay);
+
+  /* Status */
+  --color-status-todo: var(--status-todo);
+  --color-status-progress: var(--status-progress);
+  --color-status-done: var(--status-done);
+  --color-status-cancelled: var(--status-cancelled);
+
+  /* Priority */
+  --color-priority-urgent: var(--priority-urgent);
+  --color-priority-high: var(--priority-high);
+  --color-priority-medium: var(--priority-medium);
+  --color-priority-low: var(--priority-low);
+
+  /* Shadows */
+  --shadow-soft: var(--shadow-sm);
+
+  /* Layout spacing */
+  --spacing-sidebar: var(--sidebar-width);
+  --spacing-detail: var(--detail-width);
+}
+
+/* ─── Base Styles ──────────────────────────────────────────────── */
 
 * {
   margin: 0;
@@ -78,6 +138,8 @@ body {
   height: 100vh;
 }
 
+/* ─── Scrollbar ────────────────────────────────────────────────── */
+
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -95,6 +157,8 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: var(--text-muted);
 }
+
+/* ─── Animations ───────────────────────────────────────────────── */
 
 /* Streaming cursor blink */
 @keyframes blink {

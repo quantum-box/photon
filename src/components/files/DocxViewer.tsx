@@ -26,7 +26,7 @@ export function DocxViewer({ file, name }: DocxViewerProps) {
 
   if (error) {
     return (
-      <div className="flex items-center justify-center h-full" style={{ color: 'var(--priority-urgent)' }}>
+      <div className="flex items-center justify-center h-full text-priority-urgent">
         <p>Failed to load document: {error}</p>
       </div>
     )
@@ -36,9 +36,9 @@ export function DocxViewer({ file, name }: DocxViewerProps) {
     return (
       <div className="flex items-center justify-center h-full">
         <div className="flex gap-1">
-          <span className="w-2 h-2 rounded-full animate-bounce-dot" style={{ background: 'var(--accent)', animationDelay: '0ms' }} />
-          <span className="w-2 h-2 rounded-full animate-bounce-dot" style={{ background: 'var(--accent)', animationDelay: '150ms' }} />
-          <span className="w-2 h-2 rounded-full animate-bounce-dot" style={{ background: 'var(--accent)', animationDelay: '300ms' }} />
+          <span className="w-2 h-2 rounded-full animate-bounce-dot bg-accent" style={{ animationDelay: '0ms' }} />
+          <span className="w-2 h-2 rounded-full animate-bounce-dot bg-accent" style={{ animationDelay: '150ms' }} />
+          <span className="w-2 h-2 rounded-full animate-bounce-dot bg-accent" style={{ animationDelay: '300ms' }} />
         </div>
       </div>
     )
@@ -47,11 +47,8 @@ export function DocxViewer({ file, name }: DocxViewerProps) {
   return (
     <div className="flex flex-col h-full">
       {/* Toolbar */}
-      <div
-        className="flex items-center px-4 py-2 border-b flex-shrink-0"
-        style={{ borderColor: 'var(--border-color)', background: 'var(--bg-surface)' }}
-      >
-        <span className="text-xs font-medium truncate" style={{ color: 'var(--text-secondary)' }}>
+      <div className="flex items-center px-4 py-2 border-b border-border flex-shrink-0 bg-surface">
+        <span className="text-xs font-medium truncate text-muted">
           {name}
         </span>
       </div>

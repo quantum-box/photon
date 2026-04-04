@@ -65,8 +65,6 @@ function KanbanCard({
     transform: CSS.Transform.toString(transform),
     transition,
     opacity: isDragging ? 0.4 : 1,
-    background: isSelected ? 'var(--bg-hover)' : 'var(--bg-surface)',
-    border: `1px solid ${isSelected ? 'var(--accent)' : 'var(--border-color)'}`,
   }
 
   const priority = priorityConfig[issue.priority]
@@ -78,7 +76,11 @@ function KanbanCard({
         style={style}
         {...attributes}
         {...listeners}
-        className="rounded p-2 mb-1.5 cursor-grab active:cursor-grabbing"
+        className={`rounded p-2 mb-1.5 cursor-grab active:cursor-grabbing border ${
+          isSelected
+            ? 'bg-surface-hover border-accent'
+            : 'bg-surface border-border'
+        }`}
         onClick={onClick}
       >
         <div className="flex items-center gap-1.5">
@@ -88,12 +90,8 @@ function KanbanCard({
           <span className="text-xs truncate flex-1">{issue.title}</span>
           {issue.assignee && (
             <span
-              className="w-4 h-4 rounded-full flex items-center justify-center shrink-0"
-              style={{
-                background: 'var(--accent)',
-                color: '#fff',
-                fontSize: '9px',
-              }}
+              className="w-4 h-4 rounded-full flex items-center justify-center shrink-0 bg-accent text-white"
+              style={{ fontSize: '9px' }}
             >
               {issue.assignee[0]}
             </span>
@@ -109,14 +107,15 @@ function KanbanCard({
       style={style}
       {...attributes}
       {...listeners}
-      className="rounded-md p-3 mb-2 cursor-grab active:cursor-grabbing"
+      className={`rounded-md p-3 mb-2 cursor-grab active:cursor-grabbing border ${
+        isSelected
+          ? 'bg-surface-hover border-accent'
+          : 'bg-surface border-border'
+      }`}
       onClick={onClick}
     >
       <div className="flex items-center justify-between mb-1">
-        <span
-          className="font-mono"
-          style={{ color: 'var(--text-muted)', fontSize: '10px' }}
-        >
+        <span className="font-mono text-subtle" style={{ fontSize: '10px' }}>
           {issue.identifier}
         </span>
         <span style={{ color: priority.color }} className="text-xs">
@@ -129,22 +128,15 @@ function KanbanCard({
           {issue.labels.slice(0, 2).map((label) => (
             <span
               key={label}
-              className="px-1 py-0.5 rounded"
-              style={{
-                background: 'var(--bg-primary)',
-                color: 'var(--text-muted)',
-                fontSize: '10px',
-              }}
+              className="px-1 py-0.5 rounded bg-canvas text-subtle"
+              style={{ fontSize: '10px' }}
             >
               {label}
             </span>
           ))}
         </div>
         {issue.assignee && (
-          <span
-            className="w-5 h-5 rounded-full flex items-center justify-center text-xs shrink-0"
-            style={{ background: 'var(--accent)', color: '#fff' }}
-          >
+          <span className="w-5 h-5 rounded-full flex items-center justify-center text-xs shrink-0 bg-accent text-white">
             {issue.assignee[0]}
           </span>
         )}
@@ -157,19 +149,14 @@ function OverlayCard({ issue }: { issue: Issue }) {
   const priority = priorityConfig[issue.priority]
   return (
     <div
-      className="rounded-md p-3 cursor-grabbing shadow-2xl"
+      className="rounded-md p-3 cursor-grabbing bg-surface border border-accent"
       style={{
-        background: 'var(--bg-surface)',
-        border: '1px solid var(--accent)',
         width: '260px',
         boxShadow: '0 20px 40px rgba(0,0,0,0.5)',
       }}
     >
       <div className="flex items-center justify-between mb-1">
-        <span
-          className="font-mono"
-          style={{ color: 'var(--text-muted)', fontSize: '10px' }}
-        >
+        <span className="font-mono text-subtle" style={{ fontSize: '10px' }}>
           {issue.identifier}
         </span>
         <span style={{ color: priority.color }} className="text-xs">
@@ -208,13 +195,7 @@ function KanbanColumn({
       <div className="flex items-center gap-2 px-3 py-2 mb-1">
         <span style={{ color: config.color }}>{config.icon}</span>
         <span className="text-xs font-medium">{config.label}</span>
-        <span
-          className="text-xs px-1.5 rounded-full"
-          style={{
-            background: 'var(--bg-hover)',
-            color: 'var(--text-muted)',
-          }}
-        >
+        <span className="text-xs px-1.5 rounded-full bg-surface-hover text-subtle">
           {issues.length}
         </span>
       </div>
@@ -243,10 +224,7 @@ function KanbanColumn({
           ))}
         </SortableContext>
         {issues.length === 0 && (
-          <div
-            className="text-center py-8 text-xs"
-            style={{ color: 'var(--text-muted)' }}
-          >
+          <div className="text-center py-8 text-xs text-subtle">
             No issues
           </div>
         )}
@@ -339,22 +317,16 @@ export function KanbanView({
   return (
     <div className="flex flex-col h-full p-2">
       {/* Toolbar */}
-      <div
-        className="flex items-center gap-2 px-4 py-2 border-b shrink-0"
-        style={{ borderColor: 'var(--border-color)' }}
-      >
+      <div className="flex items-center gap-2 px-4 py-2 border-b border-border shrink-0">
         <button
-          className="px-2 py-1 rounded text-xs transition-colors"
-          style={{
-            background: compact ? 'var(--accent)' : 'var(--bg-surface)',
-            color: compact ? '#fff' : 'var(--text-secondary)',
-            border: '1px solid var(--border-color)',
-          }}
+          className={`px-2 py-1 rounded text-xs transition-colors border border-border ${
+            compact ? 'bg-accent text-white' : 'bg-surface text-muted'
+          }`}
           onClick={() => setCompact(!compact)}
         >
           {compact ? 'Compact' : 'Default'}
         </button>
-        <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+        <span className="text-xs text-subtle">
           {issues.length} issues · drag to move
         </span>
       </div>

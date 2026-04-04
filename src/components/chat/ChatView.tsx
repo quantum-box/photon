@@ -273,18 +273,12 @@ export function ChatView() {
     >
       {/* Drag overlay */}
       {isDragOver && (
-        <div
-          className="absolute inset-0 z-40 flex items-center justify-center rounded-lg"
-          style={{
-            background: 'rgba(91, 91, 247, 0.08)',
-            border: '2px dashed var(--accent)',
-          }}
-        >
+        <div className="absolute inset-0 z-40 flex items-center justify-center rounded-lg border-2 border-dashed border-accent bg-accent/[0.08]">
           <div className="text-center">
-            <p className="text-lg font-medium" style={{ color: 'var(--accent)' }}>
+            <p className="text-lg font-medium text-accent">
               Drop files here
             </p>
-            <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
+            <p className="text-xs mt-1 text-subtle">
               PDF, XLSX, CSV, DOCX, PPTX
             </p>
           </div>
@@ -300,16 +294,13 @@ export function ChatView() {
         {messages.length === 0 ? (
           <div className="flex items-center justify-center h-full">
             <div className="text-center">
-              <div
-                className="text-4xl mb-3 w-14 h-14 rounded-2xl flex items-center justify-center mx-auto"
-                style={{ background: 'var(--accent)', color: '#fff' }}
-              >
+              <div className="text-4xl mb-3 w-14 h-14 rounded-2xl flex items-center justify-center mx-auto bg-accent text-white">
                 P
               </div>
-              <h2 className="text-lg font-semibold mb-1" style={{ color: 'var(--text-primary)' }}>
+              <h2 className="text-lg font-semibold mb-1 text-foreground">
                 Photon Chat
               </h2>
-              <p className="text-sm mb-4" style={{ color: 'var(--text-muted)' }}>
+              <p className="text-sm mb-4 text-subtle">
                 Send a message to start a conversation
               </p>
 
@@ -323,12 +314,7 @@ export function ChatView() {
                   <button
                     key={tool.label}
                     onClick={() => tool.hint.startsWith('PDF') ? fileInputRef.current?.click() : setInput(tool.hint)}
-                    className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs transition-colors cursor-pointer hover:bg-[var(--bg-hover)]"
-                    style={{
-                      background: 'var(--bg-surface)',
-                      border: '1px solid var(--border-color)',
-                      color: 'var(--text-secondary)',
-                    }}
+                    className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs transition-colors cursor-pointer bg-surface border border-border text-muted hover:bg-surface-hover"
                   >
                     <span>{tool.icon}</span>
                     <span>{tool.label}</span>
@@ -361,9 +347,9 @@ export function ChatView() {
               <div className="px-4 py-2">
                 <div className="flex items-center gap-2">
                   <div className="flex gap-1">
-                    <span className="w-1.5 h-1.5 rounded-full animate-bounce-dot" style={{ background: 'var(--accent)', animationDelay: '0ms' }} />
-                    <span className="w-1.5 h-1.5 rounded-full animate-bounce-dot" style={{ background: 'var(--accent)', animationDelay: '150ms' }} />
-                    <span className="w-1.5 h-1.5 rounded-full animate-bounce-dot" style={{ background: 'var(--accent)', animationDelay: '300ms' }} />
+                    <span className="w-1.5 h-1.5 rounded-full bg-accent animate-bounce-dot" style={{ animationDelay: '0ms' }} />
+                    <span className="w-1.5 h-1.5 rounded-full bg-accent animate-bounce-dot" style={{ animationDelay: '150ms' }} />
+                    <span className="w-1.5 h-1.5 rounded-full bg-accent animate-bounce-dot" style={{ animationDelay: '300ms' }} />
                   </div>
                 </div>
               </div>
@@ -379,22 +365,14 @@ export function ChatView() {
       <div className="relative">
         <button
           onClick={() => scrollToBottom()}
-          className="absolute -top-10 left-1/2 -translate-x-1/2 px-3 py-1 rounded-full text-xs transition-opacity hover:opacity-90 cursor-pointer"
-          style={{
-            background: 'var(--bg-surface)',
-            color: 'var(--text-secondary)',
-            border: '1px solid var(--border-color)',
-            opacity: 0,
-          }}
-          onMouseEnter={(e) => (e.currentTarget.style.opacity = '1')}
-          onMouseLeave={(e) => (e.currentTarget.style.opacity = '0')}
+          className="absolute -top-10 left-1/2 -translate-x-1/2 px-3 py-1 rounded-full text-xs transition-opacity cursor-pointer bg-surface text-muted border border-border opacity-0 hover:opacity-100"
         >
           Scroll to bottom
         </button>
       </div>
 
       {/* Input area */}
-      <div className="border-t px-4 py-3" style={{ borderColor: 'var(--border-color)' }}>
+      <div className="border-t border-border px-4 py-3">
         {/* Pending file attachments */}
         {pendingFiles.length > 0 && (
           <div className="flex flex-wrap gap-2 mb-2">
@@ -409,17 +387,11 @@ export function ChatView() {
           </div>
         )}
 
-        <div
-          className="flex items-end gap-2 rounded-xl px-4 py-3"
-          style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-color)' }}
-        >
+        <div className="flex items-end gap-2 rounded-xl px-4 py-3 bg-surface border border-border">
           {/* File upload button */}
           <button
             onClick={() => fileInputRef.current?.click()}
-            className="flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center transition-colors cursor-pointer"
-            style={{ color: 'var(--text-muted)' }}
-            onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--text-primary)')}
-            onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--text-muted)')}
+            className="flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center transition-colors cursor-pointer text-subtle hover:text-foreground"
             title="Attach file (PDF, Excel, CSV, DOCX, PPTX)"
           >
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -445,17 +417,13 @@ export function ChatView() {
             onKeyDown={handleKeyDown}
             placeholder="Send a message... (try: 'search for React 19')"
             rows={1}
-            className="flex-1 bg-transparent outline-none resize-none text-sm leading-relaxed"
-            style={{
-              color: 'var(--text-primary)',
-              maxHeight: '200px',
-            }}
+            className="flex-1 bg-transparent outline-none resize-none text-sm leading-relaxed text-foreground"
+            style={{ maxHeight: '200px' }}
           />
           {isStreaming ? (
             <button
               onClick={handleStop}
-              className="flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center transition-colors cursor-pointer"
-              style={{ background: 'var(--priority-urgent)', color: '#fff' }}
+              className="flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center transition-colors cursor-pointer bg-priority-urgent text-white"
               title="Stop generating"
             >
               <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
@@ -466,11 +434,9 @@ export function ChatView() {
             <button
               onClick={handleSend}
               disabled={!input.trim() && pendingFiles.length === 0}
-              className="flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center transition-colors cursor-pointer disabled:opacity-30"
-              style={{
-                background: (input.trim() || pendingFiles.length > 0) ? 'var(--accent)' : 'var(--bg-hover)',
-                color: '#fff',
-              }}
+              className={`flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center transition-colors cursor-pointer disabled:opacity-30 text-white ${
+                (input.trim() || pendingFiles.length > 0) ? 'bg-accent' : 'bg-surface-hover'
+              }`}
               title="Send message"
             >
               <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -479,7 +445,7 @@ export function ChatView() {
             </button>
           )}
         </div>
-        <p className="text-center mt-2 text-xs" style={{ color: 'var(--text-muted)' }}>
+        <p className="text-center mt-2 text-xs text-subtle">
           Photon AI can make mistakes. Verify important information.
         </p>
       </div>
