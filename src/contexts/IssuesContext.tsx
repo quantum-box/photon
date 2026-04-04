@@ -10,13 +10,24 @@ import {
 import * as Y from 'yjs'
 import { ydoc, issuesArray } from '../lib/yjs/yjsProvider'
 import { useYjsIssues } from '../lib/yjs/useYjsIssues'
-import { mockIssues, type Issue, type Status } from '../data/mock'
+import { mockIssues, type Issue, type Status, type Priority } from '../data/mock'
+
+export interface CreateIssueData {
+  title: string
+  status?: Status
+  priority?: Priority
+  assignee?: string | null
+  description?: string
+  labels?: string[]
+  project?: string
+}
 
 interface IssuesContextValue {
   issues: Issue[]
   handleMoveIssue: (issueId: string, newStatus: Status) => void
   handleUpdateIssue: (issueId: string, field: keyof Issue, value: string) => void
-  handleCreateIssue: (title: string) => void
+  handleCreateIssue: (data: CreateIssueData) => void
+  handleDeleteIssue: (issueId: string) => void
   issueCountByStatus: Record<string, number>
 }
 
@@ -108,7 +119,7 @@ export function IssuesProvider({ children }: { children: ReactNode }) {
     []
   )
 
-  const handleCreateIssue = useCallback((title: string) => {
+  const handleCreateIssue = useCallback((data: CreateIssueData) => {
     ydoc.transact(() => {
       let maxNum = 0
       for (let i = 0; i < issuesArray.length; i++) {
@@ -119,16 +130,27 @@ export function IssuesProvider({ children }: { children: ReactNode }) {
       const ymap = new Y.Map<string>()
       ymap.set('id', `issue-${Date.now()}`)
       ymap.set('identifier', `PLT-${maxNum + 1}`)
-      ymap.set('title', title)
-      ymap.set('status', 'todo')
-      ymap.set('priority', 'none')
-      ymap.set('assignee', '')
-      ymap.set('labels', '[]')
-      ymap.set('project', 'Tachyon UI')
+      ymap.set('title', data.title)
+      ymap.set('status', data.status ?? 'todo')
+      ymap.set('priority', data.priority ?? 'none')
+      ymap.set('assignee', data.assignee ?? '')
+      ymap.set('labels', JSON.stringify(data.labels ?? []))
+      ymap.set('project', data.project ?? 'Tachyon UI')
       ymap.set('createdAt', new Date().toISOString())
       ymap.set('updatedAt', new Date().toISOString())
-      ymap.set('description', '')
+      ymap.set('description', data.description ?? '')
       issuesArray.push([ymap])
+    })
+  }, [])
+
+  const handleDeleteIssue = useCallback((issueId: string) => {
+    ydoc.transact(() => {
+      for (let i = 0; i < issuesArray.length; i++) {
+        if (issuesArray.get(i).get('id') === issueId) {
+          issuesArray.delete(i, 1)
+          break
+        }
+      }
     })
   }, [])
 
@@ -139,6 +161,7 @@ export function IssuesProvider({ children }: { children: ReactNode }) {
         handleMoveIssue,
         handleUpdateIssue,
         handleCreateIssue,
+        handleDeleteIssue,
         issueCountByStatus,
       }}
     >

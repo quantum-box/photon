@@ -26,7 +26,7 @@ interface TableViewProps {
   selectedIssueId: string | null
   onSelectIssue: (issue: Issue) => void
   onUpdateIssue: (issueId: string, field: keyof Issue, value: string) => void
-  onCreateIssue: (title: string) => void
+  onCreateIssue: (data: { title: string }) => void
   sorting?: SortingState
   onSortingChange?: OnChangeFn<SortingState>
 }
@@ -515,7 +515,7 @@ export function TableView({
   const handleCreateSubmit = useCallback(() => {
     const trimmed = newIssueTitle.trim()
     if (trimmed) {
-      onCreateIssue(trimmed)
+      onCreateIssue({ title: trimmed })
       setNewIssueTitle('')
       setCreatingIssue(false)
     }
