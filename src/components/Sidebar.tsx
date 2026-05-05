@@ -4,19 +4,7 @@ import { useIssues } from '../contexts/IssuesContext'
 import { useTheme } from '../contexts/ThemeContext'
 import type { ThemeMode } from '../contexts/ThemeContext'
 import { useConnectionStatus } from '../lib/yjs/useYjsIssues'
-
-const navItems = [
-  { id: 'my-issues', label: 'My Issues', icon: '👤' },
-  { id: 'all-issues', label: 'All Issues', icon: '📋' },
-  { id: 'active', label: 'Active', icon: '⚡' },
-]
-
-const teamItems = [
-  { id: 'tachyon-core', label: 'Tachyon Core' },
-  { id: 'tachyon-ui', label: 'Tachyon UI' },
-  { id: 'api-gateway', label: 'API Gateway' },
-  { id: 'auth-service', label: 'Auth Service' },
-]
+import { appKitConfig } from '../app/kitConfig'
 
 const views = [
   { id: 'table' as const, label: 'Table', to: '/issues' as const },
@@ -128,9 +116,9 @@ export function Sidebar() {
       {/* Workspace */}
       <div className="flex items-center gap-2 px-4 py-3 border-b border-border">
         <div className="w-6 h-6 rounded flex items-center justify-center text-xs font-bold bg-accent text-white">
-          T
+          {appKitConfig.workspace.initial}
         </div>
-        <span className="text-sm font-semibold">Tachyon</span>
+        <span className="text-sm font-semibold">{appKitConfig.workspace.name}</span>
         <div className="ml-auto flex items-center gap-1" title={statusLabels[connStatus]}>
           <span
             className="w-2 h-2 rounded-full inline-block"
@@ -144,7 +132,7 @@ export function Sidebar() {
 
       {/* Navigation */}
       <div className="px-2 py-3">
-        {navItems.map((item) => (
+        {appKitConfig.workspace.primaryNav.map((item) => (
           <button
             key={item.id}
             className="flex items-center gap-2 w-full px-2 py-1.5 rounded text-sm text-left transition-colors text-muted hover:bg-surface-hover"
@@ -166,6 +154,7 @@ export function Sidebar() {
           {views.map((view) => (
             <Link
               key={view.id}
+              data-testid={`view-${view.id}`}
               to={view.to}
               search={
                 view.id !== 'chat' && statusFilter
@@ -242,7 +231,7 @@ export function Sidebar() {
             Projects
           </span>
         </div>
-        {teamItems.map((item) => (
+        {appKitConfig.workspace.projects.map((item) => (
           <button
             key={item.id}
             className="flex items-center gap-2 w-full px-2 py-1.5 rounded text-sm transition-colors text-muted hover:bg-surface-hover"

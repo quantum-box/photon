@@ -11,6 +11,7 @@ import * as Y from 'yjs'
 import { ydoc, issuesArray } from '../lib/yjs/yjsProvider'
 import { useYjsIssues } from '../lib/yjs/useYjsIssues'
 import { mockIssues, type Issue, type Status, type Priority } from '../data/mock'
+import { appKitConfig } from '../app/kitConfig'
 
 export interface CreateIssueData {
   title: string
@@ -129,13 +130,13 @@ export function IssuesProvider({ children }: { children: ReactNode }) {
       }
       const ymap = new Y.Map<string>()
       ymap.set('id', `issue-${Date.now()}`)
-      ymap.set('identifier', `PLT-${maxNum + 1}`)
+      ymap.set('identifier', `${appKitConfig.issues.identifierPrefix}-${maxNum + 1}`)
       ymap.set('title', data.title)
       ymap.set('status', data.status ?? 'todo')
       ymap.set('priority', data.priority ?? 'none')
       ymap.set('assignee', data.assignee ?? '')
       ymap.set('labels', JSON.stringify(data.labels ?? []))
-      ymap.set('project', data.project ?? 'Tachyon UI')
+      ymap.set('project', data.project ?? appKitConfig.issues.defaultProject)
       ymap.set('createdAt', new Date().toISOString())
       ymap.set('updatedAt', new Date().toISOString())
       ymap.set('description', data.description ?? '')

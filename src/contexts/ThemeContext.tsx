@@ -7,6 +7,7 @@ import {
   useCallback,
   type ReactNode,
 } from 'react'
+import { appKitConfig } from '../app/kitConfig'
 
 export type ThemeMode = 'light' | 'dark' | 'system'
 type ResolvedTheme = 'light' | 'dark'
@@ -17,7 +18,7 @@ interface ThemeContextValue {
   setMode: (mode: ThemeMode) => void
 }
 
-const STORAGE_KEY = 'tachyon-theme'
+const STORAGE_KEY = appKitConfig.storage.themeKey
 
 const ThemeContext = createContext<ThemeContextValue | null>(null)
 

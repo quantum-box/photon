@@ -197,6 +197,7 @@ function IssuesLayout() {
           </div>
           <div className="flex items-center gap-2">
             <button
+              data-testid="open-create-issue"
               className="px-3 py-1.5 rounded text-xs font-medium"
               style={{ background: 'var(--accent)', color: '#fff' }}
               onClick={() => setCreateModalOpen(true)}
@@ -337,6 +338,7 @@ function KanbanPage() {
           </div>
           <div className="flex items-center gap-2">
             <button
+              data-testid="open-create-issue"
               className="px-3 py-1.5 rounded text-xs font-medium"
               style={{ background: 'var(--accent)', color: '#fff' }}
               onClick={() => setCreateModalOpen(true)}

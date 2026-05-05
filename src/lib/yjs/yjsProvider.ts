@@ -1,18 +1,19 @@
 import * as Y from 'yjs'
 import { IndexeddbPersistence } from 'y-indexeddb'
+import { appKitConfig } from '../../app/kitConfig'
 
 // ---------------------------------------------------------------------------
 // Y.Doc singleton
 // ---------------------------------------------------------------------------
 
 export const ydoc = new Y.Doc()
-export const issuesArray = ydoc.getArray<Y.Map<string>>('issues')
+export const issuesArray = ydoc.getArray<Y.Map<string>>(appKitConfig.sync.yjsArrayName)
 
 // ---------------------------------------------------------------------------
 // IndexedDB persistence
 // ---------------------------------------------------------------------------
 
-export const persistence = new IndexeddbPersistence('tachyon-issues', ydoc)
+export const persistence = new IndexeddbPersistence(appKitConfig.sync.persistenceKey, ydoc)
 
 /** Resolves when the local IndexedDB state has been loaded into the Y.Doc. */
 export const idbSynced: Promise<void> = new Promise((resolve) => {
@@ -63,7 +64,7 @@ let disposed = false
 function getWsUrl(): string {
   const loc = window.location
   const proto = loc.protocol === 'https:' ? 'wss:' : 'ws:'
-  return `${proto}//${loc.host}/ws`
+  return `${proto}//${loc.host}${appKitConfig.sync.websocketPath}`
 }
 
 function scheduleReconnect() {

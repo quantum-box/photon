@@ -9,5 +9,5 @@ CREATE TABLE IF NOT EXISTS issues (
     updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE INDEX idx_issues_status ON issues(status);
-CREATE INDEX idx_issues_assignee ON issues(assignee);
+CREATE INDEX IF NOT EXISTS idx_issues_status ON issues(status);
+CREATE INDEX IF NOT EXISTS idx_issues_assignee ON issues(assignee);

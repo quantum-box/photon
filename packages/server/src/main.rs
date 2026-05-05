@@ -205,7 +205,10 @@ async fn create_issue(
     Json(payload): Json<CreateIssue>,
 ) -> Result<(StatusCode, Json<Issue>), AppError> {
     let id = Uuid::new_v4().to_string();
-    let now = chrono::Utc::now().naive_utc().format("%Y-%m-%d %H:%M:%S").to_string();
+    let now = chrono::Utc::now()
+        .naive_utc()
+        .format("%Y-%m-%d %H:%M:%S")
+        .to_string();
 
     sqlx::query(
         "INSERT INTO issues (id, title, description, status, priority, assignee, created_at, updated_at)
@@ -264,7 +267,10 @@ async fn update_issue(
     let status = payload.status.unwrap_or(existing.status);
     let priority = payload.priority.unwrap_or(existing.priority);
     let assignee = payload.assignee.or(existing.assignee);
-    let now = chrono::Utc::now().naive_utc().format("%Y-%m-%d %H:%M:%S").to_string();
+    let now = chrono::Utc::now()
+        .naive_utc()
+        .format("%Y-%m-%d %H:%M:%S")
+        .to_string();
 
     sqlx::query(
         "UPDATE issues SET title = ?, description = ?, status = ?, priority = ?, assignee = ?, updated_at = ?
@@ -321,10 +327,7 @@ async fn delete_issue(
 // WebSocket — yrs CRDT sync
 // ---------------------------------------------------------------------------
 
-async fn ws_handler(
-    ws: WebSocketUpgrade,
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
+async fn ws_handler(ws: WebSocketUpgrade, State(state): State<Arc<AppState>>) -> impl IntoResponse {
     ws.on_upgrade(move |socket| handle_ws(socket, state))
 }
 
@@ -435,12 +438,48 @@ async fn seed_if_empty(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     }
 
     let seeds = vec![
-        ("Set up project repository", "Initialize the monorepo structure with frontend and backend packages", "done", "urgent", Some("Alice")),
-        ("Design database schema", "Define tables for issues, users, and projects", "done", "high", Some("Bob")),
-        ("Implement authentication", "Add JWT-based auth with login/register endpoints", "in_progress", "urgent", Some("Alice")),
-        ("Build issue list view", "Create the main table view for browsing issues", "in_progress", "high", Some("Charlie")),
-        ("Add real-time collaboration", "Integrate CRDT-based sync for concurrent editing", "todo", "medium", None),
-        ("Write API documentation", "Generate OpenAPI docs and add usage examples", "backlog", "low", None),
+        (
+            "Set up project repository",
+            "Initialize the monorepo structure with frontend and backend packages",
+            "done",
+            "urgent",
+            Some("Alice"),
+        ),
+        (
+            "Design database schema",
+            "Define tables for issues, users, and projects",
+            "done",
+            "high",
+            Some("Bob"),
+        ),
+        (
+            "Implement authentication",
+            "Add JWT-based auth with login/register endpoints",
+            "in_progress",
+            "urgent",
+            Some("Alice"),
+        ),
+        (
+            "Build issue list view",
+            "Create the main table view for browsing issues",
+            "in_progress",
+            "high",
+            Some("Charlie"),
+        ),
+        (
+            "Add real-time collaboration",
+            "Integrate CRDT-based sync for concurrent editing",
+            "todo",
+            "medium",
+            None,
+        ),
+        (
+            "Write API documentation",
+            "Generate OpenAPI docs and add usage examples",
+            "backlog",
+            "low",
+            None,
+        ),
     ];
 
     let seed_count = seeds.len();
