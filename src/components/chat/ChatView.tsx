@@ -6,6 +6,7 @@ import { FileChip } from '../files/FileChip'
 import { FilePreviewModal } from '../files/FilePreviewModal'
 import { type FileAttachment, detectFileType } from '../files/types'
 import type { ToolCall } from './tools/types'
+import { appKitConfig } from '../../app/kitConfig'
 
 const ACCEPTED_TYPES = '.pdf,.xlsx,.xls,.csv,.docx,.pptx'
 
@@ -298,7 +299,7 @@ export function ChatView() {
                 P
               </div>
               <h2 className="text-lg font-semibold mb-1 text-foreground">
-                Photon Chat
+                {appKitConfig.chat.productName}
               </h2>
               <p className="text-sm mb-4 text-subtle">
                 Send a message to start a conversation
@@ -390,6 +391,7 @@ export function ChatView() {
         <div className="flex items-end gap-2 rounded-xl px-4 py-3 bg-surface border border-border">
           {/* File upload button */}
           <button
+            data-testid="chat-attach-file"
             onClick={() => fileInputRef.current?.click()}
             className="flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center transition-colors cursor-pointer text-subtle hover:text-foreground"
             title="Attach file (PDF, Excel, CSV, DOCX, PPTX)"
@@ -411,6 +413,7 @@ export function ChatView() {
           />
 
           <textarea
+            data-testid="chat-message-input"
             ref={textareaRef}
             value={input}
             onChange={handleInput}
@@ -422,6 +425,7 @@ export function ChatView() {
           />
           {isStreaming ? (
             <button
+              data-testid="chat-stop"
               onClick={handleStop}
               className="flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center transition-colors cursor-pointer bg-priority-urgent text-white"
               title="Stop generating"
@@ -432,6 +436,7 @@ export function ChatView() {
             </button>
           ) : (
             <button
+              data-testid="chat-send"
               onClick={handleSend}
               disabled={!input.trim() && pendingFiles.length === 0}
               className={`flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center transition-colors cursor-pointer disabled:opacity-30 text-white ${
@@ -446,7 +451,7 @@ export function ChatView() {
           )}
         </div>
         <p className="text-center mt-2 text-xs text-subtle">
-          Photon AI can make mistakes. Verify important information.
+          {appKitConfig.chat.disclaimer}
         </p>
       </div>
 

@@ -52,6 +52,7 @@ export function useYjsIssues(): { issues: Issue[]; ready: boolean } {
   useEffect(() => {
     let rafId: number | null = null
     let unmounted = false
+    let observing = false
 
     function debouncedSnapshot() {
       if (unmounted) return
@@ -68,12 +69,15 @@ export function useYjsIssues(): { issues: Issue[]; ready: boolean } {
       setIssues(snapshot())
       setReady(true)
       issuesArray.observeDeep(debouncedSnapshot)
+      observing = true
     })
 
     return () => {
       unmounted = true
       if (rafId !== null) cancelAnimationFrame(rafId)
-      issuesArray.unobserveDeep(debouncedSnapshot)
+      if (observing) {
+        issuesArray.unobserveDeep(debouncedSnapshot)
+      }
     }
   }, [])
 

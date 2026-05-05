@@ -1,3 +1,5 @@
+import { appKitConfig } from '../app/kitConfig'
+
 export type Priority = 'urgent' | 'high' | 'medium' | 'low' | 'none'
 export type Status = 'backlog' | 'todo' | 'in_progress' | 'in_review' | 'done' | 'cancelled'
 
@@ -15,8 +17,8 @@ export interface Issue {
   description: string
 }
 
-export const mockUsers = ['田中太郎', '鈴木花子', '佐藤健', '山田美咲', '高橋翔']
-const projects = ['Tachyon Core', 'Tachyon UI', 'API Gateway', 'Auth Service']
+export const mockUsers = appKitConfig.workspace.users
+const projects = appKitConfig.workspace.projects.map((project) => project.label)
 const labelSets = [
   ['bug'], ['feature'], ['improvement'], ['bug', 'critical'],
   ['feature', 'ux'], ['infra'], ['docs'], ['performance'],
@@ -95,7 +97,7 @@ function generateIssues(): Issue[] {
 
 function makeIssue(title: string, status: Status): Issue {
   const id = `issue-${counter}`
-  const identifier = `PLT-${100 + counter}`
+  const identifier = `${appKitConfig.issues.identifierPrefix}-${100 + counter}`
   const issue: Issue = {
     id,
     identifier,

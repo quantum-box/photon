@@ -114,28 +114,29 @@
 
 /* ─── Base Styles ──────────────────────────────────────────────── */
 
-* {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
-}
+@layer base {
+  * {
+    margin: 0;
+    box-sizing: border-box;
+  }
 
-/* Smooth theme transitions */
-body,
-body * {
-  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
-}
+  /* Smooth theme transitions */
+  body,
+  body * {
+    transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+  }
 
-body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  background: var(--bg-primary);
-  color: var(--text-primary);
-  overflow: hidden;
-  height: 100vh;
-}
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    overflow: hidden;
+    height: 100vh;
+  }
 
-#root {
-  height: 100vh;
+  #root {
+    height: 100vh;
+  }
 }
 
 /* ─── Scrollbar ────────────────────────────────────────────────── */

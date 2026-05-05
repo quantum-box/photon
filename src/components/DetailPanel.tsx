@@ -21,6 +21,7 @@ export function DetailPanel({ issue, onClose, onUpdateIssue, onDeleteIssue }: De
 
   // Reset confirm dialog when issue changes
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- A new selected issue must not inherit the previous delete confirmation.
     setDeleteConfirm(false)
   }, [issue?.id])
 

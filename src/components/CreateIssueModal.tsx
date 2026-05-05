@@ -25,6 +25,7 @@ export function CreateIssueModal({ open, onClose, onCreate }: CreateIssueModalPr
 
   useEffect(() => {
     if (open) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- Opening the modal should reset the draft form before focus moves to the title.
       setTitle('')
       setStatus('todo')
       setPriority('none')
@@ -61,6 +62,7 @@ export function CreateIssueModal({ open, onClose, onCreate }: CreateIssueModalPr
 
   return createPortal(
     <div
+      data-testid="create-issue-modal"
       className="fixed inset-0 z-50 flex items-center justify-center"
       style={{ background: 'rgba(0,0,0,0.5)' }}
       onClick={(e) => {
@@ -83,6 +85,7 @@ export function CreateIssueModal({ open, onClose, onCreate }: CreateIssueModalPr
             New Issue
           </h2>
           <button
+            aria-label="Close new issue modal"
             onClick={onClose}
             className="w-6 h-6 flex items-center justify-center rounded transition-colors text-sm"
             style={{ color: 'var(--text-muted)' }}
@@ -97,10 +100,12 @@ export function CreateIssueModal({ open, onClose, onCreate }: CreateIssueModalPr
         <div className="px-5 py-4 space-y-4">
           {/* Title */}
           <div>
-            <label className="block text-xs mb-1.5" style={{ color: 'var(--text-muted)' }}>
+            <label htmlFor="new-issue-title" className="block text-xs mb-1.5" style={{ color: 'var(--text-muted)' }}>
               Title <span style={{ color: 'var(--priority-urgent)' }}>*</span>
             </label>
             <input
+              id="new-issue-title"
+              data-testid="create-issue-title"
               ref={titleRef}
               type="text"
               value={title}
@@ -121,10 +126,12 @@ export function CreateIssueModal({ open, onClose, onCreate }: CreateIssueModalPr
           {/* Status & Priority row */}
           <div className="flex gap-3">
             <div className="flex-1">
-              <label className="block text-xs mb-1.5" style={{ color: 'var(--text-muted)' }}>
+              <label htmlFor="new-issue-status" className="block text-xs mb-1.5" style={{ color: 'var(--text-muted)' }}>
                 Status
               </label>
               <select
+                id="new-issue-status"
+                data-testid="create-issue-status"
                 value={status}
                 onChange={(e) => setStatus(e.target.value as Status)}
                 className="w-full px-3 py-2 rounded text-sm outline-none appearance-none cursor-pointer"
@@ -144,10 +151,12 @@ export function CreateIssueModal({ open, onClose, onCreate }: CreateIssueModalPr
               </select>
             </div>
             <div className="flex-1">
-              <label className="block text-xs mb-1.5" style={{ color: 'var(--text-muted)' }}>
+              <label htmlFor="new-issue-priority" className="block text-xs mb-1.5" style={{ color: 'var(--text-muted)' }}>
                 Priority
               </label>
               <select
+                id="new-issue-priority"
+                data-testid="create-issue-priority"
                 value={priority}
                 onChange={(e) => setPriority(e.target.value as Priority)}
                 className="w-full px-3 py-2 rounded text-sm outline-none appearance-none cursor-pointer"
@@ -170,10 +179,12 @@ export function CreateIssueModal({ open, onClose, onCreate }: CreateIssueModalPr
 
           {/* Assignee */}
           <div>
-            <label className="block text-xs mb-1.5" style={{ color: 'var(--text-muted)' }}>
+            <label htmlFor="new-issue-assignee" className="block text-xs mb-1.5" style={{ color: 'var(--text-muted)' }}>
               Assignee
             </label>
             <select
+              id="new-issue-assignee"
+              data-testid="create-issue-assignee"
               value={assignee}
               onChange={(e) => setAssignee(e.target.value)}
               className="w-full px-3 py-2 rounded text-sm outline-none appearance-none cursor-pointer"
@@ -194,10 +205,12 @@ export function CreateIssueModal({ open, onClose, onCreate }: CreateIssueModalPr
 
           {/* Description */}
           <div>
-            <label className="block text-xs mb-1.5" style={{ color: 'var(--text-muted)' }}>
+            <label htmlFor="new-issue-description" className="block text-xs mb-1.5" style={{ color: 'var(--text-muted)' }}>
               Description
             </label>
             <textarea
+              id="new-issue-description"
+              data-testid="create-issue-description"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               placeholder="Add a description..."
@@ -231,6 +244,7 @@ export function CreateIssueModal({ open, onClose, onCreate }: CreateIssueModalPr
           </button>
           <button
             onClick={handleSubmit}
+            data-testid="create-issue-submit"
             disabled={!title.trim()}
             className="px-3 py-1.5 rounded text-xs font-medium transition-colors"
             style={{
