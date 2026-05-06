@@ -7,7 +7,7 @@
     "frontendDist": "../dist",
     "devUrl": "http://localhost:5173",
     "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build"
+    "beforeBuildCommand": "npm run pages:build"
   },
   "app": {
     "windows": [
@@ -26,6 +26,14 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "iOS": {
+      "developmentTeam": "J8429VCGMR",
+      "minimumSystemVersion": "14.0"
+    },
+    "android": {
+      "minSdkVersion": 24,
+      "versionCode": 1
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

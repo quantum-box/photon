@@ -1,7 +1,7 @@
 {
   "name": "tachyon-ui",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -17,7 +17,13 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build",
+    "tauri:build": "VITE_PHOTON_SYNC_WS_URL=wss://photon-sync.quantum-box.workers.dev/ws tauri build",
+    "tauri:android:init": "tauri android init",
+    "tauri:android:dev": "VITE_PHOTON_SYNC_WS_URL=wss://photon-sync.quantum-box.workers.dev/ws tauri android dev",
+    "tauri:android:build": "VITE_PHOTON_SYNC_WS_URL=wss://photon-sync.quantum-box.workers.dev/ws tauri android build",
+    "tauri:ios:init": "tauri ios init",
+    "tauri:ios:dev": "VITE_PHOTON_SYNC_WS_URL=wss://photon-sync.quantum-box.workers.dev/ws tauri ios dev",
+    "tauri:ios:build": "VITE_PHOTON_SYNC_WS_URL=wss://photon-sync.quantum-box.workers.dev/ws tauri ios build",
     "pages:build": "VITE_PHOTON_SYNC_WS_URL=wss://photon-sync.quantum-box.workers.dev/ws npm run build",
     "pages:deploy": "npm run pages:build && cd dist && wrangler pages deploy . --project-name photon --branch main --commit-dirty=true",
     "worker:dev": "wrangler dev --config wrangler.jsonc --port 8787",

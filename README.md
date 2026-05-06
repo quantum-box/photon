@@ -21,6 +21,12 @@ npm run dev:cf-sync -- --host 127.0.0.1
 See [Cloudflare Sync Backend](docs/cloudflare-sync.md) for the Durable Objects
 runtime model and deployment notes.
 
+## App Builds
+
+Photon also builds as a Tauri desktop and mobile app. See
+[App Platform Builds](docs/app-platforms.md) for desktop release, Android, and
+iOS commands.
+
 ## Checks
 
 ```bash
@@ -28,6 +34,7 @@ npm run type-check
 npm run type-check:worker
 npm test
 npm run build
+npm run tauri:build
 cd packages/server && cargo test
 ```
 
