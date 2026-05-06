@@ -39,7 +39,7 @@ export function DetailPanel({ issue, onClose, onUpdateIssue, onDeleteIssue }: De
 
   return (
     <div
-      className="flex flex-col h-full border-l"
+      className="detail-panel flex flex-col h-full border-l"
       style={{
         width: 'var(--detail-width)',
         minWidth: 'var(--detail-width)',

@@ -1,4 +1,37 @@
-# React + TypeScript + Vite
+# Photon
+
+Photon is a React 19 + Vite + Tauri app with Yjs-backed issue sync.
+
+## Development
+
+Run the default local Rust sync backend:
+
+```bash
+cd packages/server && cargo run
+npm run dev -- --host 127.0.0.1
+```
+
+Run the Cloudflare Workers + Durable Objects sync backend locally:
+
+```bash
+npm run worker:dev
+npm run dev:cf-sync -- --host 127.0.0.1
+```
+
+See [Cloudflare Sync Backend](docs/cloudflare-sync.md) for the Durable Objects
+runtime model and deployment notes.
+
+## Checks
+
+```bash
+npm run type-check
+npm run type-check:worker
+npm test
+npm run build
+cd packages/server && cargo test
+```
+
+## Original Vite Notes
 
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
 

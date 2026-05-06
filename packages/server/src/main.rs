@@ -1,4 +1,10 @@
-use std::{net::SocketAddr, sync::Arc};
+use std::{
+    net::SocketAddr,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+};
 
 use axum::{
     extract::{
@@ -113,6 +119,8 @@ pub struct AppState {
     pub db: SqlitePool,
     pub doc: RwLock<Doc>,
     pub broadcast_tx: broadcast::Sender<Vec<u8>>,
+    pub presence_tx: broadcast::Sender<String>,
+    pub active_connections: AtomicUsize,
 }
 
 // ---------------------------------------------------------------------------
@@ -333,6 +341,7 @@ async fn ws_handler(ws: WebSocketUpgrade, State(state): State<Arc<AppState>>) ->
 
 async fn handle_ws(socket: WebSocket, state: Arc<AppState>) {
     let (mut ws_sender, mut ws_receiver) = socket.split();
+    let active_count = state.active_connections.fetch_add(1, Ordering::SeqCst) + 1;
 
     // Send initial state — scope the transaction so it's dropped before await
     let initial_update = {
@@ -345,24 +354,38 @@ async fn handle_ws(socket: WebSocket, state: Arc<AppState>) {
         .await
         .is_err()
     {
+        state.active_connections.fetch_sub(1, Ordering::SeqCst);
         return;
     }
 
     // Subscribe to broadcast channel for updates from other clients
     let mut broadcast_rx = state.broadcast_tx.subscribe();
+    let mut presence_rx = state.presence_tx.subscribe();
+    let _ = state.presence_tx.send(format!(
+        r#"{{"type":"presence","onlineCount":{active_count}}}"#
+    ));
 
     // Task: forward broadcast messages to this client's WebSocket
-    let send_task = tokio::spawn(async move {
-        while let Ok(data) = broadcast_rx.recv().await {
-            if ws_sender.send(Message::Binary(data)).await.is_err() {
-                break;
+    let mut send_task = tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                Ok(data) = broadcast_rx.recv() => {
+                    if ws_sender.send(Message::Binary(data)).await.is_err() {
+                        break;
+                    }
+                }
+                Ok(presence) = presence_rx.recv() => {
+                    if ws_sender.send(Message::Text(presence)).await.is_err() {
+                        break;
+                    }
+                }
             }
         }
     });
 
     // Task: receive updates from this client, apply to doc, broadcast
     let recv_state = state.clone();
-    let recv_task = tokio::spawn(async move {
+    let mut recv_task = tokio::spawn(async move {
         while let Some(Ok(msg)) = ws_receiver.next().await {
             match msg {
                 Message::Binary(data) => {
@@ -384,9 +407,16 @@ async fn handle_ws(socket: WebSocket, state: Arc<AppState>) {
 
     // Wait for either task to finish, then clean up
     tokio::select! {
-        _ = send_task => {},
-        _ = recv_task => {},
+        _ = &mut send_task => {},
+        _ = &mut recv_task => {},
     }
+    send_task.abort();
+    recv_task.abort();
+
+    let active_count = state.active_connections.fetch_sub(1, Ordering::SeqCst) - 1;
+    let _ = state.presence_tx.send(format!(
+        r#"{{"type":"presence","onlineCount":{active_count}}}"#
+    ));
 }
 
 // ---------------------------------------------------------------------------
@@ -534,11 +564,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     seed_if_empty(&pool).await?;
 
     let (broadcast_tx, _) = broadcast::channel::<Vec<u8>>(256);
+    let (presence_tx, _) = broadcast::channel::<String>(256);
 
     let state = Arc::new(AppState {
         db: pool,
         doc: RwLock::new(Doc::new()),
         broadcast_tx,
+        presence_tx,
+        active_connections: AtomicUsize::new(0),
     });
 
     let cors = CorsLayer::new()
@@ -595,11 +628,14 @@ mod tests {
         init_db(&pool).await.unwrap();
 
         let (broadcast_tx, _) = broadcast::channel::<Vec<u8>>(256);
+        let (presence_tx, _) = broadcast::channel::<String>(256);
 
         let state = Arc::new(AppState {
             db: pool,
             doc: RwLock::new(Doc::new()),
             broadcast_tx,
+            presence_tx,
+            active_connections: AtomicUsize::new(0),
         });
 
         let app = Router::new()

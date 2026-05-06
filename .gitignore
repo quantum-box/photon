@@ -4,6 +4,7 @@ dist
 playwright-report/
 test-results/
 .playwright-mcp/
+.wrangler/
 
 # Rust
 packages/server/target/

@@ -524,8 +524,8 @@ export function TableView({
   return (
     <div className="flex flex-col h-full">
       {/* Toolbar */}
-      <div className="flex items-center gap-3 px-4 py-2 border-b border-border shrink-0">
-        <div className="relative flex-1 max-w-xs">
+      <div className="flex items-center gap-2 px-3 py-2 md:gap-3 md:px-4 border-b border-border shrink-0">
+        <div className="relative flex-1 min-w-0 md:max-w-xs">
           <input
             type="text"
             placeholder="Filter issues..."
@@ -534,7 +534,7 @@ export function TableView({
             className="w-full px-3 py-1.5 rounded text-sm outline-none bg-surface border border-border text-foreground"
           />
         </div>
-        <span className="text-xs text-subtle">
+        <span className="shrink-0 text-xs text-subtle">
           {rows.length} issues
         </span>
       </div>

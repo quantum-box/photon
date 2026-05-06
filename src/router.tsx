@@ -54,7 +54,7 @@ const rootRoute = createRootRoute({
     return (
       <IssuesProvider>
         <CreateModalContext.Provider value={{ open: createModalOpen, setOpen: setCreateModalOpen }}>
-          <div className="flex h-full">
+          <div className="flex h-full min-w-0 flex-col md:flex-row">
             <Sidebar />
             <Outlet />
           </div>
@@ -163,17 +163,17 @@ function IssuesLayout() {
 
   return (
     <>
-      <div className="flex-1 flex flex-col min-w-0 p-2">
+      <div className="flex-1 flex flex-col min-w-0 min-h-0 p-1.5 md:p-2">
         {/* Header */}
         <div
-          className="flex items-center justify-between px-4 py-3 border-b"
+          className="flex items-center justify-between gap-3 px-3 py-2.5 md:px-4 md:py-3 border-b"
           style={{ borderColor: 'var(--border-color)' }}
         >
-          <div className="flex items-center gap-3">
+          <div className="flex min-w-0 items-center gap-2 md:gap-3">
             <h1 className="text-sm font-semibold">Issues</h1>
             {status && (
               <span
-                className="text-xs px-2 py-0.5 rounded-full flex items-center gap-1"
+                className="text-xs px-2 py-0.5 rounded-full flex min-w-0 items-center gap-1"
                 style={{
                   background: 'var(--bg-hover)',
                   color: 'var(--text-secondary)',
@@ -195,10 +195,10 @@ function IssuesLayout() {
               </span>
             )}
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex shrink-0 items-center gap-2">
             <button
               data-testid="open-create-issue"
-              className="px-3 py-1.5 rounded text-xs font-medium"
+              className="px-2.5 py-1.5 md:px-3 rounded text-xs font-medium whitespace-nowrap"
               style={{ background: 'var(--accent)', color: '#fff' }}
               onClick={() => setCreateModalOpen(true)}
             >
@@ -307,13 +307,13 @@ function KanbanPage() {
 
   return (
     <>
-      <div className="flex-1 flex flex-col min-w-0 p-2">
+      <div className="flex-1 flex flex-col min-w-0 min-h-0 p-1.5 md:p-2">
         {/* Header */}
         <div
-          className="flex items-center justify-between px-4 py-3 border-b"
+          className="flex items-center justify-between gap-3 px-3 py-2.5 md:px-4 md:py-3 border-b"
           style={{ borderColor: 'var(--border-color)' }}
         >
-          <div className="flex items-center gap-3">
+          <div className="flex min-w-0 items-center gap-2 md:gap-3">
             <h1 className="text-sm font-semibold">Board</h1>
             {status && (
               <span
@@ -336,10 +336,10 @@ function KanbanPage() {
               </span>
             )}
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex shrink-0 items-center gap-2">
             <button
               data-testid="open-create-issue"
-              className="px-3 py-1.5 rounded text-xs font-medium"
+              className="px-2.5 py-1.5 md:px-3 rounded text-xs font-medium whitespace-nowrap"
               style={{ background: 'var(--accent)', color: '#fff' }}
               onClick={() => setCreateModalOpen(true)}
             >
@@ -388,10 +388,10 @@ const chatRoute = createRoute({
 
 function ChatPage() {
   return (
-    <div className="flex-1 flex flex-col min-w-0 p-2">
+    <div className="flex-1 flex flex-col min-w-0 min-h-0 p-1.5 md:p-2">
       {/* Header */}
       <div
-        className="flex items-center justify-between px-4 py-3 border-b"
+        className="flex items-center justify-between px-3 py-2.5 md:px-4 md:py-3 border-b"
         style={{ borderColor: 'var(--border-color)' }}
       >
         <div className="flex items-center gap-3">

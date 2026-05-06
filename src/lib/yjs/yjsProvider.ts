@@ -25,16 +25,28 @@ export const idbSynced: Promise<void> = new Promise((resolve) => {
 // ---------------------------------------------------------------------------
 
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected'
+export interface SyncPresence {
+  onlineCount: number
+}
 
 type StatusListener = (status: ConnectionStatus) => void
+type PresenceListener = (presence: SyncPresence) => void
 
 let _status: ConnectionStatus = 'disconnected'
+let _presence: SyncPresence = { onlineCount: 0 }
 const _listeners = new Set<StatusListener>()
+const _presenceListeners = new Set<PresenceListener>()
 
 function setStatus(s: ConnectionStatus) {
   if (s === _status) return
   _status = s
   _listeners.forEach((fn) => fn(s))
+}
+
+function setPresence(presence: SyncPresence) {
+  if (presence.onlineCount === _presence.onlineCount) return
+  _presence = presence
+  _presenceListeners.forEach((fn) => fn(presence))
 }
 
 export const connectionStatus = {
@@ -45,6 +57,18 @@ export const connectionStatus = {
     _listeners.add(fn)
     return () => {
       _listeners.delete(fn)
+    }
+  },
+}
+
+export const syncPresence = {
+  get value() {
+    return _presence
+  },
+  subscribe(fn: PresenceListener) {
+    _presenceListeners.add(fn)
+    return () => {
+      _presenceListeners.delete(fn)
     }
   },
 }
@@ -62,6 +86,10 @@ const MAX_BACKOFF = 30_000
 let disposed = false
 
 function getWsUrl(): string {
+  if (appKitConfig.sync.websocketUrl) {
+    return appKitConfig.sync.websocketUrl
+  }
+
   const loc = window.location
   const proto = loc.protocol === 'https:' ? 'wss:' : 'ws:'
   return `${proto}//${loc.host}${appKitConfig.sync.websocketPath}`
@@ -105,6 +133,21 @@ export function connectWs() {
   })
 
   socket.addEventListener('message', (event) => {
+    if (typeof event.data === 'string') {
+      try {
+        const message = JSON.parse(event.data) as {
+          type?: string
+          onlineCount?: number
+        }
+        if (message.type === 'presence' && typeof message.onlineCount === 'number') {
+          setPresence({ onlineCount: message.onlineCount })
+        }
+      } catch {
+        // Ignore non-protocol text messages.
+      }
+      return
+    }
+
     const data = new Uint8Array(event.data as ArrayBuffer)
     Y.applyUpdate(ydoc, data, WS_REMOTE)
 
@@ -122,6 +165,7 @@ export function connectWs() {
     ydoc.off('update', onDocUpdate)
     ws = null
     setStatus('disconnected')
+    setPresence({ onlineCount: 0 })
     scheduleReconnect()
   })
 

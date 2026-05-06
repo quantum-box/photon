@@ -3,7 +3,7 @@ import { statusConfig, type Status } from '../data/mock'
 import { useIssues } from '../contexts/IssuesContext'
 import { useTheme } from '../contexts/ThemeContext'
 import type { ThemeMode } from '../contexts/ThemeContext'
-import { useConnectionStatus } from '../lib/yjs/useYjsIssues'
+import { useConnectionStatus, useSyncPresence } from '../lib/yjs/useYjsIssues'
 import { appKitConfig } from '../app/kitConfig'
 
 const views = [
@@ -90,6 +90,7 @@ export function Sidebar() {
   const { issueCountByStatus } = useIssues()
   const navigate = useNavigate()
   const connStatus = useConnectionStatus()
+  const { onlineCount } = useSyncPresence()
 
   const pathname = useRouterState({ select: (s) => s.location.pathname })
   const search = useRouterState({ select: (s) => s.location.search }) as {
@@ -111,24 +112,116 @@ export function Sidebar() {
     })
   }
 
-  return (
-    <aside className="flex flex-col h-full border-r border-border w-sidebar min-w-sidebar bg-panel">
-      {/* Workspace */}
-      <div className="flex items-center gap-2 px-4 py-3 border-b border-border">
-        <div className="w-6 h-6 rounded flex items-center justify-center text-xs font-bold bg-accent text-white">
-          {appKitConfig.workspace.initial}
-        </div>
-        <span className="text-sm font-semibold">{appKitConfig.workspace.name}</span>
-        <div className="ml-auto flex items-center gap-1" title={statusLabels[connStatus]}>
-          <span
-            className="w-2 h-2 rounded-full inline-block"
-            style={{ background: statusColors[connStatus] }}
-          />
-          <span className="text-[10px] text-subtle">
-            {connStatus === 'connected' ? '' : statusLabels[connStatus]}
+  const workspaceHeader = (presenceTestId: string) => (
+    <div className="flex items-center gap-2 px-4 py-3 border-b border-border md:border-b">
+      <div className="w-6 h-6 rounded flex items-center justify-center text-xs font-bold bg-accent text-white">
+        {appKitConfig.workspace.initial}
+      </div>
+      <span className="text-sm font-semibold">{appKitConfig.workspace.name}</span>
+      <div
+        className="ml-auto flex items-center gap-1 min-w-0"
+        title={connStatus === 'connected' ? `${onlineCount} online` : statusLabels[connStatus]}
+      >
+        <span
+          className="w-2 h-2 rounded-full inline-block shrink-0"
+          style={{ background: statusColors[connStatus] }}
+        />
+        <span
+          data-testid={presenceTestId}
+          className="text-[10px] text-subtle truncate max-w-20"
+        >
+          {connStatus === 'connected' ? `${onlineCount} online` : statusLabels[connStatus]}
+        </span>
+      </div>
+    </div>
+  )
+
+  const viewLinks = (testIdSuffix = '') => (
+    <div className="flex gap-1 px-1">
+      {views.map((view) => (
+        <Link
+          key={view.id}
+          data-testid={`view-${view.id}${testIdSuffix}`}
+          to={view.to}
+          search={
+            view.id !== 'chat' && statusFilter
+              ? { status: statusFilter }
+              : {}
+          }
+          className={`flex-1 px-2 py-1 rounded text-xs font-medium transition-colors text-center block no-underline ${
+            currentView === view.id
+              ? 'bg-accent text-white'
+              : 'text-muted'
+          }`}
+        >
+          {view.label}
+        </Link>
+      ))}
+    </div>
+  )
+
+  const statusFilters = (
+    <>
+      <button
+        className={`flex shrink-0 items-center justify-between gap-2 px-2 py-1.5 rounded text-sm transition-colors md:w-full ${
+          statusFilter === null
+            ? 'text-foreground bg-surface-hover'
+            : 'text-muted hover:bg-surface-hover'
+        }`}
+        onClick={() => handleStatusFilter(null)}
+      >
+        <span>All</span>
+        <span className="text-xs text-subtle">
+          {Object.values(issueCountByStatus).reduce(
+            (a, b) => a + b,
+            0
+          )}
+        </span>
+      </button>
+      {(
+        Object.entries(statusConfig) as [
+          Status,
+          (typeof statusConfig)[Status],
+        ][]
+      ).map(([key, config]) => (
+        <button
+          key={key}
+          className={`flex shrink-0 items-center justify-between gap-2 px-2 py-1.5 rounded text-sm transition-colors md:w-full ${
+            statusFilter === key
+              ? 'text-foreground bg-surface-hover'
+              : 'text-muted hover:bg-surface-hover'
+          }`}
+          onClick={() =>
+            handleStatusFilter(statusFilter === key ? null : key)
+          }
+        >
+          <span className="flex items-center gap-2">
+            <span style={{ color: config.color }}>{config.icon}</span>
+            <span>{config.label}</span>
           </span>
+          <span className="text-xs text-subtle">
+            {issueCountByStatus[key] || 0}
+          </span>
+        </button>
+      ))}
+    </>
+  )
+
+  return (
+    <>
+      <div className="flex shrink-0 flex-col border-b border-border bg-panel md:hidden">
+        {workspaceHeader('sync-presence-status-mobile')}
+        <div className="px-2 py-2 border-b border-border">
+          {viewLinks('-mobile')}
+        </div>
+        <div className="flex gap-1 overflow-x-auto px-2 py-2">
+          {statusFilters}
         </div>
       </div>
+
+      <aside className="hidden md:flex flex-col h-full border-r border-border w-sidebar min-w-sidebar bg-panel">
+        {/* Workspace */}
+        {workspaceHeader('sync-presence-status')}
 
       {/* Navigation */}
       <div className="px-2 py-3">
@@ -150,27 +243,7 @@ export function Sidebar() {
             View
           </span>
         </div>
-        <div className="flex gap-1 px-1">
-          {views.map((view) => (
-            <Link
-              key={view.id}
-              data-testid={`view-${view.id}`}
-              to={view.to}
-              search={
-                view.id !== 'chat' && statusFilter
-                  ? { status: statusFilter }
-                  : {}
-              }
-              className={`flex-1 px-2 py-1 rounded text-xs font-medium transition-colors text-center block no-underline ${
-                currentView === view.id
-                  ? 'bg-accent text-white'
-                  : 'text-muted'
-              }`}
-            >
-              {view.label}
-            </Link>
-          ))}
-        </div>
+        {viewLinks()}
       </div>
 
       {/* Status Filter */}
@@ -180,48 +253,9 @@ export function Sidebar() {
             Status
           </span>
         </div>
-        <button
-          className={`flex items-center justify-between w-full px-2 py-1.5 rounded text-sm transition-colors ${
-            statusFilter === null
-              ? 'text-foreground bg-surface-hover'
-              : 'text-muted hover:bg-surface-hover'
-          }`}
-          onClick={() => handleStatusFilter(null)}
-        >
-          <span>All</span>
-          <span className="text-xs text-subtle">
-            {Object.values(issueCountByStatus).reduce(
-              (a, b) => a + b,
-              0
-            )}
-          </span>
-        </button>
-        {(
-          Object.entries(statusConfig) as [
-            Status,
-            (typeof statusConfig)[Status],
-          ][]
-        ).map(([key, config]) => (
-          <button
-            key={key}
-            className={`flex items-center justify-between w-full px-2 py-1.5 rounded text-sm transition-colors ${
-              statusFilter === key
-                ? 'text-foreground bg-surface-hover'
-                : 'text-muted hover:bg-surface-hover'
-            }`}
-            onClick={() =>
-              handleStatusFilter(statusFilter === key ? null : key)
-            }
-          >
-            <span className="flex items-center gap-2">
-              <span style={{ color: config.color }}>{config.icon}</span>
-              <span>{config.label}</span>
-            </span>
-            <span className="text-xs text-subtle">
-              {issueCountByStatus[key] || 0}
-            </span>
-          </button>
-        ))}
+        <div className="flex flex-col gap-0.5">
+          {statusFilters}
+        </div>
       </div>
 
       {/* Teams */}
@@ -244,6 +278,7 @@ export function Sidebar() {
 
       {/* Theme Toggle */}
       <ThemeToggle />
-    </aside>
+      </aside>
+    </>
   )
 }
