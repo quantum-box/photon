@@ -7,6 +7,9 @@ iOS. Production app builds point at the hosted sync Worker:
 wss://photon-sync.quantum-box.workers.dev/ws
 ```
 
+The production Worker endpoint is stored in `.env.production` so Vite builds
+work from macOS, Linux, and Windows shells.
+
 ## Desktop
 
 Build a local desktop bundle:
