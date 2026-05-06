@@ -1,0 +1,20 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "photon-sync",
+  "main": "workers/sync/index.ts",
+  "compatibility_date": "2026-05-05",
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "PHOTON_SYNC_ROOMS",
+        "class_name": "PhotonSyncRoom"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["PhotonSyncRoom"]
+    }
+  ]
+}

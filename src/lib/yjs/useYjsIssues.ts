@@ -1,6 +1,13 @@
 import { useState, useEffect, useSyncExternalStore } from 'react'
 import * as Y from 'yjs'
-import { issuesArray, initialSyncReady, connectionStatus, type ConnectionStatus } from './yjsProvider'
+import {
+  issuesArray,
+  initialSyncReady,
+  connectionStatus,
+  syncPresence,
+  type ConnectionStatus,
+  type SyncPresence,
+} from './yjsProvider'
 import type { Issue, Status, Priority } from '../../data/mock'
 
 // ---------------------------------------------------------------------------
@@ -92,5 +99,12 @@ export function useConnectionStatus(): ConnectionStatus {
   return useSyncExternalStore(
     connectionStatus.subscribe,
     () => connectionStatus.value,
+  )
+}
+
+export function useSyncPresence(): SyncPresence {
+  return useSyncExternalStore(
+    syncPresence.subscribe,
+    () => syncPresence.value,
   )
 }

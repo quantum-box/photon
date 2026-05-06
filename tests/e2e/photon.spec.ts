@@ -37,6 +37,21 @@ test.describe('Photon shell', () => {
     await expect(page.getByText('Photon Chat')).toBeVisible()
   })
 
+  test('shows sync presence as clients connect', async ({ page, context }) => {
+    await page.goto('/issues')
+
+    await expect(page.getByTestId('sync-presence-status')).toHaveText('1 online')
+
+    const secondPage = await context.newPage()
+    await secondPage.goto('/issues')
+
+    await expect(secondPage.getByTestId('sync-presence-status')).toHaveText('2 online')
+    await expect(page.getByTestId('sync-presence-status')).toHaveText('2 online')
+
+    await secondPage.close()
+    await expect(page.getByTestId('sync-presence-status')).toHaveText('1 online')
+  })
+
   test('sends a chat prompt and streams an assistant response', async ({ page }) => {
     await page.goto('/chat')
 

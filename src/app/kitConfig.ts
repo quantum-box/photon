@@ -18,6 +18,7 @@ export interface AppKitConfig {
     yjsArrayName: string
     persistenceKey: string
     websocketPath: string
+    websocketUrl?: string
   }
   storage: {
     themeKey: string
@@ -53,6 +54,7 @@ export const appKitConfig: AppKitConfig = {
     yjsArrayName: 'issues',
     persistenceKey: 'photon-issues',
     websocketPath: '/ws',
+    websocketUrl: import.meta.env.VITE_PHOTON_SYNC_WS_URL,
   },
   storage: {
     themeKey: 'photon-theme',
