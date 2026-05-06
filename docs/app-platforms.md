@@ -26,7 +26,10 @@ git push origin v0.1.0
 ```
 
 The `Release` workflow builds desktop bundles for macOS, Linux, and Windows and
-publishes the GitHub Release when all platform builds finish.
+publishes the GitHub Release when all platform builds finish. It also runs
+automatically after `CI` passes on `main`: if `package.json` has a version that
+does not already have a matching `vX.Y.Z` tag, the workflow creates that tag and
+publishes the desktop release.
 
 ## Android
 
