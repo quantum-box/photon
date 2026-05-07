@@ -54,7 +54,7 @@ const rootRoute = createRootRoute({
     return (
       <IssuesProvider>
         <CreateModalContext.Provider value={{ open: createModalOpen, setOpen: setCreateModalOpen }}>
-          <div className="flex h-full min-w-0 flex-col md:flex-row">
+          <div className="flex h-full min-w-0 flex-col overflow-hidden md:flex-row">
             <Sidebar />
             <Outlet />
           </div>
@@ -163,10 +163,10 @@ function IssuesLayout() {
 
   return (
     <>
-      <div className="flex-1 flex flex-col min-w-0 min-h-0 p-1.5 md:p-2">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col p-1 md:p-2">
         {/* Header */}
         <div
-          className="flex items-center justify-between gap-3 px-3 py-2.5 md:px-4 md:py-3 border-b"
+          className="flex items-center justify-between gap-2 border-b px-3 py-2.5 md:gap-3 md:px-4 md:py-3"
           style={{ borderColor: 'var(--border-color)' }}
         >
           <div className="flex min-w-0 items-center gap-2 md:gap-3">
@@ -307,10 +307,10 @@ function KanbanPage() {
 
   return (
     <>
-      <div className="flex-1 flex flex-col min-w-0 min-h-0 p-1.5 md:p-2">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col p-1 md:p-2">
         {/* Header */}
         <div
-          className="flex items-center justify-between gap-3 px-3 py-2.5 md:px-4 md:py-3 border-b"
+          className="flex items-center justify-between gap-2 border-b px-3 py-2.5 md:gap-3 md:px-4 md:py-3"
           style={{ borderColor: 'var(--border-color)' }}
         >
           <div className="flex min-w-0 items-center gap-2 md:gap-3">
@@ -388,7 +388,7 @@ const chatRoute = createRoute({
 
 function ChatPage() {
   return (
-    <div className="flex-1 flex flex-col min-w-0 min-h-0 p-1.5 md:p-2">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col p-1 md:p-2">
       {/* Header */}
       <div
         className="flex items-center justify-between px-3 py-2.5 md:px-4 md:py-3 border-b"
