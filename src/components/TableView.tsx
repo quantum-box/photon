@@ -361,6 +361,30 @@ function AssigneeDropdownCell({
 }
 
 const ROW_HEIGHT = 40
+const MOBILE_VIEWPORT_QUERY = '(max-width: 767px)'
+
+function getIsMobileViewport() {
+  return typeof window !== 'undefined'
+    ? window.matchMedia(MOBILE_VIEWPORT_QUERY).matches
+    : false
+}
+
+function useIsMobileViewport() {
+  const [isMobile, setIsMobile] = useState(getIsMobileViewport)
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+
+    const mediaQuery = window.matchMedia(MOBILE_VIEWPORT_QUERY)
+    const update = () => setIsMobile(mediaQuery.matches)
+
+    update()
+    mediaQuery.addEventListener('change', update)
+    return () => mediaQuery.removeEventListener('change', update)
+  }, [])
+
+  return isMobile
+}
 
 function MobileIssueCard({
   issue,
@@ -458,6 +482,7 @@ export function TableView({
   const [newIssueTitle, setNewIssueTitle] = useState('')
   const parentRef = useRef<HTMLDivElement>(null)
   const newIssueInputRef = useRef<HTMLInputElement>(null)
+  const isMobileViewport = useIsMobileViewport()
 
   useEffect(() => {
     if (creatingIssue && newIssueInputRef.current) {
@@ -617,191 +642,195 @@ export function TableView({
         </span>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-3 py-3 md:hidden">
-        <div className="space-y-2">
-          {rows.map((row) => (
-            <MobileIssueCard
-              key={row.id}
-              issue={row.original}
-              isSelected={row.original.id === selectedIssueId}
-              onSelectIssue={onSelectIssue}
-              onUpdateIssue={onUpdateIssue}
-            />
-          ))}
-          {creatingIssue ? (
-            <input
-              ref={newIssueInputRef}
-              type="text"
-              value={newIssueTitle}
-              onChange={(e) => setNewIssueTitle(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') handleCreateSubmit()
-                if (e.key === 'Escape') {
-                  setCreatingIssue(false)
-                  setNewIssueTitle('')
-                }
-              }}
-              onBlur={() => {
-                if (!newIssueTitle.trim()) {
-                  setCreatingIssue(false)
-                  setNewIssueTitle('')
-                }
-              }}
-              placeholder="Issue title を入力して Enter..."
-              className="w-full rounded-md border border-accent bg-canvas px-3 py-2 text-sm text-foreground outline-none"
-            />
-          ) : (
-            <button
-              className="flex w-full items-center justify-center gap-1 rounded-md border border-dashed border-border px-3 py-3 text-xs text-subtle transition-colors hover:border-accent hover:text-foreground"
-              onClick={() => setCreatingIssue(true)}
-            >
-              <span>+</span>
-              <span>New Issue</span>
-            </button>
-          )}
+      {isMobileViewport && (
+        <div className="flex-1 overflow-y-auto px-3 py-3">
+          <div className="space-y-2">
+            {rows.map((row) => (
+              <MobileIssueCard
+                key={row.id}
+                issue={row.original}
+                isSelected={row.original.id === selectedIssueId}
+                onSelectIssue={onSelectIssue}
+                onUpdateIssue={onUpdateIssue}
+              />
+            ))}
+            {creatingIssue ? (
+              <input
+                ref={newIssueInputRef}
+                type="text"
+                value={newIssueTitle}
+                onChange={(e) => setNewIssueTitle(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') handleCreateSubmit()
+                  if (e.key === 'Escape') {
+                    setCreatingIssue(false)
+                    setNewIssueTitle('')
+                  }
+                }}
+                onBlur={() => {
+                  if (!newIssueTitle.trim()) {
+                    setCreatingIssue(false)
+                    setNewIssueTitle('')
+                  }
+                }}
+                placeholder="Issue title を入力して Enter..."
+                className="w-full rounded-md border border-accent bg-canvas px-3 py-2 text-sm text-foreground outline-none"
+              />
+            ) : (
+              <button
+                className="flex w-full items-center justify-center gap-1 rounded-md border border-dashed border-border px-3 py-3 text-xs text-subtle transition-colors hover:border-accent hover:text-foreground"
+                onClick={() => setCreatingIssue(true)}
+              >
+                <span>+</span>
+                <span>New Issue</span>
+              </button>
+            )}
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Table with virtual scroll */}
-      <div ref={parentRef} className="hidden flex-1 overflow-auto md:block">
-        <table className="w-full" style={{ minWidth: '900px' }}>
-          <thead className="sticky top-0 z-10">
-            {table.getHeaderGroups().map((headerGroup) => (
-              <tr key={headerGroup.id}>
-                {headerGroup.headers.map((header) => (
-                  <th
-                    key={header.id}
-                    className="text-left text-xs font-medium px-3 py-2 select-none relative text-subtle bg-surface border-b border-border"
-                    style={{
-                      width: header.getSize(),
-                      cursor: header.column.getCanSort()
-                        ? 'pointer'
-                        : 'default',
-                    }}
-                    onClick={header.column.getToggleSortingHandler()}
-                  >
-                    <div className="flex items-center gap-1">
-                      {flexRender(
-                        header.column.columnDef.header,
-                        header.getContext()
-                      )}
-                      {{
-                        asc: ' ↑',
-                        desc: ' ↓',
-                      }[header.column.getIsSorted() as string] ?? null}
-                    </div>
-                    {/* Resize handle */}
-                    <div
-                      onMouseDown={header.getResizeHandler()}
-                      onTouchStart={header.getResizeHandler()}
-                      className="absolute right-0 top-0 h-full w-1 cursor-col-resize select-none touch-none hover:bg-border"
+      {!isMobileViewport && (
+        <div ref={parentRef} className="flex-1 overflow-auto">
+          <table className="w-full" style={{ minWidth: '900px' }}>
+            <thead className="sticky top-0 z-10">
+              {table.getHeaderGroups().map((headerGroup) => (
+                <tr key={headerGroup.id}>
+                  {headerGroup.headers.map((header) => (
+                    <th
+                      key={header.id}
+                      className="text-left text-xs font-medium px-3 py-2 select-none relative text-subtle bg-surface border-b border-border"
                       style={{
-                        background: header.column.getIsResizing()
-                          ? 'var(--accent)'
-                          : 'transparent',
+                        width: header.getSize(),
+                        cursor: header.column.getCanSort()
+                          ? 'pointer'
+                          : 'default',
                       }}
-                    />
-                  </th>
-                ))}
-              </tr>
-            ))}
-          </thead>
-          <tbody>
-            {/* Virtual spacer top */}
-            {virtualizer.getVirtualItems().length > 0 && (
-              <tr>
-                <td
-                  style={{
-                    height: virtualizer.getVirtualItems()[0]?.start ?? 0,
-                    padding: 0,
-                    border: 'none',
-                  }}
-                />
-              </tr>
-            )}
-            {virtualizer.getVirtualItems().map((virtualRow) => {
-              const row = rows[virtualRow.index]
-              return (
-                <tr
-                  key={row.id}
-                  data-index={virtualRow.index}
-                  ref={virtualizer.measureElement}
-                  className={`cursor-pointer transition-colors border-b border-border ${
-                    row.original.id === selectedIssueId
-                      ? 'bg-surface-hover'
-                      : 'hover:bg-surface'
-                  }`}
-                  style={{ height: ROW_HEIGHT }}
-                  onClick={() => onSelectIssue(row.original)}
-                >
-                  {row.getVisibleCells().map((cell) => (
-                    <td
-                      key={cell.id}
-                      className="px-3 py-1.5"
-                      style={{ width: cell.column.getSize() }}
+                      onClick={header.column.getToggleSortingHandler()}
                     >
-                      {flexRender(
-                        cell.column.columnDef.cell,
-                        cell.getContext()
-                      )}
-                    </td>
+                      <div className="flex items-center gap-1">
+                        {flexRender(
+                          header.column.columnDef.header,
+                          header.getContext()
+                        )}
+                        {{
+                          asc: ' ↑',
+                          desc: ' ↓',
+                        }[header.column.getIsSorted() as string] ?? null}
+                      </div>
+                      {/* Resize handle */}
+                      <div
+                        onMouseDown={header.getResizeHandler()}
+                        onTouchStart={header.getResizeHandler()}
+                        className="absolute right-0 top-0 h-full w-1 cursor-col-resize select-none touch-none hover:bg-border"
+                        style={{
+                          background: header.column.getIsResizing()
+                            ? 'var(--accent)'
+                            : 'transparent',
+                        }}
+                      />
+                    </th>
                   ))}
                 </tr>
-              )
-            })}
-            {/* Virtual spacer bottom */}
-            {virtualizer.getVirtualItems().length > 0 && (
-              <tr>
-                <td
-                  style={{
-                    height:
-                      virtualizer.getTotalSize() -
-                      (virtualizer.getVirtualItems().at(-1)?.end ?? 0),
-                    padding: 0,
-                    border: 'none',
-                  }}
-                />
-              </tr>
-            )}
-            {/* New Issue row */}
-            <tr className="border-b border-border" style={{ height: ROW_HEIGHT }}>
-              <td colSpan={columns.length} className="px-3 py-1.5">
-                {creatingIssue ? (
-                  <input
-                    ref={newIssueInputRef}
-                    type="text"
-                    value={newIssueTitle}
-                    onChange={(e) => setNewIssueTitle(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') handleCreateSubmit()
-                      if (e.key === 'Escape') {
-                        setCreatingIssue(false)
-                        setNewIssueTitle('')
-                      }
+              ))}
+            </thead>
+            <tbody>
+              {/* Virtual spacer top */}
+              {virtualizer.getVirtualItems().length > 0 && (
+                <tr>
+                  <td
+                    style={{
+                      height: virtualizer.getVirtualItems()[0]?.start ?? 0,
+                      padding: 0,
+                      border: 'none',
                     }}
-                    onBlur={() => {
-                      if (!newIssueTitle.trim()) {
-                        setCreatingIssue(false)
-                        setNewIssueTitle('')
-                      }
-                    }}
-                    placeholder="Issue title を入力して Enter..."
-                    className="w-full px-2 py-1 rounded text-sm outline-none bg-canvas border border-accent text-foreground max-w-lg"
                   />
-                ) : (
-                  <button
-                    className="flex items-center gap-1 text-xs cursor-pointer transition-colors text-subtle hover:text-foreground"
-                    onClick={() => setCreatingIssue(true)}
+                </tr>
+              )}
+              {virtualizer.getVirtualItems().map((virtualRow) => {
+                const row = rows[virtualRow.index]
+                return (
+                  <tr
+                    key={row.id}
+                    data-index={virtualRow.index}
+                    ref={virtualizer.measureElement}
+                    className={`cursor-pointer transition-colors border-b border-border ${
+                      row.original.id === selectedIssueId
+                        ? 'bg-surface-hover'
+                        : 'hover:bg-surface'
+                    }`}
+                    style={{ height: ROW_HEIGHT }}
+                    onClick={() => onSelectIssue(row.original)}
                   >
-                    <span>+</span>
-                    <span>New Issue</span>
-                  </button>
-                )}
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
+                    {row.getVisibleCells().map((cell) => (
+                      <td
+                        key={cell.id}
+                        className="px-3 py-1.5"
+                        style={{ width: cell.column.getSize() }}
+                      >
+                        {flexRender(
+                          cell.column.columnDef.cell,
+                          cell.getContext()
+                        )}
+                      </td>
+                    ))}
+                  </tr>
+                )
+              })}
+              {/* Virtual spacer bottom */}
+              {virtualizer.getVirtualItems().length > 0 && (
+                <tr>
+                  <td
+                    style={{
+                      height:
+                        virtualizer.getTotalSize() -
+                        (virtualizer.getVirtualItems().at(-1)?.end ?? 0),
+                      padding: 0,
+                      border: 'none',
+                    }}
+                  />
+                </tr>
+              )}
+              {/* New Issue row */}
+              <tr className="border-b border-border" style={{ height: ROW_HEIGHT }}>
+                <td colSpan={columns.length} className="px-3 py-1.5">
+                  {creatingIssue ? (
+                    <input
+                      ref={newIssueInputRef}
+                      type="text"
+                      value={newIssueTitle}
+                      onChange={(e) => setNewIssueTitle(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') handleCreateSubmit()
+                        if (e.key === 'Escape') {
+                          setCreatingIssue(false)
+                          setNewIssueTitle('')
+                        }
+                      }}
+                      onBlur={() => {
+                        if (!newIssueTitle.trim()) {
+                          setCreatingIssue(false)
+                          setNewIssueTitle('')
+                        }
+                      }}
+                      placeholder="Issue title を入力して Enter..."
+                      className="w-full px-2 py-1 rounded text-sm outline-none bg-canvas border border-accent text-foreground max-w-lg"
+                    />
+                  ) : (
+                    <button
+                      className="flex items-center gap-1 text-xs cursor-pointer transition-colors text-subtle hover:text-foreground"
+                      onClick={() => setCreatingIssue(true)}
+                    >
+                      <span>+</span>
+                      <span>New Issue</span>
+                    </button>
+                  )}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   )
 }
