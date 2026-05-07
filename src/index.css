@@ -151,13 +151,19 @@
 }
 
 @media (max-width: 767px) {
+  :root {
+    --detail-width: 100vw;
+  }
+
   .detail-panel {
     position: fixed;
     inset: 0;
     z-index: 40;
     width: 100vw !important;
+    width: 100dvw !important;
     min-width: 0 !important;
     border-left: 0;
+    padding-bottom: env(safe-area-inset-bottom);
   }
 }
 

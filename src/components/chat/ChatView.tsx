@@ -267,7 +267,7 @@ export function ChatView() {
 
   return (
     <div
-      className="flex flex-col h-full relative px-4 py-2"
+      className="relative flex h-full flex-col px-2 py-2 md:px-4"
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
@@ -293,7 +293,7 @@ export function ChatView() {
         className="flex-1 overflow-y-auto"
       >
         {messages.length === 0 ? (
-          <div className="flex items-center justify-center h-full">
+          <div className="flex h-full items-center justify-center px-2">
             <div className="text-center">
               <div className="text-4xl mb-3 w-14 h-14 rounded-2xl flex items-center justify-center mx-auto bg-accent text-white">
                 P
@@ -306,7 +306,7 @@ export function ChatView() {
               </p>
 
               {/* Tool capability hints */}
-              <div className="flex flex-wrap gap-2 justify-center max-w-md mx-auto">
+              <div className="mx-auto flex max-w-md flex-wrap justify-center gap-2">
                 {[
                   { icon: '\u{1F50D}', label: 'Web Search', hint: 'Search for React 19 features' },
                   { icon: '\u{1F50C}', label: 'API Calls', hint: 'Check API status' },
@@ -345,7 +345,7 @@ export function ChatView() {
 
             {/* Streaming indicator */}
             {isStreaming && (
-              <div className="px-4 py-2">
+              <div className="px-3 py-2 md:px-4">
                 <div className="flex items-center gap-2">
                   <div className="flex gap-1">
                     <span className="w-1.5 h-1.5 rounded-full bg-accent animate-bounce-dot" style={{ animationDelay: '0ms' }} />
@@ -373,7 +373,7 @@ export function ChatView() {
       </div>
 
       {/* Input area */}
-      <div className="border-t border-border px-4 py-3">
+      <div className="border-t border-border px-1 py-2 md:px-4 md:py-3">
         {/* Pending file attachments */}
         {pendingFiles.length > 0 && (
           <div className="flex flex-wrap gap-2 mb-2">
@@ -388,7 +388,7 @@ export function ChatView() {
           </div>
         )}
 
-        <div className="flex items-end gap-2 rounded-xl px-4 py-3 bg-surface border border-border">
+        <div className="flex items-end gap-2 rounded-xl border border-border bg-surface px-2 py-2 md:px-4 md:py-3">
           {/* File upload button */}
           <button
             data-testid="chat-attach-file"
@@ -418,9 +418,9 @@ export function ChatView() {
             value={input}
             onChange={handleInput}
             onKeyDown={handleKeyDown}
-            placeholder="Send a message... (try: 'search for React 19')"
+            placeholder="Send a message..."
             rows={1}
-            className="flex-1 bg-transparent outline-none resize-none text-sm leading-relaxed text-foreground"
+            className="min-w-0 flex-1 resize-none bg-transparent text-sm leading-relaxed text-foreground outline-none"
             style={{ maxHeight: '200px' }}
           />
           {isStreaming ? (

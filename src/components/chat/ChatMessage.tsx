@@ -96,10 +96,10 @@ export const ChatMessage = memo(function ChatMessage({
   const showActions = !isStreaming && message.content.length > 0
 
   return (
-    <div className={`group relative flex gap-3 px-4 py-3 ${isUser ? '' : 'bg-surface/30'}`}>
+    <div className={`group relative flex gap-2 px-3 py-3 md:gap-3 md:px-4 ${isUser ? '' : 'bg-surface/30'}`}>
       {/* Avatar */}
       <div
-        className={`w-7 h-7 rounded-full flex-shrink-0 flex items-center justify-center text-xs font-semibold mt-0.5 ${
+        className={`mt-0.5 flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full text-xs font-semibold md:h-7 md:w-7 ${
           isUser ? 'bg-surface-hover text-muted' : 'bg-accent text-white'
         }`}
       >
@@ -140,7 +140,7 @@ export const ChatMessage = memo(function ChatMessage({
         )}
 
         {isUser ? (
-          <div className="text-sm text-foreground">
+          <div className="break-words text-sm text-foreground">
             {message.content}
           </div>
         ) : (

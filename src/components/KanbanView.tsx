@@ -188,10 +188,7 @@ function KanbanColumn({
   })
 
   return (
-    <div
-      className="flex flex-col shrink-0"
-      style={{ width: '280px', minWidth: '280px' }}
-    >
+    <div className="flex w-[82vw] max-w-[280px] shrink-0 flex-col sm:w-[280px]">
       <div className="flex items-center gap-2 px-3 py-2 mb-1">
         <span style={{ color: config.color }}>{config.icon}</span>
         <span className="text-xs font-medium">{config.label}</span>
@@ -315,9 +312,9 @@ export function KanbanView({
   }
 
   return (
-    <div className="flex flex-col h-full p-2">
+    <div className="flex h-full flex-col p-1 md:p-2">
       {/* Toolbar */}
-      <div className="flex items-center gap-2 px-4 py-2 border-b border-border shrink-0">
+      <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2 md:px-4">
         <button
           className={`px-2 py-1 rounded text-xs transition-colors border border-border ${
             compact ? 'bg-accent text-white' : 'bg-surface text-muted'
@@ -326,12 +323,12 @@ export function KanbanView({
         >
           {compact ? 'Compact' : 'Default'}
         </button>
-        <span className="text-xs text-subtle">
+        <span className="min-w-0 truncate text-xs text-subtle">
           {issues.length} issues · drag to move
         </span>
       </div>
 
-      <div className="flex flex-1 overflow-x-auto p-4 gap-3 min-h-0">
+      <div className="flex min-h-0 flex-1 gap-2 overflow-x-auto p-2 md:gap-3 md:p-4">
         <DndContext
           sensors={sensors}
           collisionDetection={closestCorners}

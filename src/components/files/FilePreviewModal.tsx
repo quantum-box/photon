@@ -38,25 +38,20 @@ export function FilePreviewModal({ file, onClose }: FilePreviewModalProps) {
       onClick={onClose}
     >
       <div
-        className="rounded-xl overflow-hidden flex flex-col bg-canvas border border-border"
-        style={{
-          width: '85vw',
-          height: '85vh',
-          maxWidth: 1100,
-        }}
+        className="flex h-[100dvh] w-screen flex-col overflow-hidden border-border bg-canvas sm:h-[85vh] sm:w-[85vw] sm:max-w-[1100px] sm:rounded-xl sm:border"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Modal header */}
-        <div className="flex items-center justify-between px-4 py-2.5 border-b border-border flex-shrink-0 bg-panel">
-          <div className="flex items-center gap-2">
+        <div className="flex flex-shrink-0 items-center justify-between gap-2 border-b border-border bg-panel px-3 py-2.5 sm:px-4">
+          <div className="flex min-w-0 items-center gap-2">
             <span className="text-sm">
               {fileType === 'pdf' ? '📄' : fileType === 'excel' || fileType === 'csv' ? '📊' : fileType === 'docx' ? '📝' : fileType === 'pptx' ? '📑' : '📎'}
             </span>
-            <span className="text-sm font-medium text-foreground">
+            <span className="truncate text-sm font-medium text-foreground">
               {file.name}
             </span>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex shrink-0 items-center gap-2">
             <a
               href={file.url}
               download={file.name}

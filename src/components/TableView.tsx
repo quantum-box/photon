@@ -362,6 +362,84 @@ function AssigneeDropdownCell({
 
 const ROW_HEIGHT = 40
 
+function MobileIssueCard({
+  issue,
+  isSelected,
+  onSelectIssue,
+  onUpdateIssue,
+}: {
+  issue: Issue
+  isSelected: boolean
+  onSelectIssue: (issue: Issue) => void
+  onUpdateIssue: (issueId: string, field: keyof Issue, value: string) => void
+}) {
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      className={`w-full rounded-md border p-3 text-left transition-colors ${
+        isSelected
+          ? 'border-accent bg-surface-hover'
+          : 'border-border bg-surface hover:bg-surface-hover'
+      }`}
+      onClick={() => onSelectIssue(issue)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          onSelectIssue(issue)
+        }
+      }}
+    >
+      <div className="mb-2 flex min-w-0 items-center justify-between gap-2">
+        <span className="font-mono text-xs text-subtle">{issue.identifier}</span>
+        <PriorityDropdownCell
+          value={issue.priority}
+          issueId={issue.id}
+          onUpdate={onUpdateIssue}
+        />
+      </div>
+      <div className="mb-3 line-clamp-2 text-sm font-medium leading-snug text-foreground">
+        {issue.title}
+      </div>
+      <div className="flex min-w-0 items-center justify-between gap-2">
+        <StatusDropdownCell
+          value={issue.status}
+          issueId={issue.id}
+          onUpdate={onUpdateIssue}
+        />
+        <div className="flex min-w-0 items-center gap-2">
+          {issue.assignee && (
+            <span className="flex min-w-0 items-center gap-1.5 text-xs text-muted">
+              <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent text-xs text-white">
+                {issue.assignee[0]}
+              </span>
+              <span className="truncate">{issue.assignee}</span>
+            </span>
+          )}
+          <span className="shrink-0 text-xs text-subtle">
+            {new Date(issue.updatedAt).toLocaleDateString('ja-JP', {
+              month: 'short',
+              day: 'numeric',
+            })}
+          </span>
+        </div>
+      </div>
+      {issue.labels.length > 0 && (
+        <div className="mt-3 flex flex-wrap gap-1">
+          {issue.labels.slice(0, 3).map((label) => (
+            <span
+              key={label}
+              className="rounded bg-canvas px-1.5 py-0.5 text-xs text-subtle"
+            >
+              {label}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function TableView({
   issues,
   selectedIssueId,
@@ -539,8 +617,53 @@ export function TableView({
         </span>
       </div>
 
+      <div className="flex-1 overflow-y-auto px-3 py-3 md:hidden">
+        <div className="space-y-2">
+          {rows.map((row) => (
+            <MobileIssueCard
+              key={row.id}
+              issue={row.original}
+              isSelected={row.original.id === selectedIssueId}
+              onSelectIssue={onSelectIssue}
+              onUpdateIssue={onUpdateIssue}
+            />
+          ))}
+          {creatingIssue ? (
+            <input
+              ref={newIssueInputRef}
+              type="text"
+              value={newIssueTitle}
+              onChange={(e) => setNewIssueTitle(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') handleCreateSubmit()
+                if (e.key === 'Escape') {
+                  setCreatingIssue(false)
+                  setNewIssueTitle('')
+                }
+              }}
+              onBlur={() => {
+                if (!newIssueTitle.trim()) {
+                  setCreatingIssue(false)
+                  setNewIssueTitle('')
+                }
+              }}
+              placeholder="Issue title を入力して Enter..."
+              className="w-full rounded-md border border-accent bg-canvas px-3 py-2 text-sm text-foreground outline-none"
+            />
+          ) : (
+            <button
+              className="flex w-full items-center justify-center gap-1 rounded-md border border-dashed border-border px-3 py-3 text-xs text-subtle transition-colors hover:border-accent hover:text-foreground"
+              onClick={() => setCreatingIssue(true)}
+            >
+              <span>+</span>
+              <span>New Issue</span>
+            </button>
+          )}
+        </div>
+      </div>
+
       {/* Table with virtual scroll */}
-      <div ref={parentRef} className="flex-1 overflow-auto">
+      <div ref={parentRef} className="hidden flex-1 overflow-auto md:block">
         <table className="w-full" style={{ minWidth: '900px' }}>
           <thead className="sticky top-0 z-10">
             {table.getHeaderGroups().map((headerGroup) => (

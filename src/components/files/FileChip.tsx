@@ -14,7 +14,7 @@ export function FileChip({ file, onPreview, onRemove }: FileChipProps) {
 
   return (
     <div
-      className="inline-flex items-center gap-2 rounded-lg px-3 py-2 cursor-pointer transition-colors group/chip bg-surface border border-border hover:bg-surface-hover"
+      className="group/chip inline-flex max-w-full cursor-pointer items-center gap-2 rounded-lg border border-border bg-surface px-2 py-2 transition-colors hover:bg-surface-hover sm:px-3"
       onClick={() => onPreview(file)}
     >
       <div
@@ -24,7 +24,7 @@ export function FileChip({ file, onPreview, onRemove }: FileChipProps) {
         {icon}
       </div>
       <div className="min-w-0">
-        <p className="text-xs font-medium truncate text-foreground" style={{ maxWidth: 160 }}>
+        <p className="max-w-[11rem] truncate text-xs font-medium text-foreground">
           {file.name}
         </p>
         <p className="text-xs text-subtle">
