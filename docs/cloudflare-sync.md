@@ -20,6 +20,11 @@ deployments, or use a Cloudflare Workers + Durable Objects relay for `/ws`.
 The Cloudflare backend intentionally starts as a relay. It does not interpret
 Yjs updates or compact them into a canonical Y.Doc snapshot yet.
 
+The relay is not Photon's canonical application server. The responsibility
+boundary between the frontend Yjs relay, application server, and durable domain
+stores is recorded in
+[`ADR-0001: Sync Responsibility Boundaries`](./architecture/decisions/ADR-0001-sync-responsibility-boundaries.md).
+
 ## Local Cloudflare Sync
 
 Start the Durable Object worker:
