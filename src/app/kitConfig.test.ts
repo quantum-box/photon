@@ -15,6 +15,7 @@ describe('appKitConfig', () => {
     expect(appKitConfig.sync.persistenceKey).toBe('photon-issues')
     expect(appKitConfig.sync.yjsArrayName).toBe('issues')
     expect(appKitConfig.sync.websocketPath).toBe('/ws')
+    expect(appKitConfig.server.issuesPath).toBe('/api/issues')
   })
 
   it('configures issue defaults without hardcoding them in UI components', () => {

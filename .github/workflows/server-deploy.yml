@@ -1,0 +1,127 @@
+name: Server Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      service:
+        description: Cloud Run service name
+        required: false
+        default: photon-server
+      region:
+        description: Cloud Run region
+        required: false
+        default: asia-northeast1
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/server-deploy.yml
+      - packages/server/**
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy-cloud-run:
+    name: Deploy Rust server to Cloud Run
+    runs-on: ubuntu-latest
+    environment: server
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (vars.GCP_PROJECT_ID != '' &&
+       vars.GCP_WORKLOAD_IDENTITY_PROVIDER != '' &&
+       vars.GCP_SERVICE_ACCOUNT != '')
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Resolve deployment settings
+        id: settings
+        env:
+          INPUT_SERVICE: ${{ github.event.inputs.service }}
+          INPUT_REGION: ${{ github.event.inputs.region }}
+          VAR_SERVICE: ${{ vars.CLOUD_RUN_SERVICE }}
+          VAR_REGION: ${{ vars.GCP_REGION }}
+          VAR_ARTIFACT_LOCATION: ${{ vars.GCP_ARTIFACT_LOCATION }}
+          VAR_ARTIFACT_REPOSITORY: ${{ vars.GCP_ARTIFACT_REPOSITORY }}
+          PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          SERVICE_ACCOUNT: ${{ vars.GCP_SERVICE_ACCOUNT }}
+        run: |
+          set -euo pipefail
+          service="${INPUT_SERVICE:-${VAR_SERVICE:-photon-server}}"
+          region="${INPUT_REGION:-${VAR_REGION:-asia-northeast1}}"
+          artifact_location="${VAR_ARTIFACT_LOCATION:-$region}"
+          artifact_repository="${VAR_ARTIFACT_REPOSITORY:-photon}"
+
+          if [ -z "$PROJECT_ID" ]; then
+            echo "GCP_PROJECT_ID repository variable is required." >&2
+            exit 1
+          fi
+          if [ -z "$WORKLOAD_IDENTITY_PROVIDER" ]; then
+            echo "GCP_WORKLOAD_IDENTITY_PROVIDER repository variable is required." >&2
+            exit 1
+          fi
+          if [ -z "$SERVICE_ACCOUNT" ]; then
+            echo "GCP_SERVICE_ACCOUNT repository variable is required." >&2
+            exit 1
+          fi
+
+          image="${artifact_location}-docker.pkg.dev/${PROJECT_ID}/${artifact_repository}/${service}:${GITHUB_SHA}"
+
+          echo "service=${service}" >> "$GITHUB_OUTPUT"
+          echo "region=${region}" >> "$GITHUB_OUTPUT"
+          echo "artifact_location=${artifact_location}" >> "$GITHUB_OUTPUT"
+          echo "artifact_repository=${artifact_repository}" >> "$GITHUB_OUTPUT"
+          echo "image=${image}" >> "$GITHUB_OUTPUT"
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+
+      - name: Configure Artifact Registry Docker auth
+        run: gcloud auth configure-docker "${{ steps.settings.outputs.artifact_location }}-docker.pkg.dev" --quiet
+
+      - name: Ensure Artifact Registry repository exists
+        run: |
+          set -euo pipefail
+          gcloud artifacts repositories describe "${{ steps.settings.outputs.artifact_repository }}" \
+            --location "${{ steps.settings.outputs.artifact_location }}" >/dev/null 2>&1 \
+          || gcloud artifacts repositories create "${{ steps.settings.outputs.artifact_repository }}" \
+            --repository-format docker \
+            --location "${{ steps.settings.outputs.artifact_location }}" \
+            --description "Photon container images"
+
+      - name: Build and push server image
+        run: |
+          docker build \
+            -f packages/server/Dockerfile \
+            -t "${{ steps.settings.outputs.image }}" \
+            packages/server
+          docker push "${{ steps.settings.outputs.image }}"
+
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy "${{ steps.settings.outputs.service }}" \
+            --image "${{ steps.settings.outputs.image }}" \
+            --region "${{ steps.settings.outputs.region }}" \
+            --platform managed \
+            --allow-unauthenticated \
+            --set-env-vars "DATABASE_URL=${{ vars.PHOTON_SERVER_DATABASE_URL || 'sqlite:/tmp/photon.db?mode=rwc' }}"
+
+      - name: Show service URL
+        run: |
+          gcloud run services describe "${{ steps.settings.outputs.service }}" \
+            --region "${{ steps.settings.outputs.region }}" \
+            --format 'value(status.url)'

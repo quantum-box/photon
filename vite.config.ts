@@ -17,6 +17,9 @@ export default defineConfig({
       ignored: ['**/src-tauri/**'],
     },
     proxy: {
+      '/api': {
+        target: 'http://localhost:3001',
+      },
       '/ws': {
         target: 'http://localhost:3001',
         ws: true,

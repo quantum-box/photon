@@ -17,7 +17,7 @@ use axum::{
     Json, Router,
 };
 use futures_util::{SinkExt, StreamExt};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use sqlx::{sqlite::SqlitePoolOptions, SqlitePool};
 use tokio::sync::{broadcast, RwLock};
 use tower_http::cors::{Any, CorsLayer};
@@ -54,21 +54,58 @@ struct ApiDoc;
 // Models
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct Issue {
     pub id: String,
+    pub identifier: String,
     pub title: String,
     pub description: String,
     pub status: String,
     pub priority: String,
     pub assignee: Option<String>,
+    pub labels: Vec<String>,
+    pub project: String,
     pub created_at: String,
     pub updated_at: String,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct IssueRecord {
+    pub id: String,
+    pub identifier: String,
+    pub title: String,
+    pub description: String,
+    pub status: String,
+    pub priority: String,
+    pub assignee: Option<String>,
+    pub labels: String,
+    pub project: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+impl From<IssueRecord> for Issue {
+    fn from(record: IssueRecord) -> Self {
+        Self {
+            id: record.id,
+            identifier: record.identifier,
+            title: record.title,
+            description: record.description,
+            status: record.status,
+            priority: record.priority,
+            assignee: record.assignee,
+            labels: parse_labels(&record.labels),
+            project: record.project,
+            created_at: record.created_at,
+            updated_at: record.updated_at,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateIssue {
     pub title: String,
+    pub identifier: Option<String>,
     #[serde(default)]
     pub description: String,
     #[serde(default = "default_status")]
@@ -76,22 +113,33 @@ pub struct CreateIssue {
     #[serde(default = "default_priority")]
     pub priority: String,
     pub assignee: Option<String>,
+    #[serde(default)]
+    pub labels: Vec<String>,
+    #[serde(default = "default_project")]
+    pub project: String,
 }
 
 fn default_status() -> String {
-    "backlog".into()
+    "todo".into()
 }
 fn default_priority() -> String {
     "none".into()
 }
+fn default_project() -> String {
+    "Client App Kit".into()
+}
 
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct UpdateIssue {
+    pub identifier: Option<String>,
     pub title: Option<String>,
     pub description: Option<String>,
     pub status: Option<String>,
     pub priority: Option<String>,
-    pub assignee: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_nullable_text")]
+    pub assignee: Option<Option<String>>,
+    pub labels: Option<Vec<String>>,
+    pub project: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
@@ -109,6 +157,61 @@ pub struct HealthResponse {
 pub struct ListParams {
     pub limit: Option<i64>,
     pub offset: Option<i64>,
+}
+
+fn now_timestamp() -> String {
+    chrono::Utc::now().to_rfc3339()
+}
+
+fn normalize_optional_text(value: Option<String>) -> Option<String> {
+    value.and_then(|text| {
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(text)
+        }
+    })
+}
+
+fn deserialize_nullable_text<'de, D>(deserializer: D) -> Result<Option<Option<String>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer).map(Some)
+}
+
+fn parse_labels(raw: &str) -> Vec<String> {
+    serde_json::from_str::<Vec<String>>(raw).unwrap_or_default()
+}
+
+fn serialize_labels(labels: &[String]) -> String {
+    serde_json::to_string(labels).unwrap_or_else(|_| "[]".into())
+}
+
+async fn next_issue_identifier(pool: &SqlitePool) -> Result<String, sqlx::Error> {
+    let max_number: Option<i64> = sqlx::query_scalar(
+        "SELECT MAX(CAST(SUBSTR(identifier, 5) AS INTEGER))
+         FROM issues
+         WHERE identifier LIKE 'PLT-%'",
+    )
+    .fetch_one(pool)
+    .await?;
+
+    Ok(format!("PLT-{}", max_number.unwrap_or(100) + 1))
+}
+
+async fn fetch_issue_by_id(pool: &SqlitePool, id: &str) -> Result<Option<Issue>, sqlx::Error> {
+    let issue = sqlx::query_as::<_, IssueRecord>(
+        "SELECT id, identifier, title, description, status, priority, assignee, labels, project, created_at, updated_at
+         FROM issues WHERE id = ?",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?
+    .map(Into::into);
+
+    Ok(issue)
 }
 
 // ---------------------------------------------------------------------------
@@ -156,14 +259,15 @@ async fn list_issues(
     let limit = params.limit.unwrap_or(50);
     let offset = params.offset.unwrap_or(0);
 
-    let issues = sqlx::query_as::<_, Issue>(
-        "SELECT id, title, description, status, priority, assignee, created_at, updated_at
+    let issue_records = sqlx::query_as::<_, IssueRecord>(
+        "SELECT id, identifier, title, description, status, priority, assignee, labels, project, created_at, updated_at
          FROM issues ORDER BY created_at DESC LIMIT ? OFFSET ?",
     )
     .bind(limit)
     .bind(offset)
     .fetch_all(&state.db)
     .await?;
+    let issues = issue_records.into_iter().map(Into::into).collect();
 
     let total: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM issues")
         .fetch_one(&state.db)
@@ -189,14 +293,9 @@ async fn get_issue(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Result<Json<Issue>, AppError> {
-    let issue = sqlx::query_as::<_, Issue>(
-        "SELECT id, title, description, status, priority, assignee, created_at, updated_at
-         FROM issues WHERE id = ?",
-    )
-    .bind(&id)
-    .fetch_optional(&state.db)
-    .await?
-    .ok_or(AppError::NotFound)?;
+    let issue = fetch_issue_by_id(&state.db, &id)
+        .await?
+        .ok_or(AppError::NotFound)?;
 
     Ok(Json(issue))
 }
@@ -213,33 +312,40 @@ async fn create_issue(
     Json(payload): Json<CreateIssue>,
 ) -> Result<(StatusCode, Json<Issue>), AppError> {
     let id = Uuid::new_v4().to_string();
-    let now = chrono::Utc::now()
-        .naive_utc()
-        .format("%Y-%m-%d %H:%M:%S")
-        .to_string();
+    let identifier = match normalize_optional_text(payload.identifier) {
+        Some(identifier) => identifier,
+        None => next_issue_identifier(&state.db).await?,
+    };
+    let assignee = normalize_optional_text(payload.assignee);
+    let labels = serialize_labels(&payload.labels);
+    let project = if payload.project.trim().is_empty() {
+        default_project()
+    } else {
+        payload.project
+    };
+    let now = now_timestamp();
 
     sqlx::query(
-        "INSERT INTO issues (id, title, description, status, priority, assignee, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO issues (id, identifier, title, description, status, priority, assignee, labels, project, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&id)
+    .bind(&identifier)
     .bind(&payload.title)
     .bind(&payload.description)
     .bind(&payload.status)
     .bind(&payload.priority)
-    .bind(&payload.assignee)
+    .bind(&assignee)
+    .bind(&labels)
+    .bind(&project)
     .bind(&now)
     .bind(&now)
     .execute(&state.db)
     .await?;
 
-    let issue = sqlx::query_as::<_, Issue>(
-        "SELECT id, title, description, status, priority, assignee, created_at, updated_at
-         FROM issues WHERE id = ?",
-    )
-    .bind(&id)
-    .fetch_one(&state.db)
-    .await?;
+    let issue = fetch_issue_by_id(&state.db, &id)
+        .await?
+        .ok_or(AppError::NotFound)?;
 
     Ok((StatusCode::CREATED, Json(issue)))
 }
@@ -261,8 +367,8 @@ async fn update_issue(
     Json(payload): Json<UpdateIssue>,
 ) -> Result<Json<Issue>, AppError> {
     // Check exists
-    let existing = sqlx::query_as::<_, Issue>(
-        "SELECT id, title, description, status, priority, assignee, created_at, updated_at
+    let existing = sqlx::query_as::<_, IssueRecord>(
+        "SELECT id, identifier, title, description, status, priority, assignee, labels, project, created_at, updated_at
          FROM issues WHERE id = ?",
     )
     .bind(&id)
@@ -270,37 +376,42 @@ async fn update_issue(
     .await?
     .ok_or(AppError::NotFound)?;
 
+    let identifier = normalize_optional_text(payload.identifier).unwrap_or(existing.identifier);
     let title = payload.title.unwrap_or(existing.title);
     let description = payload.description.unwrap_or(existing.description);
     let status = payload.status.unwrap_or(existing.status);
     let priority = payload.priority.unwrap_or(existing.priority);
-    let assignee = payload.assignee.or(existing.assignee);
-    let now = chrono::Utc::now()
-        .naive_utc()
-        .format("%Y-%m-%d %H:%M:%S")
-        .to_string();
+    let assignee = match payload.assignee {
+        Some(value) => normalize_optional_text(value),
+        None => existing.assignee,
+    };
+    let labels = payload
+        .labels
+        .map(|labels| serialize_labels(&labels))
+        .unwrap_or(existing.labels);
+    let project = payload.project.unwrap_or(existing.project);
+    let now = now_timestamp();
 
     sqlx::query(
-        "UPDATE issues SET title = ?, description = ?, status = ?, priority = ?, assignee = ?, updated_at = ?
+        "UPDATE issues SET identifier = ?, title = ?, description = ?, status = ?, priority = ?, assignee = ?, labels = ?, project = ?, updated_at = ?
          WHERE id = ?",
     )
+    .bind(&identifier)
     .bind(&title)
     .bind(&description)
     .bind(&status)
     .bind(&priority)
     .bind(&assignee)
+    .bind(&labels)
+    .bind(&project)
     .bind(&now)
     .bind(&id)
     .execute(&state.db)
     .await?;
 
-    let issue = sqlx::query_as::<_, Issue>(
-        "SELECT id, title, description, status, priority, assignee, created_at, updated_at
-         FROM issues WHERE id = ?",
-    )
-    .bind(&id)
-    .fetch_one(&state.db)
-    .await?;
+    let issue = fetch_issue_by_id(&state.db, &id)
+        .await?
+        .ok_or(AppError::NotFound)?;
 
     Ok(Json(issue))
 }
@@ -455,6 +566,62 @@ impl IntoResponse for AppError {
 async fn init_db(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     let migration_sql = include_str!("../migrations/001_create_issues.sql");
     sqlx::raw_sql(migration_sql).execute(pool).await?;
+    ensure_issue_projection_columns(pool).await?;
+    Ok(())
+}
+
+async fn issue_table_has_column(pool: &SqlitePool, column_name: &str) -> Result<bool, sqlx::Error> {
+    let columns = sqlx::query_as::<_, (String,)>("SELECT name FROM pragma_table_info('issues')")
+        .fetch_all(pool)
+        .await?;
+
+    Ok(columns.iter().any(|(name,)| name == column_name))
+}
+
+async fn ensure_issue_projection_columns(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    if !issue_table_has_column(pool, "identifier").await? {
+        sqlx::query("ALTER TABLE issues ADD COLUMN identifier TEXT")
+            .execute(pool)
+            .await?;
+    }
+
+    if !issue_table_has_column(pool, "labels").await? {
+        sqlx::query("ALTER TABLE issues ADD COLUMN labels TEXT NOT NULL DEFAULT '[]'")
+            .execute(pool)
+            .await?;
+    }
+
+    if !issue_table_has_column(pool, "project").await? {
+        sqlx::query("ALTER TABLE issues ADD COLUMN project TEXT NOT NULL DEFAULT 'Client App Kit'")
+            .execute(pool)
+            .await?;
+    }
+
+    sqlx::query(
+        "UPDATE issues
+         SET identifier = 'PLT-' || (rowid + 100)
+         WHERE identifier IS NULL OR identifier = ''",
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query("UPDATE issues SET labels = '[]' WHERE labels IS NULL OR labels = ''")
+        .execute(pool)
+        .await?;
+    sqlx::query(
+        "UPDATE issues
+         SET project = 'Client App Kit'
+         WHERE project IS NULL OR project = ''",
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_issues_identifier ON issues(identifier)")
+        .execute(pool)
+        .await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_issues_project ON issues(project)")
+        .execute(pool)
+        .await?;
+
     Ok(())
 }
 
@@ -474,6 +641,8 @@ async fn seed_if_empty(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             "done",
             "urgent",
             Some("Alice"),
+            vec!["infra"],
+            "Photon Core",
         ),
         (
             "Design database schema",
@@ -481,6 +650,8 @@ async fn seed_if_empty(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             "done",
             "high",
             Some("Bob"),
+            vec!["database"],
+            "Photon Core",
         ),
         (
             "Implement authentication",
@@ -488,6 +659,8 @@ async fn seed_if_empty(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             "in_progress",
             "urgent",
             Some("Alice"),
+            vec!["auth"],
+            "Auth Service",
         ),
         (
             "Build issue list view",
@@ -495,6 +668,8 @@ async fn seed_if_empty(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             "in_progress",
             "high",
             Some("Charlie"),
+            vec!["feature", "ui"],
+            "Client App Kit",
         ),
         (
             "Add real-time collaboration",
@@ -502,6 +677,8 @@ async fn seed_if_empty(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             "todo",
             "medium",
             None,
+            vec!["sync"],
+            "Photon Core",
         ),
         (
             "Write API documentation",
@@ -509,26 +686,35 @@ async fn seed_if_empty(pool: &SqlitePool) -> Result<(), sqlx::Error> {
             "backlog",
             "low",
             None,
+            vec!["docs"],
+            "API Gateway",
         ),
     ];
 
     let seed_count = seeds.len();
-    for (title, desc, status, priority, assignee) in seeds {
+    for (title, desc, status, priority, assignee, labels, project) in seeds {
         let id = Uuid::new_v4().to_string();
-        let now = chrono::Utc::now()
-            .naive_utc()
-            .format("%Y-%m-%d %H:%M:%S")
-            .to_string();
+        let identifier = next_issue_identifier(pool).await?;
+        let labels = serialize_labels(
+            &labels
+                .into_iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+        );
+        let now = now_timestamp();
         sqlx::query(
-            "INSERT INTO issues (id, title, description, status, priority, assignee, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO issues (id, identifier, title, description, status, priority, assignee, labels, project, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
+        .bind(&identifier)
         .bind(title)
         .bind(desc)
         .bind(status)
         .bind(priority)
         .bind(assignee)
+        .bind(&labels)
+        .bind(project)
         .bind(&now)
         .bind(&now)
         .execute(pool)
@@ -597,7 +783,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .layer(cors)
         .with_state(state);
 
-    let addr = SocketAddr::from(([0, 0, 0, 0], 3001));
+    let port = std::env::var("PORT")
+        .ok()
+        .and_then(|port| port.parse::<u16>().ok())
+        .unwrap_or(3001);
+    let addr = SocketAddr::from(([0, 0, 0, 0], port));
     info!("Photon server listening on {addr}");
     info!("Swagger UI: http://{addr}/swagger-ui/");
 
@@ -682,7 +872,9 @@ mod tests {
                     .body(Body::from(
                         serde_json::json!({
                             "title": "Test issue",
-                            "description": "A test"
+                            "description": "A test",
+                            "labels": ["Feature", "sync"],
+                            "project": "Photon Core"
                         })
                         .to_string(),
                     ))
@@ -711,6 +903,9 @@ mod tests {
         let list: IssueListResponse = serde_json::from_slice(&body).unwrap();
         assert_eq!(list.total, 1);
         assert_eq!(list.issues[0].title, "Test issue");
+        assert!(list.issues[0].identifier.starts_with("PLT-"));
+        assert_eq!(list.issues[0].labels, vec!["Feature", "sync"]);
+        assert_eq!(list.issues[0].project, "Photon Core");
     }
 
     #[tokio::test]
@@ -744,7 +939,8 @@ mod tests {
                     .header("content-type", "application/json")
                     .body(Body::from(
                         serde_json::json!({
-                            "title": "Original title"
+                            "title": "Original title",
+                            "assignee": "Alice"
                         })
                         .to_string(),
                     ))
@@ -768,7 +964,10 @@ mod tests {
                     .body(Body::from(
                         serde_json::json!({
                             "title": "Updated title",
-                            "status": "in_progress"
+                            "status": "in_progress",
+                            "assignee": null,
+                            "labels": ["backend"],
+                            "project": "API Gateway"
                         })
                         .to_string(),
                     ))
@@ -784,6 +983,9 @@ mod tests {
         let updated: Issue = serde_json::from_slice(&body).unwrap();
         assert_eq!(updated.title, "Updated title");
         assert_eq!(updated.status, "in_progress");
+        assert_eq!(updated.assignee, None);
+        assert_eq!(updated.labels, vec!["backend"]);
+        assert_eq!(updated.project, "API Gateway");
     }
 
     #[tokio::test]
