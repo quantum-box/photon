@@ -131,7 +131,7 @@ Rejected. Infinite replay gets slower over time and makes repair, migration, sea
 
 - PLT-1180: Resolve issue split-brain between frontend Yjs and Rust REST/SQLite.
 - PLT-1181: Add workspace/document room model and route room ids through config.
-- PLT-1182: Implement Yjs snapshot compaction and replay strategy.
+- PLT-1182: Implement Yjs snapshot compaction and replay strategy. ✅ Done — DO + server compact at threshold, hydrate via snapshot + log replay; corrupt rows are skipped with a warning.
 - PLT-1183: Build chat tools on top of the canonical issue write/read path.
 - PLT-1186: Add Notion-like editor with server-owned document snapshots.
 - PLT-1188: Move attachment metadata/storage into server-syncable domain data.
