@@ -1,17 +1,48 @@
 import { DurableObject } from 'cloudflare:workers'
+import * as Y from 'yjs'
 
 export interface Env {
   PHOTON_SYNC_ROOMS: DurableObjectNamespace<PhotonSyncRoom>
 }
 
 const DEFAULT_ROOM_ID = 'issues'
-const UPDATE_LOG_META_KEY = 'yjs-update-log-meta'
-const UPDATE_KEY_PREFIX = 'yjs-update'
-const MAX_STORED_UPDATES = 500
+const SNAPSHOT_KEY = 'yjs:snapshot:bytes'
+const SNAPSHOT_META_KEY = 'yjs:snapshot:meta'
+const UPDATE_META_KEY = 'yjs:update:meta'
+const UPDATE_KEY_PREFIX = 'yjs:update:'
 
-interface UpdateLogMeta {
-  nextId: number
-  keys: string[]
+// Compact the on-disk update log into a snapshot once the log exceeds this
+// many rows. Keeps replay cost bounded for long-lived rooms.
+const COMPACTION_THRESHOLD = 50
+
+// Cloudflare DO storage caps a single value at 128 KiB. Reserve some
+// headroom for serialization overhead; if the encoded snapshot exceeds
+// the limit we keep replaying the log instead of writing a too-large value.
+const MAX_SNAPSHOT_BYTES = 128 * 1024 - 4096
+
+interface SnapshotMeta {
+  seq: number
+  byteLength: number
+  updatedAt: string
+}
+
+interface UpdateMeta {
+  /** Seq to assign to the next update written. */
+  nextSeq: number
+  /** Smallest seq still present in the log (entries below this were rolled
+   * into the snapshot). */
+  oldestSeq: number
+}
+
+function paddedSeq(seq: number): string {
+  // 12 zero-padded digits keeps lexicographic sort == numeric sort up to
+  // ~10^12 updates per room, which is comfortably beyond any realistic
+  // lifetime for a single room.
+  return seq.toString().padStart(12, '0')
+}
+
+function updateKey(seq: number): string {
+  return `${UPDATE_KEY_PREFIX}${paddedSeq(seq)}`
 }
 
 function presenceMessage(onlineCount: number): string {
@@ -23,9 +54,18 @@ function getRoomId(request: Request): string {
   return url.searchParams.get('room') || DEFAULT_ROOM_ID
 }
 
-function toBytes(message: ArrayBuffer | ArrayBufferView): Uint8Array {
+function toUint8Array(message: ArrayBuffer | ArrayBufferView): Uint8Array {
   if (message instanceof ArrayBuffer) return new Uint8Array(message)
   return new Uint8Array(message.buffer, message.byteOffset, message.byteLength)
+}
+
+/** Returns a fresh ArrayBuffer that exactly fits the input bytes. DO storage
+ * stores ArrayBuffer values; if we hand it a Uint8Array view over a larger
+ * buffer the storage layer would persist the entire underlying buffer. */
+function toOwnedArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  const copy = new Uint8Array(bytes.byteLength)
+  copy.set(bytes)
+  return copy.buffer
 }
 
 export default {
@@ -46,6 +86,12 @@ export default {
 }
 
 export class PhotonSyncRoom extends DurableObject<Env> {
+  /** Cached, lazily-hydrated Y.Doc for this DO instance. The DO can be
+   * evicted under hibernation, in which case the next message arrives at
+   * a fresh instance with this field reset to null and we rehydrate from
+   * persisted snapshot + log. */
+  private docPromise: Promise<Y.Doc> | null = null
+
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env)
   }
@@ -59,7 +105,7 @@ export class PhotonSyncRoom extends DurableObject<Env> {
     const [client, server] = Object.values(pair)
 
     this.ctx.acceptWebSocket(server)
-    await this.sendStoredUpdates(server)
+    await this.sendInitialSnapshot(server)
     this.broadcastPresence()
 
     return new Response(null, {
@@ -71,8 +117,9 @@ export class PhotonSyncRoom extends DurableObject<Env> {
   async webSocketMessage(sender: WebSocket, message: string | ArrayBuffer | ArrayBufferView) {
     if (typeof message === 'string') return
 
-    const bytes = toBytes(message)
-    await this.appendUpdate(bytes)
+    const bytes = toUint8Array(message)
+    const accepted = await this.tryApplyAndPersist(bytes)
+    if (!accepted) return
 
     for (const socket of this.ctx.getWebSockets()) {
       if (socket !== sender) {
@@ -89,47 +136,148 @@ export class PhotonSyncRoom extends DurableObject<Env> {
     this.broadcastPresence(socket)
   }
 
-  private async sendStoredUpdates(socket: WebSocket) {
-    const meta = await this.getUpdateLogMeta()
-
-    for (const key of meta.keys) {
-      const update = await this.ctx.storage.get<ArrayBuffer>(key)
-      if (update) {
-        socket.send(update)
-      }
+  private ensureDoc(): Promise<Y.Doc> {
+    if (!this.docPromise) {
+      this.docPromise = this.hydrateDoc()
     }
+    return this.docPromise
   }
 
-  private async appendUpdate(update: Uint8Array) {
-    const meta = await this.getUpdateLogMeta()
-    const key = `${UPDATE_KEY_PREFIX}:${meta.nextId}`
-    const storedBytes = new Uint8Array(update.byteLength)
-    storedBytes.set(update)
-    const storedUpdate = storedBytes.buffer
+  private async hydrateDoc(): Promise<Y.Doc> {
+    const doc = new Y.Doc()
+    let snapshotSeq = 0
+    let applied = 0
+    let skipped = 0
 
-    meta.keys.push(key)
-    meta.nextId += 1
-
-    const expiredKeys =
-      meta.keys.length > MAX_STORED_UPDATES
-        ? meta.keys.splice(0, meta.keys.length - MAX_STORED_UPDATES)
-        : []
-
-    const writes: Record<string, ArrayBuffer | UpdateLogMeta> = {
-      [key]: storedUpdate,
-      [UPDATE_LOG_META_KEY]: meta,
+    const snapshotBytes = await this.ctx.storage.get<ArrayBuffer>(SNAPSHOT_KEY)
+    const snapshotMeta = await this.ctx.storage.get<SnapshotMeta>(SNAPSHOT_META_KEY)
+    if (snapshotBytes && snapshotMeta) {
+      try {
+        Y.applyUpdate(doc, new Uint8Array(snapshotBytes))
+        snapshotSeq = snapshotMeta.seq
+      } catch (err) {
+        console.warn('[photon-sync] corrupt snapshot, starting fresh', err)
+      }
     }
 
-    await this.ctx.storage.put(writes)
-    await Promise.all(expiredKeys.map((expiredKey) => this.ctx.storage.delete(expiredKey)))
+    const updateMeta = (await this.ctx.storage.get<UpdateMeta>(UPDATE_META_KEY)) ?? {
+      nextSeq: snapshotSeq + 1,
+      oldestSeq: snapshotSeq + 1,
+    }
+
+    if (updateMeta.nextSeq > updateMeta.oldestSeq) {
+      // list() returns entries lexicographically; padded keys ensure that
+      // matches numeric seq order.
+      const stored = await this.ctx.storage.list<ArrayBuffer>({
+        start: updateKey(updateMeta.oldestSeq),
+        end: updateKey(updateMeta.nextSeq),
+      })
+      for (const [key, bytes] of stored) {
+        try {
+          Y.applyUpdate(doc, new Uint8Array(bytes))
+          applied++
+        } catch (err) {
+          skipped++
+          console.warn(`[photon-sync] skipping corrupt stored update ${key}`, err)
+        }
+      }
+    }
+
+    console.info(
+      `[photon-sync] hydrated DO room: snapshotSeq=${snapshotSeq} ` +
+        `nextSeq=${updateMeta.nextSeq} applied=${applied} skipped=${skipped}`,
+    )
+
+    return doc
   }
 
-  private async getUpdateLogMeta(): Promise<UpdateLogMeta> {
-    return (
-      (await this.ctx.storage.get<UpdateLogMeta>(UPDATE_LOG_META_KEY)) ?? {
-        nextId: 1,
-        keys: [],
+  private async sendInitialSnapshot(socket: WebSocket) {
+    const doc = await this.ensureDoc()
+    const snapshot = Y.encodeStateAsUpdate(doc)
+    socket.send(snapshot)
+  }
+
+  private async tryApplyAndPersist(update: Uint8Array): Promise<boolean> {
+    const doc = await this.ensureDoc()
+
+    try {
+      Y.applyUpdate(doc, update)
+    } catch (err) {
+      console.warn('[photon-sync] dropping malformed client update', err)
+      return false
+    }
+
+    const meta = (await this.ctx.storage.get<UpdateMeta>(UPDATE_META_KEY)) ?? {
+      nextSeq: 1,
+      oldestSeq: 1,
+    }
+    const seq = meta.nextSeq
+    meta.nextSeq = seq + 1
+    if (seq < meta.oldestSeq) meta.oldestSeq = seq
+
+    await this.ctx.storage.put({
+      [updateKey(seq)]: toOwnedArrayBuffer(update),
+      [UPDATE_META_KEY]: meta,
+    })
+
+    if (meta.nextSeq - meta.oldestSeq > COMPACTION_THRESHOLD) {
+      await this.compact(doc, seq)
+    }
+
+    return true
+  }
+
+  /**
+   * Roll the in-memory doc into a fresh snapshot, persist it, and delete
+   * the update rows it covers. Done inside `ctx.storage.transaction` so
+   * that an aborted compaction never leaves the room with a stale
+   * snapshot pointing past deleted log entries.
+   */
+  private async compact(doc: Y.Doc, throughSeq: number) {
+    const snapshot = Y.encodeStateAsUpdate(doc)
+    if (snapshot.byteLength > MAX_SNAPSHOT_BYTES) {
+      console.warn(
+        `[photon-sync] snapshot ${snapshot.byteLength}B exceeds limit ` +
+          `${MAX_SNAPSHOT_BYTES}B, skipping compaction`,
+      )
+      return
+    }
+
+    const snapshotMeta: SnapshotMeta = {
+      seq: throughSeq,
+      byteLength: snapshot.byteLength,
+      updatedAt: new Date().toISOString(),
+    }
+
+    await this.ctx.storage.transaction(async (txn) => {
+      const updateMeta = (await txn.get<UpdateMeta>(UPDATE_META_KEY)) ?? {
+        nextSeq: throughSeq + 1,
+        oldestSeq: 1,
       }
+
+      const keysToDelete: string[] = []
+      for (let i = updateMeta.oldestSeq; i <= throughSeq; i++) {
+        keysToDelete.push(updateKey(i))
+      }
+      updateMeta.oldestSeq = throughSeq + 1
+      if (updateMeta.nextSeq < updateMeta.oldestSeq) {
+        updateMeta.nextSeq = updateMeta.oldestSeq
+      }
+
+      await txn.put({
+        [SNAPSHOT_KEY]: toOwnedArrayBuffer(snapshot),
+        [SNAPSHOT_META_KEY]: snapshotMeta,
+        [UPDATE_META_KEY]: updateMeta,
+      })
+
+      if (keysToDelete.length > 0) {
+        await txn.delete(keysToDelete)
+      }
+    })
+
+    console.info(
+      `[photon-sync] compacted yjs log through seq ${throughSeq}, ` +
+        `snapshot ${snapshot.byteLength}B`,
     )
   }
 
