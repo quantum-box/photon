@@ -1,7 +1,7 @@
 use std::{
     net::SocketAddr,
     sync::{
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicI64, AtomicUsize, Ordering},
         Arc,
     },
 };
@@ -218,12 +218,18 @@ async fn fetch_issue_by_id(pool: &SqlitePool, id: &str) -> Result<Option<Issue>,
 // App state
 // ---------------------------------------------------------------------------
 
+const DEFAULT_ROOM_ID: &str = "default";
+/// Compact the on-disk update log when it grows beyond this many rows.
+const YJS_COMPACTION_THRESHOLD: i64 = 100;
+
 pub struct AppState {
     pub db: SqlitePool,
     pub doc: RwLock<Doc>,
     pub broadcast_tx: broadcast::Sender<Vec<u8>>,
     pub presence_tx: broadcast::Sender<String>,
     pub active_connections: AtomicUsize,
+    pub room_id: String,
+    pub next_seq: AtomicI64,
 }
 
 // ---------------------------------------------------------------------------
@@ -494,22 +500,22 @@ async fn handle_ws(socket: WebSocket, state: Arc<AppState>) {
         }
     });
 
-    // Task: receive updates from this client, apply to doc, broadcast
+    // Task: receive updates from this client, apply to doc, persist, broadcast
     let recv_state = state.clone();
     let mut recv_task = tokio::spawn(async move {
         while let Some(Ok(msg)) = ws_receiver.next().await {
             match msg {
-                Message::Binary(data) => {
-                    let doc = recv_state.doc.write().await;
-                    if let Ok(update) = Update::decode_v1(&data) {
-                        let mut txn = doc.transact_mut();
-                        if txn.apply_update(update).is_ok() {
-                            // Broadcast to all connected clients
-                            let _ = recv_state.broadcast_tx.send(data.to_vec());
-                        }
+                Message::Binary(data) => match apply_and_persist_update(&recv_state, &data).await {
+                    Ok(true) => {
+                        let _ = recv_state.broadcast_tx.send(data.to_vec());
                     }
-                    drop(doc);
-                }
+                    Ok(false) => {
+                        // Malformed update; logged inside apply_and_persist_update.
+                    }
+                    Err(err) => {
+                        tracing::error!(error = %err, "Failed to persist yjs update");
+                    }
+                },
                 Message::Close(_) => break,
                 _ => {}
             }
@@ -564,8 +570,12 @@ impl IntoResponse for AppError {
 // ---------------------------------------------------------------------------
 
 async fn init_db(pool: &SqlitePool) -> Result<(), sqlx::Error> {
-    let migration_sql = include_str!("../migrations/001_create_issues.sql");
-    sqlx::raw_sql(migration_sql).execute(pool).await?;
+    sqlx::raw_sql(include_str!("../migrations/001_create_issues.sql"))
+        .execute(pool)
+        .await?;
+    sqlx::raw_sql(include_str!("../migrations/002_create_yjs_state.sql"))
+        .execute(pool)
+        .await?;
     ensure_issue_projection_columns(pool).await?;
     Ok(())
 }
@@ -622,6 +632,235 @@ async fn ensure_issue_projection_columns(pool: &SqlitePool) -> Result<(), sqlx::
         .execute(pool)
         .await?;
 
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Yjs persistence — snapshot + update log + replay
+// ---------------------------------------------------------------------------
+
+/// Loads the persisted Y.Doc state for `room_id` from SQLite. Applies the
+/// snapshot first (if any), then replays updates with `seq > snapshot_seq`
+/// in order. Corrupt rows (un-decodeable bytes or apply-time errors) are
+/// skipped with a warning so a single bad row can't poison the room.
+///
+/// Returns the hydrated `Doc` and the highest seq observed in the log
+/// (or the snapshot's seq if the log is empty), which seeds `next_seq`.
+async fn hydrate_yjs_doc(pool: &SqlitePool, room_id: &str) -> Result<(Doc, i64), sqlx::Error> {
+    let doc = Doc::new();
+
+    let snapshot_row: Option<(Vec<u8>, i64)> =
+        sqlx::query_as("SELECT snapshot, snapshot_seq FROM yjs_snapshots WHERE room_id = ?")
+            .bind(room_id)
+            .fetch_optional(pool)
+            .await?;
+
+    let snapshot_seq = if let Some((bytes, seq)) = snapshot_row {
+        match Update::decode_v1(&bytes) {
+            Ok(update) => {
+                let mut txn = doc.transact_mut();
+                if let Err(err) = txn.apply_update(update) {
+                    tracing::warn!(
+                        room = room_id,
+                        seq,
+                        error = %err,
+                        "Failed to apply yjs snapshot; starting from empty doc"
+                    );
+                }
+            }
+            Err(err) => {
+                tracing::warn!(
+                    room = room_id,
+                    seq,
+                    error = %err,
+                    "Corrupt yjs snapshot; starting from empty doc"
+                );
+            }
+        }
+        seq
+    } else {
+        0
+    };
+
+    let updates: Vec<(i64, Vec<u8>)> = sqlx::query_as(
+        "SELECT seq, update_bytes FROM yjs_updates WHERE room_id = ? AND seq > ? ORDER BY seq ASC",
+    )
+    .bind(room_id)
+    .bind(snapshot_seq)
+    .fetch_all(pool)
+    .await?;
+
+    let mut max_seq = snapshot_seq;
+    let mut applied = 0usize;
+    let mut skipped = 0usize;
+    for (seq, bytes) in updates {
+        if seq > max_seq {
+            max_seq = seq;
+        }
+        match Update::decode_v1(&bytes) {
+            Ok(update) => {
+                let mut txn = doc.transact_mut();
+                match txn.apply_update(update) {
+                    Ok(_) => applied += 1,
+                    Err(err) => {
+                        tracing::warn!(
+                            room = room_id,
+                            seq,
+                            error = %err,
+                            "Skipping un-applyable yjs update"
+                        );
+                        skipped += 1;
+                    }
+                }
+            }
+            Err(err) => {
+                tracing::warn!(
+                    room = room_id,
+                    seq,
+                    error = %err,
+                    "Skipping un-decodable yjs update"
+                );
+                skipped += 1;
+            }
+        }
+    }
+
+    info!(
+        room = room_id,
+        snapshot_seq, max_seq, applied, skipped, "Hydrated yjs room from persisted state"
+    );
+
+    Ok((doc, max_seq))
+}
+
+/// Apply a validated update to the in-memory doc, persist it to the log
+/// with a monotonic seq, and trigger compaction if the log has grown past
+/// the threshold. Holds the doc write lock for the entire critical section
+/// so that `compact_yjs_log` always sees a doc state that matches the DB.
+///
+/// Returns `Ok(true)` if the update was applied + persisted (caller should
+/// broadcast); `Ok(false)` if the update was malformed and dropped.
+async fn apply_and_persist_update(
+    state: &Arc<AppState>,
+    update_bytes: &[u8],
+) -> Result<bool, sqlx::Error> {
+    // Decode + apply happens entirely inside this sync block. yrs values
+    // (Update, TransactionMut, Doc write guard) are NOT Send and cannot be
+    // held across an await; confining them to a non-await scope keeps the
+    // outer future Send so it can be tokio::spawn'd.
+    let applied = {
+        let doc_guard = state.doc.write().await;
+        let decoded = match Update::decode_v1(update_bytes) {
+            Ok(update) => update,
+            Err(err) => {
+                tracing::warn!(
+                    room = %state.room_id,
+                    error = %err,
+                    bytes = update_bytes.len(),
+                    "Dropping un-decodable yjs update from client"
+                );
+                return Ok(false);
+            }
+        };
+        let mut txn = doc_guard.transact_mut();
+        match txn.apply_update(decoded) {
+            Ok(_) => true,
+            Err(err) => {
+                tracing::warn!(
+                    room = %state.room_id,
+                    error = %err,
+                    "Dropping un-applyable yjs update from client"
+                );
+                false
+            }
+        }
+    };
+    if !applied {
+        return Ok(false);
+    }
+
+    let seq = state.next_seq.fetch_add(1, Ordering::SeqCst) + 1;
+    let now = now_timestamp();
+
+    sqlx::query(
+        "INSERT INTO yjs_updates (room_id, seq, update_bytes, applied_at) VALUES (?, ?, ?, ?)",
+    )
+    .bind(&state.room_id)
+    .bind(seq)
+    .bind(update_bytes)
+    .bind(&now)
+    .execute(&state.db)
+    .await?;
+
+    let log_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM yjs_updates WHERE room_id = ?")
+        .bind(&state.room_id)
+        .fetch_one(&state.db)
+        .await?;
+
+    if log_count.0 > YJS_COMPACTION_THRESHOLD {
+        compact_yjs_log(state).await?;
+    }
+
+    Ok(true)
+}
+
+/// Materialize the current doc as a snapshot, persist it transactionally
+/// alongside deleting the rolled-up update rows. The boundary is captured
+/// from the in-memory `next_seq` atomic *while still holding the doc read
+/// lock*, so it can never exceed the seqs whose applies are reflected in
+/// the snapshot. (Reading MAX(seq) from the DB after releasing the lock
+/// would race with a concurrent writer that already inserted its row but
+/// whose apply wasn't in the captured snapshot — that scenario would
+/// silently delete the writer's row.) Boundary may legitimately under-
+/// count if a writer is between releasing the write lock and its
+/// `fetch_add`; the orphan log row is harmless because yrs apply is
+/// idempotent on rehydrate.
+async fn compact_yjs_log(state: &Arc<AppState>) -> Result<(), sqlx::Error> {
+    let (snapshot_bytes, boundary_seq) = {
+        let doc_guard = state.doc.read().await;
+        let txn = doc_guard.transact();
+        let bytes = txn.encode_state_as_update_v1(&StateVector::default());
+        let seq = state.next_seq.load(Ordering::SeqCst);
+        (bytes, seq)
+    };
+
+    if boundary_seq <= 0 {
+        return Ok(());
+    }
+
+    let now = now_timestamp();
+    let snapshot_len = snapshot_bytes.len();
+    let mut tx = state.db.begin().await?;
+
+    sqlx::query(
+        "INSERT INTO yjs_snapshots (room_id, snapshot, snapshot_seq, updated_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(room_id) DO UPDATE SET
+             snapshot = excluded.snapshot,
+             snapshot_seq = excluded.snapshot_seq,
+             updated_at = excluded.updated_at",
+    )
+    .bind(&state.room_id)
+    .bind(&snapshot_bytes)
+    .bind(boundary_seq)
+    .bind(&now)
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query("DELETE FROM yjs_updates WHERE room_id = ? AND seq <= ?")
+        .bind(&state.room_id)
+        .bind(boundary_seq)
+        .execute(&mut *tx)
+        .await?;
+
+    tx.commit().await?;
+
+    info!(
+        room = %state.room_id,
+        boundary_seq,
+        snapshot_bytes = snapshot_len,
+        "Compacted yjs update log into snapshot"
+    );
     Ok(())
 }
 
@@ -749,15 +988,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     init_db(&pool).await?;
     seed_if_empty(&pool).await?;
 
+    let room_id = DEFAULT_ROOM_ID.to_string();
+    let (doc, max_seq) = hydrate_yjs_doc(&pool, &room_id).await?;
+
     let (broadcast_tx, _) = broadcast::channel::<Vec<u8>>(256);
     let (presence_tx, _) = broadcast::channel::<String>(256);
 
     let state = Arc::new(AppState {
         db: pool,
-        doc: RwLock::new(Doc::new()),
+        doc: RwLock::new(doc),
         broadcast_tx,
         presence_tx,
         active_connections: AtomicUsize::new(0),
+        room_id,
+        next_seq: AtomicI64::new(max_seq),
     });
 
     let cors = CorsLayer::new()
@@ -826,6 +1070,8 @@ mod tests {
             broadcast_tx,
             presence_tx,
             active_connections: AtomicUsize::new(0),
+            room_id: DEFAULT_ROOM_ID.to_string(),
+            next_seq: AtomicI64::new(0),
         });
 
         let app = Router::new()
@@ -1040,5 +1286,340 @@ mod tests {
             .unwrap();
 
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    // -----------------------------------------------------------------------
+    // Yjs persistence + replay tests
+    // -----------------------------------------------------------------------
+
+    use yrs::Map;
+
+    fn make_test_state(pool: SqlitePool) -> Arc<AppState> {
+        let (broadcast_tx, _) = broadcast::channel::<Vec<u8>>(256);
+        let (presence_tx, _) = broadcast::channel::<String>(256);
+        Arc::new(AppState {
+            db: pool,
+            doc: RwLock::new(Doc::new()),
+            broadcast_tx,
+            presence_tx,
+            active_connections: AtomicUsize::new(0),
+            room_id: DEFAULT_ROOM_ID.to_string(),
+            next_seq: AtomicI64::new(0),
+        })
+    }
+
+    async fn yjs_test_pool() -> SqlitePool {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        init_db(&pool).await.unwrap();
+        pool
+    }
+
+    /// Generate an update from a fresh source doc that sets a key on the
+    /// shared "issues" map, returning the update bytes.
+    fn build_update_setting_key(key: &str, value: &str) -> Vec<u8> {
+        let source = Doc::new();
+        let map = source.get_or_insert_map("issues");
+        let initial_state = source.transact().state_vector();
+        {
+            let mut txn = source.transact_mut();
+            map.insert(&mut txn, key, value);
+        }
+        let txn = source.transact();
+        txn.encode_state_as_update_v1(&initial_state)
+    }
+
+    fn read_map_string(doc: &Doc, key: &str) -> Option<String> {
+        let map = doc.get_or_insert_map("issues");
+        let txn = doc.transact();
+        map.get(&txn, key).and_then(|v| v.cast::<String>().ok())
+    }
+
+    #[tokio::test]
+    async fn test_apply_and_persist_round_trip() {
+        let pool = yjs_test_pool().await;
+        let state = make_test_state(pool.clone());
+
+        let update = build_update_setting_key("a", "alpha");
+        let applied = apply_and_persist_update(&state, &update).await.unwrap();
+        assert!(applied);
+        assert_eq!(state.next_seq.load(Ordering::SeqCst), 1);
+
+        // Hydrate a fresh doc from the same DB and confirm state survived.
+        let (reloaded, max_seq) = hydrate_yjs_doc(&pool, DEFAULT_ROOM_ID).await.unwrap();
+        assert_eq!(max_seq, 1);
+        assert_eq!(read_map_string(&reloaded, "a"), Some("alpha".into()));
+    }
+
+    #[tokio::test]
+    async fn test_corrupt_update_skipped_on_replay() {
+        let pool = yjs_test_pool().await;
+
+        // One good update at seq=1, one corrupt blob at seq=2, one good at seq=3.
+        let good_one = build_update_setting_key("k1", "v1");
+        let good_two = build_update_setting_key("k2", "v2");
+        let now = now_timestamp();
+
+        for (seq, bytes) in [(1i64, good_one), (2, vec![0xFFu8; 8]), (3, good_two)] {
+            sqlx::query(
+                "INSERT INTO yjs_updates (room_id, seq, update_bytes, applied_at) VALUES (?, ?, ?, ?)",
+            )
+            .bind(DEFAULT_ROOM_ID)
+            .bind(seq)
+            .bind(&bytes)
+            .bind(&now)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+
+        let (doc, max_seq) = hydrate_yjs_doc(&pool, DEFAULT_ROOM_ID).await.unwrap();
+        assert_eq!(max_seq, 3, "max seq must include the corrupt row's seq");
+        assert_eq!(read_map_string(&doc, "k1"), Some("v1".into()));
+        assert_eq!(read_map_string(&doc, "k2"), Some("v2".into()));
+    }
+
+    #[tokio::test]
+    async fn test_apply_rejects_garbage_bytes() {
+        let pool = yjs_test_pool().await;
+        let state = make_test_state(pool.clone());
+
+        let garbage = vec![0xFFu8; 32];
+        let applied = apply_and_persist_update(&state, &garbage).await.unwrap();
+        assert!(!applied, "garbage bytes should be dropped, not persisted");
+        assert_eq!(state.next_seq.load(Ordering::SeqCst), 0);
+
+        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM yjs_updates")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count.0, 0);
+    }
+
+    #[tokio::test]
+    async fn test_compaction_collapses_log_into_snapshot() {
+        let pool = yjs_test_pool().await;
+        let state = make_test_state(pool.clone());
+
+        // Push enough updates to cross the compaction threshold.
+        let total = (YJS_COMPACTION_THRESHOLD as usize) + 5;
+        for i in 0..total {
+            let update = build_update_setting_key(&format!("k{i}"), &format!("v{i}"));
+            apply_and_persist_update(&state, &update).await.unwrap();
+        }
+
+        let log_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM yjs_updates")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert!(
+            log_count.0 <= YJS_COMPACTION_THRESHOLD,
+            "log should be compacted: rows={}",
+            log_count.0
+        );
+
+        let snapshot_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM yjs_snapshots")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(snapshot_count.0, 1, "exactly one snapshot row expected");
+
+        // Hydrate from disk and verify all values survived compaction.
+        let (reloaded, _) = hydrate_yjs_doc(&pool, DEFAULT_ROOM_ID).await.unwrap();
+        for i in 0..total {
+            assert_eq!(
+                read_map_string(&reloaded, &format!("k{i}")),
+                Some(format!("v{i}")),
+                "key k{i} missing after compaction + reload"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_hydrate_from_snapshot_and_replay() {
+        let pool = yjs_test_pool().await;
+
+        // Build a doc and store its full state as a snapshot at seq=10.
+        let snap_doc = Doc::new();
+        {
+            let map = snap_doc.get_or_insert_map("issues");
+            let mut txn = snap_doc.transact_mut();
+            map.insert(&mut txn, "snap", "in-snapshot");
+        }
+        let snap_bytes = {
+            let txn = snap_doc.transact();
+            txn.encode_state_as_update_v1(&StateVector::default())
+        };
+        let now = now_timestamp();
+        sqlx::query(
+            "INSERT INTO yjs_snapshots (room_id, snapshot, snapshot_seq, updated_at) VALUES (?, ?, ?, ?)",
+        )
+        .bind(DEFAULT_ROOM_ID)
+        .bind(&snap_bytes)
+        .bind(10i64)
+        .bind(&now)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // A post-snapshot update at seq=11 — should be replayed.
+        let post = build_update_setting_key("post", "after-snapshot");
+        sqlx::query(
+            "INSERT INTO yjs_updates (room_id, seq, update_bytes, applied_at) VALUES (?, ?, ?, ?)",
+        )
+        .bind(DEFAULT_ROOM_ID)
+        .bind(11i64)
+        .bind(&post)
+        .bind(&now)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // A pre-snapshot orphan update at seq=5 — should be ignored by hydrate.
+        let pre = build_update_setting_key("pre", "before-snapshot");
+        sqlx::query(
+            "INSERT INTO yjs_updates (room_id, seq, update_bytes, applied_at) VALUES (?, ?, ?, ?)",
+        )
+        .bind(DEFAULT_ROOM_ID)
+        .bind(5i64)
+        .bind(&pre)
+        .bind(&now)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let (doc, max_seq) = hydrate_yjs_doc(&pool, DEFAULT_ROOM_ID).await.unwrap();
+        assert_eq!(max_seq, 11);
+        assert_eq!(read_map_string(&doc, "snap"), Some("in-snapshot".into()));
+        assert_eq!(read_map_string(&doc, "post"), Some("after-snapshot".into()));
+        assert_eq!(
+            read_map_string(&doc, "pre"),
+            None,
+            "pre-snapshot update should not be replayed"
+        );
+    }
+
+    /// Regression test for the race fix in `compact_yjs_log`. A row whose
+    /// seq is past the in-memory `next_seq` boundary (i.e. its writer has
+    /// already inserted but the compactor hasn't observed its `fetch_add`
+    /// or the apply isn't in the captured snapshot) MUST survive
+    /// compaction — otherwise the orphan apply is silently lost.
+    #[tokio::test]
+    async fn test_compaction_preserves_rows_past_next_seq_boundary() {
+        let pool = yjs_test_pool().await;
+        let state = make_test_state(pool.clone());
+
+        let real = build_update_setting_key("real", "yes");
+        apply_and_persist_update(&state, &real).await.unwrap();
+        assert_eq!(state.next_seq.load(Ordering::SeqCst), 1);
+
+        // Simulate a writer that inserted its row but whose data is NOT
+        // yet reflected in the doc snapshot from the compactor's view.
+        // The old `SELECT MAX(seq)` boundary would treat seq=2 as in-scope
+        // and delete it, losing the apply. With the new boundary captured
+        // from `next_seq.load()` (=1), seq=2 is preserved.
+        let pending = build_update_setting_key("pending", "preserved");
+        let now = now_timestamp();
+        sqlx::query(
+            "INSERT INTO yjs_updates (room_id, seq, update_bytes, applied_at) VALUES (?, ?, ?, ?)",
+        )
+        .bind(DEFAULT_ROOM_ID)
+        .bind(2i64)
+        .bind(&pending)
+        .bind(&now)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        compact_yjs_log(&state).await.unwrap();
+
+        let surviving: Vec<(i64,)> =
+            sqlx::query_as("SELECT seq FROM yjs_updates WHERE room_id = ? ORDER BY seq")
+                .bind(DEFAULT_ROOM_ID)
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert!(
+            surviving.iter().any(|(s,)| *s == 2),
+            "compaction must not delete row at seq=2 (boundary should be next_seq=1), surviving: {:?}",
+            surviving,
+        );
+
+        let (doc, max_seq) = hydrate_yjs_doc(&pool, DEFAULT_ROOM_ID).await.unwrap();
+        assert_eq!(max_seq, 2);
+        assert_eq!(read_map_string(&doc, "real"), Some("yes".into()));
+        assert_eq!(read_map_string(&doc, "pending"), Some("preserved".into()));
+    }
+
+    /// Stress test: many parallel writers + interleaved compactions must
+    /// preserve every applied update on hydrate. Doesn't deterministically
+    /// schedule the race but exercises the parallel paths under load.
+    #[tokio::test]
+    async fn test_parallel_writes_preserve_all_data() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(5)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        init_db(&pool).await.unwrap();
+        let state = make_test_state(pool.clone());
+
+        let total = (YJS_COMPACTION_THRESHOLD as usize) * 2;
+        let mut handles = Vec::with_capacity(total);
+        for i in 0..total {
+            let st = state.clone();
+            handles.push(tokio::spawn(async move {
+                let update = build_update_setting_key(&format!("k{i}"), &format!("v{i}"));
+                apply_and_persist_update(&st, &update).await.unwrap();
+            }));
+        }
+        for h in handles {
+            h.await.unwrap();
+        }
+
+        let (doc, _) = hydrate_yjs_doc(&pool, DEFAULT_ROOM_ID).await.unwrap();
+        for i in 0..total {
+            assert_eq!(
+                read_map_string(&doc, &format!("k{i}")),
+                Some(format!("v{i}")),
+                "key k{i} missing after parallel writes + compaction",
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_corrupt_snapshot_starts_fresh_and_replays_log() {
+        let pool = yjs_test_pool().await;
+        let now = now_timestamp();
+
+        sqlx::query(
+            "INSERT INTO yjs_snapshots (room_id, snapshot, snapshot_seq, updated_at) VALUES (?, ?, ?, ?)",
+        )
+        .bind(DEFAULT_ROOM_ID)
+        .bind(vec![0xDEu8, 0xAD, 0xBE, 0xEF])
+        .bind(0i64)
+        .bind(&now)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let update = build_update_setting_key("survives", "yes");
+        sqlx::query(
+            "INSERT INTO yjs_updates (room_id, seq, update_bytes, applied_at) VALUES (?, ?, ?, ?)",
+        )
+        .bind(DEFAULT_ROOM_ID)
+        .bind(1i64)
+        .bind(&update)
+        .bind(&now)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let (doc, max_seq) = hydrate_yjs_doc(&pool, DEFAULT_ROOM_ID).await.unwrap();
+        assert_eq!(max_seq, 1);
+        assert_eq!(read_map_string(&doc, "survives"), Some("yes".into()));
     }
 }
