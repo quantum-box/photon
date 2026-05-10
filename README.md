@@ -21,6 +21,13 @@ npm run dev:cf-sync -- --host 127.0.0.1
 See [Cloudflare Sync Backend](docs/cloudflare-sync.md) for the Durable Objects
 runtime model and deployment notes.
 
+## Server Deploy
+
+The Rust application server can be built as a container and deployed to Cloud
+Run. See [Photon Server Deploy](docs/server-deploy.md) for the Dockerfile,
+GitHub Actions workflow, required repository variables, and frontend runtime
+environment wiring.
+
 ## App Builds
 
 Photon also builds as a Tauri desktop and mobile app. See

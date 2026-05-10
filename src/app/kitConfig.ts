@@ -20,6 +20,10 @@ export interface AppKitConfig {
     websocketPath: string
     websocketUrl?: string
   }
+  server: {
+    apiBaseUrl?: string
+    issuesPath: string
+  }
   storage: {
     themeKey: string
   }
@@ -55,6 +59,10 @@ export const appKitConfig: AppKitConfig = {
     persistenceKey: 'photon-issues',
     websocketPath: '/ws',
     websocketUrl: import.meta.env.VITE_PHOTON_SYNC_WS_URL,
+  },
+  server: {
+    apiBaseUrl: import.meta.env.VITE_PHOTON_API_BASE_URL,
+    issuesPath: '/api/issues',
   },
   storage: {
     themeKey: 'photon-theme',
