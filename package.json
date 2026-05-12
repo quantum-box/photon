@@ -1,13 +1,48 @@
 {
-  "name": "tachyon-ui",
+  "name": "@quantum-box/photon",
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "files": [
+    "dist/package",
+    "src/index.css",
+    "README.md",
+    "docs"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/package/src/platform/config.d.ts",
+      "default": "./dist/package/src/platform/config.js"
+    },
+    "./config": {
+      "types": "./dist/package/src/platform/config.d.ts",
+      "default": "./dist/package/src/platform/config.js"
+    },
+    "./router": {
+      "types": "./dist/package/src/platform/router.d.ts",
+      "default": "./dist/package/src/platform/router.js"
+    },
+    "./sync": {
+      "types": "./dist/package/src/platform/sync.d.ts",
+      "default": "./dist/package/src/platform/sync.js"
+    },
+    "./server-contract": {
+      "types": "./dist/package/src/platform/server-contract.d.ts",
+      "default": "./dist/package/src/platform/server-contract.js"
+    },
+    "./worker": {
+      "types": "./dist/package/workers/sync/index.d.ts",
+      "default": "./dist/package/workers/sync/index.js"
+    },
+    "./styles.css": "./src/index.css"
+  },
   "scripts": {
     "dev": "vite",
     "dev:cf-sync": "VITE_PHOTON_SYNC_WS_URL=ws://127.0.0.1:8787/ws vite",
     "build": "tsc -b && vite build",
+    "build:package": "tsc -p tsconfig.package.json && tsc -p tsconfig.package.worker.json",
     "lint": "eslint .",
+    "prepare": "npm run build:package",
     "type-check": "tsc -b --noEmit",
     "type-check:worker": "tsc -p tsconfig.worker.json",
     "test": "vitest run",

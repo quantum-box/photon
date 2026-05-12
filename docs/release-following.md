@@ -1,0 +1,132 @@
+# Release Following Without npm Registry
+
+Photon apps should be able to follow Photon releases without trusting the npm
+registry. Use Git tags as the release source of truth.
+
+## Recommended Shape
+
+Keep Photon installable from the repository root:
+
+```json
+{
+  "dependencies": {
+    "@quantum-box/photon": "git+ssh://git@github.com/quantum-box/photon.git#v0.4.0"
+  }
+}
+```
+
+For a private GitHub repo, use SSH so the consuming app can rely on the deploy
+key or machine user already configured for the app build.
+
+Useful forms:
+
+```bash
+npm install git+ssh://git@github.com/quantum-box/photon.git#v0.4.0
+npm install github:quantum-box/photon#v0.4.0
+npm install git+ssh://git@github.com/quantum-box/photon.git#7f4a2c1
+```
+
+Prefer immutable release tags for app dependencies:
+
+```json
+{
+  "dependencies": {
+    "@quantum-box/photon": "git+ssh://git@github.com/quantum-box/photon.git#v0.4.0"
+  }
+}
+```
+
+Use commit SHAs only for temporary verification branches. Do not leave app
+production builds pinned to a moving branch such as `main`.
+
+## What Photon Exposes
+
+The root package exposes stable platform entrypoints:
+
+```text
+@quantum-box/photon
+@quantum-box/photon/config
+@quantum-box/photon/router
+@quantum-box/photon/sync
+@quantum-box/photon/worker
+@quantum-box/photon/server-contract
+@quantum-box/photon/styles.css
+```
+
+Example app wiring:
+
+```ts
+import '@quantum-box/photon/styles.css'
+import { RouterProvider } from '@tanstack/react-router'
+import { router } from '@quantum-box/photon/router'
+
+export function App() {
+  return <RouterProvider router={router} />
+}
+```
+
+The `worker` entrypoint is for Cloudflare Workers or `workerd` compatible
+runtimes. Do not import it from a plain Node.js process.
+
+Each app keeps only its app profile and local extensions:
+
+```text
+src/app/kitConfig.ts
+src/app/appProfile.ts
+src/app/routes/*
+src/assets/*
+```
+
+The app should import Photon platform code from the Git dependency and pass its
+profile/config into the platform shell.
+
+## Why Not Subdirectory Git Dependencies
+
+npm Git dependencies expect a package at the repository root. They do not give a
+portable, registry-free way to install only `packages/core` from a monorepo
+subdirectory.
+
+If Photon grows into multiple packages, choose one of these shapes:
+
+- Keep a root package that re-exports the supported public entrypoints.
+- Split critical packages into separate Git repositories.
+- Use Git submodules or subtree for source-level vendoring.
+
+For the current goal, the root package approach is the simplest. It keeps the
+release unit aligned with the Photon tag and avoids relying on npm registry
+publication.
+
+## App Upgrade Flow
+
+Update the app dependency to the target Photon release:
+
+```bash
+npm install git+ssh://git@github.com/quantum-box/photon.git#v0.4.0
+```
+
+Then run the app's verification gates:
+
+```bash
+npm run type-check
+npm test
+npm run type-check:worker
+```
+
+For UI-facing changes, run the app locally and verify the main user flows in a
+browser before cutting the app release.
+
+## Release Contract
+
+Every Photon release should include:
+
+- A Git tag such as `v0.4.0`.
+- A changelog that separates app-facing breaking changes from internals.
+- Migration notes for `kitConfig`, environment variables, Worker bindings, and
+  server migrations.
+- Verification commands run against Photon itself.
+
+Every consuming app should record:
+
+- The Photon Git tag in `package.json` and `package-lock.json`.
+- Any local app-profile changes needed for that tag.
+- Verification commands run against the app.

@@ -1,7 +1,19 @@
 # App Platform Builds
 
 Photon ships from the same React/Tauri codebase to web, desktop, Android, and
-iOS. Production app builds point at the hosted sync Worker:
+iOS. The repo treats each branded product as an app profile plus a deployment
+topology:
+
+- App profile: labels, navigation, issue defaults, storage keys, and sync room
+  names in `src/app/kitConfig.ts`.
+- Frontend Worker: a required frontend-side edge companion for health checks,
+  `/ws`, and future frontend-owned API glue.
+- Application server: the canonical Rust API server, or an external API that
+  implements the same issue contract.
+- Sync backend: either the Rust server WebSocket endpoint or Cloudflare Durable
+  Objects behind the frontend Worker.
+
+Production app builds point at the hosted sync Worker:
 
 ```text
 wss://photon-sync.quantum-box.workers.dev/ws
@@ -9,6 +21,69 @@ wss://photon-sync.quantum-box.workers.dev/ws
 
 The production Worker endpoint is stored in `.env.production` so Vite builds
 work from macOS, Linux, and Windows shells.
+
+Release following for apps that should avoid the npm registry is documented in
+[`release-following.md`](./release-following.md).
+
+## App Profiles
+
+When creating another app from Photon, start by changing only
+`src/app/kitConfig.ts`:
+
+- `app.id`, `displayName`, and `storageNamespace`
+- `workspace.name`, navigation, projects, and users
+- `issues.identifierPrefix` and `defaultProject`
+- `chat.productName` and disclaimer copy
+- explicit storage and sync keys
+
+Do not scatter product names, storage keys, or endpoint paths into components.
+The UI should consume `appKitConfig`, and runtime wiring should stay behind the
+same config helpers.
+
+## Deployment Topologies
+
+Use `VITE_PHOTON_DEPLOYMENT_MODE` to document the intended topology for a build:
+
+| Mode | Frontend Worker | Sync default | App API default |
+| --- | --- | --- | --- |
+| `local` | Cloudflare Worker dev server | Rust server `/ws` | Rust server |
+| `cloud` | Cloudflare Workers | Durable Object relay | Rust server or external API |
+| `onprem` | `workerd` container | Rust server `/ws` | Rust server |
+
+The Frontend Worker is always part of the frontend platform contract. In cloud
+deployments it runs on Cloudflare Workers. In on-premise deployments, run the
+same Worker boundary through `workerd` (or a compatible Workers runtime) next to
+the static frontend assets.
+
+Recommended on-premise shape:
+
+```text
+browser / desktop / mobile
+  -> TLS ingress (Caddy, Nginx, Traefik, or appliance LB)
+  -> frontend bundle + workerd Frontend Worker
+       /api/health
+       /ws
+       static assets
+  -> Rust app server
+       /api/issues
+       optional /ws sync
+  -> durable database volume or managed on-prem database
+```
+
+For a strict offline/on-prem install, keep sync on the Rust server and persist
+the server database outside the container. For a connected private-cloud install
+that is allowed to reach Cloudflare, the sync backend can still be overridden to
+`cloudflare-durable-object`.
+
+Useful environment variables:
+
+```bash
+VITE_PHOTON_DEPLOYMENT_MODE=onprem
+VITE_PHOTON_FRONTEND_WORKER_RUNTIME=workerd
+VITE_PHOTON_SYNC_BACKEND=rust-server
+VITE_PHOTON_API_BASE_URL=https://photon.example.internal
+VITE_PHOTON_SYNC_WS_URL=wss://photon.example.internal/ws
+```
 
 ## Desktop
 
