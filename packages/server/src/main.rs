@@ -569,6 +569,16 @@ async fn handle_ws(socket: WebSocket, state: Arc<RoomState>) {
                         tracing::error!(error = %err, "Failed to persist yjs update");
                     }
                 },
+                Message::Text(text) => {
+                    if serde_json::from_str::<serde_json::Value>(&text)
+                        .ok()
+                        .and_then(|value| value.get("type").and_then(|kind| kind.as_str()).map(str::to_owned))
+                        .as_deref()
+                        == Some("awareness")
+                    {
+                        let _ = recv_state.presence_tx.send(text);
+                    }
+                }
                 Message::Close(_) => break,
                 _ => {}
             }

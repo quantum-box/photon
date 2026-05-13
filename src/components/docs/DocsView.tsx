@@ -3,6 +3,7 @@ import { Link, useNavigate } from '@tanstack/react-router'
 import { useCreateBlockNote } from '@blocknote/react'
 import { BlockNoteView } from '@blocknote/shadcn'
 import '@blocknote/core/fonts/inter.css'
+import '@blocknote/shadcn/style.css'
 import { appKitConfig } from '../../app/kitConfig'
 import type { DocumentCollaboration } from '../../lib/docs/docYjs'
 import { useDocumentCollaboration } from '../../lib/docs/useDocumentCollaboration'
@@ -93,11 +94,9 @@ function BlockNoteDocumentEditor({
   const editor = useCreateBlockNote(
     {
       collaboration: {
+        provider: collab.provider,
         fragment: collab.fragment,
-        user: {
-          name: 'Photon user',
-          color: '#5b5bf7',
-        },
+        user: collab.user,
         showCursorLabels: 'activity',
       },
     },

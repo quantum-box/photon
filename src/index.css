@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@source "../node_modules/@blocknote/shadcn";
 @import "@radix-ui/themes/styles.css";
 
 /* ─── Photon Design Tokens ─────────────────────────────────────── */
@@ -32,6 +33,31 @@
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
   --ring-color: rgba(91, 91, 247, 0.5);
   --overlay: rgba(0, 0, 0, 0.7);
+
+  /* shadcn tokens used by portaled BlockNote UI */
+  --color-background: var(--bg-primary);
+  --color-foreground: var(--text-primary);
+  --color-card: var(--bg-surface);
+  --color-card-foreground: var(--text-primary);
+  --color-popover: var(--bg-surface);
+  --color-popover-foreground: var(--text-primary);
+  --color-primary: var(--accent);
+  --color-primary-foreground: #ffffff;
+  --color-secondary: var(--bg-hover);
+  --color-secondary-foreground: var(--text-primary);
+  --color-muted: var(--bg-hover);
+  --color-muted-foreground: var(--text-secondary);
+  --color-accent: var(--bg-hover);
+  --color-accent-foreground: var(--text-primary);
+  --color-destructive: var(--status-cancelled);
+  --color-destructive-foreground: #ffffff;
+  --color-border: var(--border-color);
+  --color-input: var(--border-color);
+  --color-ring: var(--ring-color);
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 10px;
 }
 
 /* Light theme */
@@ -59,6 +85,26 @@
   --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.08);
   --ring-color: rgba(91, 91, 247, 0.3);
   --overlay: rgba(0, 0, 0, 0.5);
+
+  --color-background: var(--bg-primary);
+  --color-foreground: var(--text-primary);
+  --color-card: var(--bg-surface);
+  --color-card-foreground: var(--text-primary);
+  --color-popover: var(--bg-surface);
+  --color-popover-foreground: var(--text-primary);
+  --color-primary: var(--accent);
+  --color-primary-foreground: #ffffff;
+  --color-secondary: var(--bg-hover);
+  --color-secondary-foreground: var(--text-primary);
+  --color-muted: var(--bg-hover);
+  --color-muted-foreground: var(--text-secondary);
+  --color-accent: var(--bg-hover);
+  --color-accent-foreground: var(--text-primary);
+  --color-destructive: var(--status-cancelled);
+  --color-destructive-foreground: #ffffff;
+  --color-border: var(--border-color);
+  --color-input: var(--border-color);
+  --color-ring: var(--ring-color);
 }
 
 /* ─── Tailwind Theme Mapping ───────────────────────────────────── */
@@ -69,15 +115,29 @@
   --color-panel: var(--bg-sidebar);
   --color-surface: var(--bg-surface);
   --color-surface-hover: var(--bg-hover);
+  --color-background: var(--bg-primary);
+  --color-card: var(--bg-surface);
+  --color-popover: var(--bg-surface);
+  --color-secondary: var(--bg-hover);
+  --color-input: var(--border-color);
 
   /* Text */
   --color-foreground: var(--text-primary);
   --color-muted: var(--text-secondary);
   --color-subtle: var(--text-muted);
+  --color-card-foreground: var(--text-primary);
+  --color-popover-foreground: var(--text-primary);
+  --color-primary-foreground: #ffffff;
+  --color-secondary-foreground: var(--text-primary);
+  --color-muted-foreground: var(--text-secondary);
+  --color-accent-foreground: var(--text-primary);
+  --color-destructive-foreground: #ffffff;
 
   /* Accent */
   --color-accent: var(--accent);
   --color-accent-hover: var(--accent-hover);
+  --color-primary: var(--accent);
+  --color-destructive: var(--status-cancelled);
 
   /* Border */
   --color-border: var(--border-color);
@@ -264,7 +324,32 @@
   animation: shimmer 1.5s ease-in-out infinite;
 }
 
-.photon-blocknote {
+.photon-blocknote,
+.photon-blocknote .bn-root,
+.photon-blocknote .bn-editor {
+  --color-background: var(--bg-primary);
+  --color-foreground: var(--text-primary);
+  --color-card: var(--bg-surface);
+  --color-card-foreground: var(--text-primary);
+  --color-popover: var(--bg-surface);
+  --color-popover-foreground: var(--text-primary);
+  --color-primary: var(--accent);
+  --color-primary-foreground: #ffffff;
+  --color-secondary: var(--bg-hover);
+  --color-secondary-foreground: var(--text-primary);
+  --color-muted: var(--bg-hover);
+  --color-muted-foreground: var(--text-secondary);
+  --color-accent: var(--bg-hover);
+  --color-accent-foreground: var(--text-primary);
+  --color-destructive: var(--status-cancelled);
+  --color-destructive-foreground: #ffffff;
+  --color-border: var(--border-color);
+  --color-input: var(--border-color);
+  --color-ring: var(--ring-color);
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 10px;
   --bn-colors-editor-text: var(--text-primary);
   --bn-colors-editor-background: transparent;
   --bn-colors-menu-text: var(--text-primary);
@@ -279,17 +364,76 @@
   --bn-colors-disabled-background: var(--bg-surface);
   --bn-colors-shadow: rgba(0, 0, 0, 0.25);
   --bn-colors-border: var(--border-color);
-  --bn-colors-side-menu: var(--text-muted);
+  --bn-colors-side-menu: color-mix(in srgb, var(--text-muted) 70%, transparent);
   color: var(--text-primary);
+}
+
+.photon-blocknote,
+.photon-blocknote:focus,
+.photon-blocknote:focus-visible,
+.photon-blocknote:focus-within,
+.photon-blocknote .bn-root,
+.photon-blocknote .bn-root:focus,
+.photon-blocknote .bn-root:focus-visible,
+.photon-blocknote .bn-root:focus-within,
+.photon-blocknote .bn-editor,
+.photon-blocknote .bn-editor:focus,
+.photon-blocknote .bn-editor:focus-visible,
+.photon-blocknote .bn-editor:focus-within {
+  outline: none;
+  box-shadow: none;
 }
 
 .photon-blocknote .bn-editor {
   min-height: 55vh;
   padding-inline: 0;
   background: transparent;
+  border: 0;
+  color: var(--text-primary);
+}
+
+.photon-blocknote .bn-default-styles {
+  font-size: 0.95rem;
 }
 
 .photon-blocknote .bn-block-content {
-  font-size: 0.95rem;
+  color: var(--text-primary);
   line-height: 1.7;
+}
+
+.photon-blocknote .bn-inline-content {
+  color: inherit;
+}
+
+.photon-blocknote .bn-block-content:has(.ProseMirror-trailingBreak:only-child)::after {
+  color: color-mix(in srgb, var(--text-muted) 72%, transparent);
+}
+
+.photon-blocknote .bn-block-content[data-content-type="heading"] {
+  color: var(--text-primary);
+  font-weight: 700;
+  line-height: 1.15;
+}
+
+.photon-blocknote .bn-block-content[data-content-type="heading"][data-level="1"] {
+  font-size: 2.25rem;
+}
+
+.photon-blocknote .bn-block-content[data-content-type="heading"][data-level="2"] {
+  font-size: 1.75rem;
+}
+
+.photon-blocknote .bn-block-content[data-content-type="heading"][data-level="3"] {
+  font-size: 1.35rem;
+}
+
+.bn-toolbar,
+.bn-menu-dropdown,
+.bn-select,
+[data-slot="popover-content"],
+[data-slot="dropdown-menu-content"],
+[data-slot="select-content"] {
+  background-color: var(--bg-surface);
+  border-color: var(--border-color);
+  color: var(--text-primary);
 }
