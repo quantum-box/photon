@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { createPortal } from 'react-dom'
+import { Link } from '@tanstack/react-router'
 import {
   type Issue,
   type Status,
@@ -8,6 +9,8 @@ import {
   priorityConfig,
   mockUsers,
 } from '../data/mock'
+import { listIssueDocLinks } from '../lib/docs/docsDb'
+import type { DocumentIssueLink } from '../lib/docs/types'
 
 interface DetailPanelProps {
   issue: Issue | null
@@ -18,12 +21,25 @@ interface DetailPanelProps {
 
 export function DetailPanel({ issue, onClose, onUpdateIssue, onDeleteIssue }: DetailPanelProps) {
   const [deleteConfirm, setDeleteConfirm] = useState(false)
+  const [relatedDocs, setRelatedDocs] = useState<DocumentIssueLink[]>([])
 
   // Reset confirm dialog when issue changes
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- A new selected issue must not inherit the previous delete confirmation.
     setDeleteConfirm(false)
   }, [issue?.id])
+
+  useEffect(() => {
+    if (!issue) return
+
+    let cancelled = false
+    void listIssueDocLinks(issue.id, issue.identifier).then((links) => {
+      if (!cancelled) setRelatedDocs(links)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [issue])
 
   if (!issue) return null
 
@@ -286,6 +302,43 @@ export function DetailPanel({ issue, onClose, onUpdateIssue, onDeleteIssue }: De
             >
               {issue.description}
             </div>
+          )}
+        </div>
+
+        <div
+          className="mt-5 border-t pt-4"
+          style={{ borderColor: 'var(--border-color)' }}
+        >
+          <h3
+            className="mb-2 text-xs font-medium uppercase tracking-wider"
+            style={{ color: 'var(--text-muted)' }}
+          >
+            Related docs
+          </h3>
+          {relatedDocs.length > 0 ? (
+            <div className="space-y-2" data-testid="issue-related-docs">
+              {relatedDocs.map((link) => (
+                <Link
+                  key={link.id}
+                  to="/documents/$documentId"
+                  params={{ documentId: link.docId }}
+                  className="block rounded border border-border bg-surface px-3 py-2 text-sm no-underline hover:bg-surface-hover"
+                >
+                  <div className="font-medium text-foreground">
+                    {link.docTitle ?? 'Untitled document'}
+                  </div>
+                  {link.selectedText && (
+                    <div className="mt-1 line-clamp-2 text-xs text-subtle">
+                      {link.selectedText}
+                    </div>
+                  )}
+                </Link>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
+              No related docs yet.
+            </p>
           )}
         </div>
       </div>

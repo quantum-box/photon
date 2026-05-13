@@ -149,4 +149,41 @@ test.describe('Photon shell', () => {
     await expect(page.getByLabel('Document title')).toHaveValue(title)
     await expect(page.getByText('Synced from first browser')).toBeVisible()
   })
+
+  test('links docs and issues from selected editor text', async ({ page }) => {
+    const title = `E2E linked doc ${Date.now()}`
+    const selectedText = `Selected follow-up ${Date.now()}`
+
+    await page.goto('/docs')
+    await page.getByTestId('create-doc').click()
+    await expect(page).toHaveURL(/\/documents\/[^/]+$/, { timeout: 20_000 })
+    await page.getByLabel('Document title').fill(title)
+    await page.keyboard.press('Tab')
+
+    const editor = page.locator('.bn-editor[contenteditable="true"]')
+    await editor.click()
+    await page.keyboard.type(selectedText)
+    await page.keyboard.down('Shift')
+    for (let i = 0; i < selectedText.length; i += 1) {
+      await page.keyboard.press('ArrowLeft')
+    }
+    await page.keyboard.up('Shift')
+
+    await expect(page.getByTestId('doc-selected-text').getByText(selectedText)).toBeVisible()
+    await page.getByTestId('doc-create-issue-from-selection').click()
+
+    const relatedIssues = page.getByTestId('doc-related-issues')
+    await expect(relatedIssues.getByText(/PLT-\d+/)).toBeVisible({ timeout: 15_000 })
+    const issueIdentifier = (await relatedIssues.innerText()).match(/PLT-\d+/)?.[0]
+    expect(issueIdentifier).toBeTruthy()
+
+    await page.goto(`/issues/${issueIdentifier}`)
+    await expect(page.getByTestId('issue-related-docs').getByText(title)).toBeVisible({
+      timeout: 15_000,
+    })
+
+    await page.getByTestId('view-chat').click()
+    await expect(page.getByTestId('chat-document-context').getByText(title)).toBeVisible()
+    await expect(page.getByTestId('chat-document-context').getByText('1 related issues')).toBeVisible()
+  })
 })

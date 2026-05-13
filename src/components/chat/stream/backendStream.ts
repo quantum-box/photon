@@ -226,6 +226,9 @@ async function startSseFetch(
     body: JSON.stringify({
       prompt: chatRequest.prompt,
       messages: chatRequest.messages,
+      context: chatRequest.context?.documentContext
+        ? { document: chatRequest.context.documentContext }
+        : undefined,
       tools: ['issue_search', 'issue_list', 'issue_get', 'issue_create', 'issue_update', 'issue_move'],
     }),
     signal: controller.signal,

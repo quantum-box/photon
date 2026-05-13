@@ -148,6 +148,9 @@ The data shows a healthy system with normal operating parameters. All critical m
 If you need to drill deeper into any particular service or need historical trending data, I can make additional API calls to gather that information.`,
 ]
 
+const DOCUMENT_CONTEXT_RESPONSE =
+  'I have the current document context available, including the active document, selected text, and related issues. I can use that context when creating or searching issues.'
+
 export interface SSECallbacks {
   onChunk: (text: string) => void
   onDone: () => void
@@ -310,13 +313,17 @@ export function startMockSSE(
   const signal = controller.signal
 
   const detectedTools = detectToolTriggers(userMessage)
+  const wantsDocumentContext = context?.documentContext &&
+    /(?:context|document|doc|selected|selection|選択|ドキュメント)/i.test(userMessage)
 
   if (detectedTools.length > 0 && onToolCallStart && onToolCallUpdate) {
     // Execute tools first, then stream response
     executeToolsAndStream(detectedTools, signal, onChunk, onDone, onToolCallStart, onToolCallUpdate, context)
   } else {
     // Normal text-only response
-    const response = SAMPLE_RESPONSES[Math.floor(Math.random() * SAMPLE_RESPONSES.length)]
+    const response = wantsDocumentContext
+      ? DOCUMENT_CONTEXT_RESPONSE
+      : SAMPLE_RESPONSES[Math.floor(Math.random() * SAMPLE_RESPONSES.length)]
     streamText(response, signal, onChunk, onDone)
   }
 

@@ -45,6 +45,14 @@ describe('backend chat stream adapter', () => {
 
       if (url === '/api/agent/chat/stream') {
         expect(init?.method).toBe('POST')
+        expect(JSON.parse(String(init?.body))).toMatchObject({
+          context: {
+            document: {
+              docId: 'doc-1',
+              selectedText: 'Selected text',
+            },
+          },
+        })
         return sseResponse([
           'event: message_delta\ndata: {"delta":"Looking up issues. "}\n\n',
           'event: tool_call_request\ndata: {"id":"call-1","type":"issue_list","args":{"query":"backend","limit":1}}\n\n',
@@ -86,6 +94,13 @@ describe('backend chat stream adapter', () => {
           prompt: 'list backend issues',
           messages: [{ role: 'user', content: 'list backend issues' }],
           context: {
+            documentContext: {
+              docId: 'doc-1',
+              title: 'Spec doc',
+              url: '/documents/doc-1',
+              selectedText: 'Selected text',
+              relatedIssues: [],
+            },
             issueTools: {
               issues: [],
               syncIssue: vi.fn(),

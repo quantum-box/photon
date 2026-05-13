@@ -3,6 +3,7 @@
  */
 
 import type { Issue } from '../../../data/mock'
+import type { WorkspaceDocContext } from '../../../lib/docs/workspaceContext'
 
 export type ToolType =
   | 'web_search'
@@ -47,6 +48,7 @@ export interface IssueToolResponse {
 
 export interface ToolRuntimeContext {
   issueTools?: IssueToolRuntime
+  documentContext?: WorkspaceDocContext | null
 }
 
 // Web search specific types
