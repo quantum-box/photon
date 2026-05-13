@@ -10,6 +10,7 @@ export interface AppKitConfig {
     storageNamespace: string
   }
   workspace: {
+    id: string
     name: string
     initial: string
     primaryNav: Array<{ id: string; label: string; icon: string }>
@@ -26,6 +27,8 @@ export interface AppKitConfig {
   }
   sync: {
     backend: SyncBackend
+    workspaceId: string
+    issuesRoomId: string
     yjsArrayName: string
     persistenceKey: string
     websocketPath: string
@@ -89,6 +92,23 @@ export function namespacedKey(namespace: string, suffix: string): string {
   return `${namespace}-${suffix}`
 }
 
+/**
+ * Build a sync relay room id following the convention recorded in
+ * ADR-0001: `workspace:{workspaceId}:{surface}`.
+ *
+ * `surface` is the in-workspace collection name. For composite surfaces such
+ * as `doc:{docId}` or `chat:{threadId}`, callers pass the full segment, e.g.
+ * `buildRoomId(ws, 'doc:42')`.
+ */
+export function buildRoomId(workspaceId: string, surface: string): string {
+  return `workspace:${workspaceId}:${surface}`
+}
+
+function appendRoomQuery(base: string, roomId: string): string {
+  const separator = base.includes('?') ? '&' : '?'
+  return `${base}${separator}room=${roomId}`
+}
+
 const viteEnv = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env ?? {}
 const deploymentMode = resolveDeploymentMode(viteEnv.VITE_PHOTON_DEPLOYMENT_MODE)
 const syncBackend = resolveSyncBackend(deploymentMode, viteEnv.VITE_PHOTON_SYNC_BACKEND)
@@ -101,10 +121,15 @@ const appProfile = {
   displayName: 'Photon',
   storageNamespace: 'photon',
 } as const
+const DEFAULT_WORKSPACE_ID = 'photon-default'
+const issuesRoomId = buildRoomId(DEFAULT_WORKSPACE_ID, 'issues')
+const syncWebsocketPath = appendRoomQuery('/ws', issuesRoomId)
+const websocketBaseUrl = viteEnv.VITE_PHOTON_SYNC_WS_URL
 
 export const appKitConfig: AppKitConfig = {
   app: appProfile,
   workspace: {
+    id: DEFAULT_WORKSPACE_ID,
     name: 'Photon',
     initial: 'P',
     primaryNav: [
@@ -130,10 +155,12 @@ export const appKitConfig: AppKitConfig = {
   },
   sync: {
     backend: syncBackend,
+    workspaceId: DEFAULT_WORKSPACE_ID,
+    issuesRoomId,
     yjsArrayName: 'issues',
-    persistenceKey: namespacedKey(appProfile.storageNamespace, 'issues'),
-    websocketPath: '/ws',
-    websocketUrl: viteEnv.VITE_PHOTON_SYNC_WS_URL,
+    persistenceKey: issuesRoomId,
+    websocketPath: syncWebsocketPath,
+    websocketUrl: websocketBaseUrl ? appendRoomQuery(websocketBaseUrl, issuesRoomId) : undefined,
     roomParam: 'room',
   },
   server: {
@@ -145,7 +172,7 @@ export const appKitConfig: AppKitConfig = {
     enabled: true,
     runtime: frontendWorkerRuntime,
     healthPath: '/api/health',
-    websocketPath: '/ws',
+    websocketPath: syncWebsocketPath,
     role: 'frontend-edge-companion',
   },
   storage: {
