@@ -25,6 +25,11 @@ export interface AppKitConfig {
     productName: string
     disclaimer: string
   }
+  docs: {
+    pgliteDataDir: string
+    defaultTitle: string
+    yjsArrayName: string
+  }
   sync: {
     backend: SyncBackend
     workspaceId: string
@@ -33,6 +38,7 @@ export interface AppKitConfig {
     persistenceKey: string
     websocketPath: string
     websocketUrl?: string
+    websocketBaseUrl?: string
     roomParam: string
   }
   server: {
@@ -109,6 +115,14 @@ function appendRoomQuery(base: string, roomId: string): string {
   return `${base}${separator}room=${roomId}`
 }
 
+export function buildSyncWebsocketPath(roomId: string): string {
+  return appendRoomQuery('/ws', roomId)
+}
+
+export function buildConfiguredSyncWebsocketUrl(roomId: string): string | undefined {
+  return websocketBaseUrl ? appendRoomQuery(websocketBaseUrl, roomId) : undefined
+}
+
 const viteEnv = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env ?? {}
 const deploymentMode = resolveDeploymentMode(viteEnv.VITE_PHOTON_DEPLOYMENT_MODE)
 const syncBackend = resolveSyncBackend(deploymentMode, viteEnv.VITE_PHOTON_SYNC_BACKEND)
@@ -153,14 +167,20 @@ export const appKitConfig: AppKitConfig = {
     productName: 'Photon Chat',
     disclaimer: 'Photon AI can make mistakes. Verify important information.',
   },
+  docs: {
+    pgliteDataDir: 'idb://photon-docs',
+    defaultTitle: 'Untitled doc',
+    yjsArrayName: 'blocks',
+  },
   sync: {
     backend: syncBackend,
     workspaceId: DEFAULT_WORKSPACE_ID,
     issuesRoomId,
     yjsArrayName: 'issues',
     persistenceKey: issuesRoomId,
-    websocketPath: syncWebsocketPath,
-    websocketUrl: websocketBaseUrl ? appendRoomQuery(websocketBaseUrl, issuesRoomId) : undefined,
+    websocketPath: buildSyncWebsocketPath(issuesRoomId),
+    websocketUrl: buildConfiguredSyncWebsocketUrl(issuesRoomId),
+    websocketBaseUrl,
     roomParam: 'room',
   },
   server: {

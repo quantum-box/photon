@@ -15,6 +15,7 @@ import { KanbanView } from './components/KanbanView'
 import { DetailPanel } from './components/DetailPanel'
 import { CreateIssueModal } from './components/CreateIssueModal'
 import { ChatView } from './components/chat/ChatView'
+import { DocsView } from './components/docs/DocsView'
 import { IssuesProvider, useIssues } from './contexts/IssuesContext'
 import type { Status, Issue } from './data/mock'
 import type { SortingState } from '@tanstack/react-table'
@@ -407,6 +408,30 @@ function ChatPage() {
   )
 }
 
+// ── Documents Route (/docs, /documents/$documentId) ───────────
+
+const docsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: 'docs',
+  component: DocsPage,
+})
+
+const documentDetailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: 'documents/$documentId',
+  component: DocsPage,
+})
+
+function DocsPage() {
+  const detailMatch = useMatch({
+    from: documentDetailRoute.id,
+    shouldThrow: false,
+  })
+  const selectedDocId = (detailMatch?.params as { documentId?: string })?.documentId ?? null
+
+  return <DocsView selectedDocId={selectedDocId} />
+}
+
 // ── Route Tree & Router ───────────────────────────────────────
 
 const routeTree = rootRoute.addChildren([
@@ -414,6 +439,8 @@ const routeTree = rootRoute.addChildren([
   issuesRoute.addChildren([issuesIndexRoute, issueDetailRoute]),
   kanbanRoute,
   chatRoute,
+  docsRoute,
+  documentDetailRoute,
 ])
 
 export const router = createRouter({ routeTree })

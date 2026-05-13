@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     net::SocketAddr,
     sync::{
         atomic::{AtomicI64, AtomicUsize, Ordering},
@@ -223,6 +224,11 @@ const DEFAULT_ROOM_ID: &str = "default";
 const YJS_COMPACTION_THRESHOLD: i64 = 100;
 
 pub struct AppState {
+    pub db: SqlitePool,
+    pub rooms: RwLock<HashMap<String, Arc<RoomState>>>,
+}
+
+pub struct RoomState {
     pub db: SqlitePool,
     pub doc: RwLock<Doc>,
     pub broadcast_tx: broadcast::Sender<Vec<u8>>,
@@ -452,11 +458,71 @@ async fn delete_issue(
 // WebSocket — yrs CRDT sync
 // ---------------------------------------------------------------------------
 
-async fn ws_handler(ws: WebSocketUpgrade, State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle_ws(socket, state))
+async fn ws_handler(
+    ws: WebSocketUpgrade,
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    let room_id = params
+        .get("room")
+        .filter(|room| !room.trim().is_empty())
+        .cloned()
+        .unwrap_or_else(|| DEFAULT_ROOM_ID.to_string());
+
+    ws.on_upgrade(move |socket| async move {
+        match get_or_create_room(&state, &room_id).await {
+            Ok(room) => handle_ws(socket, room).await,
+            Err(err) => {
+                tracing::error!(room = %room_id, error = %err, "Failed to initialize Yjs room");
+            }
+        }
+    })
 }
 
-async fn handle_ws(socket: WebSocket, state: Arc<AppState>) {
+async fn get_or_create_room(
+    state: &Arc<AppState>,
+    room_id: &str,
+) -> Result<Arc<RoomState>, sqlx::Error> {
+    if let Some(room) = state.rooms.read().await.get(room_id).cloned() {
+        return Ok(room);
+    }
+
+    let mut rooms = state.rooms.write().await;
+    if let Some(room) = rooms.get(room_id).cloned() {
+        return Ok(room);
+    }
+
+    let (doc, max_seq) = hydrate_yjs_doc(&state.db, room_id).await?;
+    let (broadcast_tx, _) = broadcast::channel::<Vec<u8>>(256);
+    let (presence_tx, _) = broadcast::channel::<String>(256);
+    let room = Arc::new(RoomState {
+        db: state.db.clone(),
+        doc: RwLock::new(doc),
+        broadcast_tx,
+        presence_tx,
+        active_connections: AtomicUsize::new(0),
+        room_id: room_id.to_string(),
+        next_seq: AtomicI64::new(max_seq),
+    });
+
+    rooms.insert(room_id.to_string(), room.clone());
+    Ok(room)
+}
+
+fn is_awareness_message(text: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(text)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("type")
+                .and_then(|kind| kind.as_str())
+                .map(str::to_owned)
+        })
+        .as_deref()
+        == Some("awareness")
+}
+
+async fn handle_ws(socket: WebSocket, state: Arc<RoomState>) {
     let (mut ws_sender, mut ws_receiver) = socket.split();
     let active_count = state.active_connections.fetch_add(1, Ordering::SeqCst) + 1;
 
@@ -516,6 +582,10 @@ async fn handle_ws(socket: WebSocket, state: Arc<AppState>) {
                         tracing::error!(error = %err, "Failed to persist yjs update");
                     }
                 },
+                Message::Text(text) if is_awareness_message(&text) => {
+                    let _ = recv_state.presence_tx.send(text);
+                }
+                Message::Text(_) => {}
                 Message::Close(_) => break,
                 _ => {}
             }
@@ -741,7 +811,7 @@ async fn hydrate_yjs_doc(pool: &SqlitePool, room_id: &str) -> Result<(Doc, i64),
 /// Returns `Ok(true)` if the update was applied + persisted (caller should
 /// broadcast); `Ok(false)` if the update was malformed and dropped.
 async fn apply_and_persist_update(
-    state: &Arc<AppState>,
+    state: &Arc<RoomState>,
     update_bytes: &[u8],
 ) -> Result<bool, sqlx::Error> {
     // Decode + apply happens entirely inside this sync block. yrs values
@@ -815,7 +885,7 @@ async fn apply_and_persist_update(
 /// count if a writer is between releasing the write lock and its
 /// `fetch_add`; the orphan log row is harmless because yrs apply is
 /// idempotent on rehydrate.
-async fn compact_yjs_log(state: &Arc<AppState>) -> Result<(), sqlx::Error> {
+async fn compact_yjs_log(state: &Arc<RoomState>) -> Result<(), sqlx::Error> {
     let (snapshot_bytes, boundary_seq) = {
         let doc_guard = state.doc.read().await;
         let txn = doc_guard.transact();
@@ -988,20 +1058,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     init_db(&pool).await?;
     seed_if_empty(&pool).await?;
 
-    let room_id = DEFAULT_ROOM_ID.to_string();
-    let (doc, max_seq) = hydrate_yjs_doc(&pool, &room_id).await?;
-
-    let (broadcast_tx, _) = broadcast::channel::<Vec<u8>>(256);
-    let (presence_tx, _) = broadcast::channel::<String>(256);
-
     let state = Arc::new(AppState {
         db: pool,
-        doc: RwLock::new(doc),
-        broadcast_tx,
-        presence_tx,
-        active_connections: AtomicUsize::new(0),
-        room_id,
-        next_seq: AtomicI64::new(max_seq),
+        rooms: RwLock::new(HashMap::new()),
     });
 
     let cors = CorsLayer::new()
@@ -1061,17 +1120,9 @@ mod tests {
 
         init_db(&pool).await.unwrap();
 
-        let (broadcast_tx, _) = broadcast::channel::<Vec<u8>>(256);
-        let (presence_tx, _) = broadcast::channel::<String>(256);
-
         let state = Arc::new(AppState {
             db: pool,
-            doc: RwLock::new(Doc::new()),
-            broadcast_tx,
-            presence_tx,
-            active_connections: AtomicUsize::new(0),
-            room_id: DEFAULT_ROOM_ID.to_string(),
-            next_seq: AtomicI64::new(0),
+            rooms: RwLock::new(HashMap::new()),
         });
 
         let app = Router::new()
@@ -1294,10 +1345,10 @@ mod tests {
 
     use yrs::Map;
 
-    fn make_test_state(pool: SqlitePool) -> Arc<AppState> {
+    fn make_test_state(pool: SqlitePool) -> Arc<RoomState> {
         let (broadcast_tx, _) = broadcast::channel::<Vec<u8>>(256);
         let (presence_tx, _) = broadcast::channel::<String>(256);
-        Arc::new(AppState {
+        Arc::new(RoomState {
             db: pool,
             doc: RwLock::new(Doc::new()),
             broadcast_tx,

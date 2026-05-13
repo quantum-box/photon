@@ -115,7 +115,10 @@ export class PhotonSyncRoom extends DurableObject<Env> {
   }
 
   async webSocketMessage(sender: WebSocket, message: string | ArrayBuffer | ArrayBufferView) {
-    if (typeof message === 'string') return
+    if (typeof message === 'string') {
+      this.broadcastAwareness(sender, message)
+      return
+    }
 
     const bytes = toUint8Array(message)
     const accepted = await this.tryApplyAndPersist(bytes)
@@ -287,6 +290,21 @@ export class PhotonSyncRoom extends DurableObject<Env> {
 
     for (const socket of sockets) {
       socket.send(message)
+    }
+  }
+
+  private broadcastAwareness(sender: WebSocket, message: string) {
+    try {
+      const parsed = JSON.parse(message) as { type?: string }
+      if (parsed.type !== 'awareness') return
+    } catch {
+      return
+    }
+
+    for (const socket of this.ctx.getWebSockets()) {
+      if (socket !== sender) {
+        socket.send(message)
+      }
     }
   }
 }

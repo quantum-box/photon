@@ -9,6 +9,7 @@ import { appKitConfig } from '../app/kitConfig'
 const views = [
   { id: 'table' as const, label: 'Table', to: '/issues' as const },
   { id: 'kanban' as const, label: 'Board', to: '/kanban' as const },
+  { id: 'docs' as const, label: 'Docs', to: '/docs' as const },
   { id: 'chat' as const, label: 'Chat', to: '/chat' as const },
 ] as const
 
@@ -100,6 +101,8 @@ export function Sidebar() {
 
   const currentView = pathname.startsWith('/kanban')
     ? 'kanban'
+    : pathname.startsWith('/docs') || pathname.startsWith('/documents')
+      ? 'docs'
     : pathname.startsWith('/chat')
       ? 'chat'
       : 'table'
@@ -145,6 +148,7 @@ export function Sidebar() {
           to={view.to}
           search={
             view.id !== 'chat' && statusFilter
+            && view.id !== 'docs'
               ? { status: statusFilter }
               : {}
           }

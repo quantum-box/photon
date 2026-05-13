@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   appKitConfig,
   buildRoomId,
+  buildSyncWebsocketPath,
   namespacedKey,
   resolveAppServerBackend,
   resolveDeploymentMode,
@@ -29,6 +30,8 @@ describe('appKitConfig', () => {
     expect(appKitConfig.sync.persistenceKey).toBe('workspace:photon-default:issues')
     expect(appKitConfig.sync.yjsArrayName).toBe('issues')
     expect(appKitConfig.sync.websocketPath).toBe('/ws?room=workspace:photon-default:issues')
+    expect(appKitConfig.docs.pgliteDataDir).toBe('idb://photon-docs')
+    expect(appKitConfig.docs.yjsArrayName).toBe('blocks')
     expect(appKitConfig.sync.roomParam).toBe('room')
     expect(appKitConfig.server.issuesPath).toBe('/api/issues')
   })
@@ -84,5 +87,9 @@ describe('buildRoomId', () => {
   it('supports composite surfaces such as docs and chat threads', () => {
     expect(buildRoomId('acme', 'doc:42')).toBe('workspace:acme:doc:42')
     expect(buildRoomId('acme', 'chat:general')).toBe('workspace:acme:chat:general')
+  })
+
+  it('builds room-scoped websocket paths', () => {
+    expect(buildSyncWebsocketPath('workspace:acme:doc:42')).toBe('/ws?room=workspace:acme:doc:42')
   })
 })

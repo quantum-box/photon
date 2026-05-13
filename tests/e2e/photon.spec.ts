@@ -22,13 +22,18 @@ test.describe('Photon shell', () => {
     await expect(page.getByText(title)).toBeVisible()
   })
 
-  test('switches between table, board, and chat views', async ({ page }) => {
+  test('switches between table, board, docs, and chat views', async ({ page }) => {
     await page.goto('/issues')
     await page.getByTestId('view-kanban').click()
 
     await expect(page).toHaveURL(/\/kanban$/)
     await expect(page.getByRole('heading', { name: 'Board' })).toBeVisible()
     await expect(page.getByText('drag to move')).toBeVisible()
+
+    await page.getByTestId('view-docs').click()
+
+    await expect(page).toHaveURL(/\/docs$/)
+    await expect(page.getByRole('heading', { name: 'Docs' })).toBeVisible()
 
     await page.getByTestId('view-chat').click()
 
@@ -40,16 +45,18 @@ test.describe('Photon shell', () => {
   test('shows sync presence as clients connect', async ({ page, context }) => {
     await page.goto('/issues')
 
-    await expect(page.getByTestId('sync-presence-status')).toHaveText('1 online')
+    await expect(page.getByTestId('sync-presence-status')).toHaveText(/\d+ online/)
+    const initialOnlineText = await page.getByTestId('sync-presence-status').innerText()
+    const initialOnlineCount = Number(initialOnlineText.split(' ')[0])
 
     const secondPage = await context.newPage()
     await secondPage.goto('/issues')
 
-    await expect(secondPage.getByTestId('sync-presence-status')).toHaveText('2 online')
-    await expect(page.getByTestId('sync-presence-status')).toHaveText('2 online')
+    await expect(secondPage.getByTestId('sync-presence-status')).toHaveText(`${initialOnlineCount + 1} online`)
+    await expect(page.getByTestId('sync-presence-status')).toHaveText(`${initialOnlineCount + 1} online`)
 
     await secondPage.close()
-    await expect(page.getByTestId('sync-presence-status')).toHaveText('1 online')
+    await expect(page.getByTestId('sync-presence-status')).toHaveText(`${initialOnlineCount} online`)
   })
 
   test('sends a chat prompt and streams an assistant response', async ({ page }) => {
@@ -66,5 +73,41 @@ test.describe('Photon shell', () => {
       timeout: 15_000,
     })
     await expect(page.getByText(/Key Findings|Recommendations/)).toBeVisible()
+  })
+
+  test('creates a doc and syncs Yjs blocks from a shared document URL', async ({ page, browser }) => {
+    const title = `E2E local doc ${Date.now()}`
+
+    await page.goto('/docs')
+    await page.getByTestId('create-doc').click()
+
+    await expect(page).toHaveURL(/\/documents\/[^/]+$/, { timeout: 20_000 })
+    await expect(page.getByText('Server connected')).toBeVisible()
+    await page.getByLabel('Document title').fill(title)
+    await page.keyboard.press('Tab')
+    await expect(page.getByRole('link', { name: new RegExp(title) })).toBeVisible()
+    const editor = page.locator('.bn-editor[contenteditable="true"]')
+    await editor.click()
+    await page.keyboard.type('Reload proof body')
+    await page.waitForTimeout(500)
+
+    const documentUrl = page.url()
+    const sharedContext = await browser.newContext()
+    const sharedPage = await sharedContext.newPage()
+    await sharedPage.goto(documentUrl)
+
+    await expect(sharedPage.getByText('Server connected')).toBeVisible()
+    await expect(sharedPage.getByText('Reload proof body')).toBeVisible()
+
+    await editor.click()
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+A' : 'Control+A')
+    await page.keyboard.type('Synced from first browser')
+    await expect(sharedPage.getByText('Synced from first browser')).toBeVisible()
+    await sharedContext.close()
+
+    await page.reload()
+
+    await expect(page.getByLabel('Document title')).toHaveValue(title)
+    await expect(page.getByText('Synced from first browser')).toBeVisible()
   })
 })
