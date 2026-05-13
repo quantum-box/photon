@@ -59,6 +59,25 @@ test.describe('Photon shell', () => {
     await expect(page.getByTestId('sync-presence-status')).toHaveText(`${initialOnlineCount} online`)
   })
 
+  test('syncs issue creation between browser tabs', async ({ page, context }) => {
+    const title = `E2E synced issue ${Date.now()}`
+
+    await page.goto('/issues')
+    const secondPage = await context.newPage()
+    await secondPage.goto('/issues')
+
+    await page.getByTestId('open-create-issue').click()
+    await page.getByLabel('Title').fill(title)
+    await page.getByLabel('Description').fill('Created in the first tab and observed in the second tab')
+    await page.getByTestId('create-issue-submit').click()
+    await expect(page.getByTestId('create-issue-modal')).toBeHidden()
+
+    await secondPage.getByPlaceholder('Filter issues...').fill(title)
+    await expect(secondPage.getByText(title).first()).toBeVisible({ timeout: 15_000 })
+
+    await secondPage.close()
+  })
+
   test('sends a chat prompt and streams an assistant response', async ({ page }) => {
     await page.goto('/chat')
 
@@ -174,6 +193,50 @@ test.describe('Photon shell', () => {
 
     await expect(page.getByLabel('Document title')).toHaveValue(title)
     await expect(page.getByText('Synced from first browser')).toBeVisible()
+  })
+
+  test('reconnects a document after an offline edit and syncs it to another client', async ({ browser }) => {
+    const title = `E2E reconnect doc ${Date.now()}`
+    const initialText = `Online baseline ${Date.now()}`
+    const offlineText = `Offline reconnect proof ${Date.now()}`
+
+    const editingContext = await browser.newContext()
+    const editingPage = await editingContext.newPage()
+    await editingPage.goto('/docs')
+    await editingPage.getByTestId('create-doc').click()
+
+    await expect(editingPage).toHaveURL(/\/documents\/[^/]+$/, { timeout: 20_000 })
+    await expect(editingPage.getByText('Server connected')).toBeVisible()
+    await editingPage.getByLabel('Document title').fill(title)
+    await editingPage.keyboard.press('Tab')
+
+    const editor = editingPage.locator('.bn-editor[contenteditable="true"]')
+    await editor.click()
+    await editingPage.keyboard.type(initialText)
+    await expect(editingPage.getByText(initialText)).toBeVisible()
+
+    const documentUrl = editingPage.url()
+    const verifierContext = await browser.newContext()
+    const verifierPage = await verifierContext.newPage()
+    await verifierPage.goto(documentUrl)
+    await expect(verifierPage.getByText('Server connected')).toBeVisible()
+    await expect(verifierPage.getByText(initialText)).toBeVisible()
+
+    await editingContext.setOffline(true)
+    await editingPage.evaluate(() => window.__photonTestHooks?.closeDocumentSockets?.())
+    await expect(editingPage.getByText(/Server connecting|Local only/)).toBeVisible({ timeout: 15_000 })
+
+    await editor.click()
+    await editingPage.keyboard.type(` ${offlineText}`)
+    await expect(editingPage.getByText(offlineText)).toBeVisible()
+
+    await editingContext.setOffline(false)
+    await editingPage.evaluate(() => window.dispatchEvent(new Event('online')))
+    await expect(editingPage.getByText('Server connected')).toBeVisible({ timeout: 20_000 })
+    await expect(verifierPage.getByText(offlineText)).toBeVisible({ timeout: 20_000 })
+
+    await verifierContext.close()
+    await editingContext.close()
   })
 
   test('links docs and issues from selected editor text', async ({ page }) => {

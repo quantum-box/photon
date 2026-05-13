@@ -55,6 +55,15 @@ function findYMap(id: string): Y.Map<string> | null {
   return null
 }
 
+function removeDuplicateYIssues(id: string, keep: Y.Map<string>) {
+  for (let i = issuesArray.length - 1; i >= 0; i--) {
+    const ymap = issuesArray.get(i)
+    if (ymap !== keep && ymap.get('id') === id) {
+      issuesArray.delete(i, 1)
+    }
+  }
+}
+
 function writeIssueToYMap(ymap: Y.Map<string>, issue: Issue) {
   ymap.set('id', issue.id)
   ymap.set('identifier', issue.identifier)
@@ -73,6 +82,7 @@ function upsertYIssue(issue: Issue) {
   const existing = findYMap(issue.id)
   if (existing) {
     writeIssueToYMap(existing, issue)
+    removeDuplicateYIssues(issue.id, existing)
     return
   }
 
