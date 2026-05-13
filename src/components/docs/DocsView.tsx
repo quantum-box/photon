@@ -181,7 +181,7 @@ function DocumentEditor({
 
       <div className="min-h-0 flex-1 overflow-y-auto px-3 py-4 md:px-8">
         <div className="mx-auto max-w-3xl">
-          {!ready ? (
+          {!ready || !collab ? (
             <div className="shimmer rounded bg-surface px-3 py-2 text-sm text-subtle">
               Loading document...
             </div>
@@ -200,16 +200,7 @@ export function DocsView({ selectedDocId }: DocsViewProps) {
   const selectedDoc = useMemo(
     () => {
       const existingDoc = docs.find((doc) => doc.id === selectedDocId)
-      if (existingDoc || !selectedDocId) return existingDoc ?? null
-
-      const now = new Date().toISOString()
-      return {
-        id: selectedDocId,
-        title: 'Shared document',
-        workspaceId: appKitConfig.workspace.id,
-        createdAt: now,
-        updatedAt: now,
-      }
+      return existingDoc ?? null
     },
     [docs, selectedDocId]
   )
@@ -249,6 +240,10 @@ export function DocsView({ selectedDocId }: DocsViewProps) {
         ) : !ready ? (
           <div className="flex flex-1 items-center justify-center text-sm text-subtle">
             Loading docs...
+          </div>
+        ) : selectedDocId ? (
+          <div className="flex flex-1 items-center justify-center text-sm text-subtle">
+            Loading document...
           </div>
         ) : (
           <div className="flex flex-1 items-center justify-center px-6">

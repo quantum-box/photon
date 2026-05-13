@@ -260,28 +260,27 @@ export function createDocumentCollaboration(
   }
 
   const synced = new Promise<void>((resolve) => {
-    persistence.once('synced', () => {
-      let resolved = false
-      const finishInitialSync = () => {
-        if (resolved) return
-        resolved = true
-        clearTimeout(fallbackTimer)
-        doc.off('update', handler)
-        doc.transact(() => seedDefaultBlocks(blocks))
-        resolve()
-      }
+    let resolved = false
+    const fallbackTimer = setTimeout(() => {
+      finishInitialSync()
+    }, 1200)
 
-      const fallbackTimer = setTimeout(() => {
-        finishInitialSync()
-      }, 1200)
+    const finishInitialSync = () => {
+      if (resolved) return
+      resolved = true
+      clearTimeout(fallbackTimer)
+      doc.off('update', handler)
+      doc.transact(() => seedDefaultBlocks(blocks))
+      resolve()
+    }
 
-      const handler = (_update: Uint8Array, origin: unknown) => {
-        if (origin !== WS_REMOTE) return
-        finishInitialSync()
-      }
+    const handler = (_update: Uint8Array, origin: unknown) => {
+      if (origin !== WS_REMOTE) return
+      finishInitialSync()
+    }
 
-      doc.on('update', handler)
-    })
+    persistence.once('synced', finishInitialSync)
+    doc.on('update', handler)
   })
 
   connectWs()

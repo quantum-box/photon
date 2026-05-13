@@ -6,16 +6,21 @@ import {
 } from './docYjs'
 
 export function useDocumentCollaboration(docId: string) {
+  const [collab, setCollab] = useState<DocumentCollaboration | null>(null)
   const [syncStatus, setSyncStatus] = useState<DocumentSyncStatus>('connecting')
-  const [collab] = useState<DocumentCollaboration>(() =>
-    createDocumentCollaboration(docId, setSyncStatus)
-  )
   const [ready, setReady] = useState(false)
 
   useEffect(() => {
     let disposed = false
+    const nextCollab = createDocumentCollaboration(docId, setSyncStatus)
 
-    collab.synced.then(() => {
+    queueMicrotask(() => {
+      if (!disposed) {
+        setCollab(nextCollab)
+      }
+    })
+
+    nextCollab.synced.then(() => {
       if (!disposed) {
         setReady(true)
       }
@@ -23,16 +28,16 @@ export function useDocumentCollaboration(docId: string) {
 
     return () => {
       disposed = true
-      collab.destroy()
+      nextCollab.destroy()
     }
-  }, [collab])
+  }, [docId])
 
   return useMemo(
     () => ({
       collab,
       ready,
       syncStatus,
-      roomId: collab.roomId,
+      roomId: collab?.roomId ?? null,
     }),
     [collab, ready, syncStatus]
   )
