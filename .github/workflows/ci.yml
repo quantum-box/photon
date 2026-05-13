@@ -32,6 +32,9 @@ jobs:
       - name: Type check
         run: npm run type-check
 
+      - name: Worker type check
+        run: npm run type-check:worker
+
       - name: Unit tests
         run: npm test
 

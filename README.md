@@ -21,6 +21,38 @@ npm run dev:cf-sync -- --host 127.0.0.1
 See [Cloudflare Sync Backend](docs/cloudflare-sync.md) for the Durable Objects
 runtime model and deployment notes.
 
+## Verification
+
+Run the release gates locally from the repository root unless a command includes
+its own directory change:
+
+```bash
+npm run type-check
+npm test
+npm run build
+npm run type-check:worker
+npm run test:e2e
+cd packages/server && cargo test
+```
+
+`npm run test:e2e` starts the Rust server and Vite dev server through
+Playwright. For manual debugging, start the same services directly:
+
+```bash
+cd packages/server && cargo run
+npm run dev -- --host 127.0.0.1
+```
+
+Worker sync checks use the Cloudflare local runtime:
+
+```bash
+npm run worker:dev
+npm run dev:cf-sync -- --host 127.0.0.1
+```
+
+See [Photon v0.2 Release Checklist](docs/photon-v0.2-release-checklist.md) for
+the workspace-flow gates and residual release risks.
+
 ## Server Deploy
 
 The Rust application server can be built as a container and deployed to Cloud
@@ -33,17 +65,6 @@ environment wiring.
 Photon also builds as a Tauri desktop and mobile app. See
 [App Platform Builds](docs/app-platforms.md) for desktop release, Android, and
 iOS commands.
-
-## Checks
-
-```bash
-npm run type-check
-npm run type-check:worker
-npm test
-npm run build
-npm run tauri:build
-cd packages/server && cargo test
-```
 
 ## Original Vite Notes
 

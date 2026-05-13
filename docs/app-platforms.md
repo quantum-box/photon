@@ -22,6 +22,12 @@ wss://photon-sync.quantum-box.workers.dev/ws
 The production Worker endpoint is stored in `.env.production` so Vite builds
 work from macOS, Linux, and Windows shells.
 
+Web release candidates must pass `npm run build` and keep API/WebSocket
+endpoints explicit through Vite environment variables or `src/app/kitConfig.ts`.
+Tauri release candidates must pass the CI Linux smoke build and should use
+`tauri-local-file-cache` for desktop attachment byte references. Synced
+attachment metadata must not contain absolute local filesystem paths.
+
 Release following for apps that should avoid the npm registry is documented in
 [`release-following.md`](./release-following.md).
 

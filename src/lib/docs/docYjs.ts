@@ -70,6 +70,15 @@ const WS_REMOTE = 'docs-ws-remote'
 const AWARENESS_REMOTE = 'docs-awareness-remote'
 const LOCAL_USER_KEY = 'photon:docs:collaboration-user'
 const MAX_BACKOFF = 30_000
+const activeDocumentSockets = new Set<WebSocket>()
+
+declare global {
+  interface Window {
+    __photonTestHooks?: {
+      closeDocumentSockets?: () => void
+    }
+  }
+}
 
 type SyncTextMessage =
   | { type: 'presence'; onlineCount: number }
@@ -140,6 +149,19 @@ function getLocalUser(): { name: string; color: string } {
   return fallback
 }
 
+function closeActiveDocumentSockets() {
+  for (const socket of activeDocumentSockets) {
+    socket.close()
+  }
+}
+
+if (import.meta.env.DEV && typeof window !== 'undefined') {
+  window.__photonTestHooks = {
+    ...window.__photonTestHooks,
+    closeDocumentSockets: closeActiveDocumentSockets,
+  }
+}
+
 export function createDocumentCollaboration(
   docId: string,
   onStatus?: (status: DocumentSyncStatus) => void
@@ -156,7 +178,6 @@ export function createDocumentCollaboration(
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null
   let backoff = 1000
   let disposed = false
-  let remoteSynced = false
 
   function setStatus(status: DocumentSyncStatus) {
     onStatus?.(status)
@@ -208,6 +229,8 @@ export function createDocumentCollaboration(
     const socket = new WebSocket(getWsUrl(roomId))
     socket.binaryType = 'arraybuffer'
     ws = socket
+    activeDocumentSockets.add(socket)
+    let isFirstRemoteUpdate = true
 
     socket.addEventListener('open', () => {
       backoff = 1000
@@ -232,8 +255,8 @@ export function createDocumentCollaboration(
       const data = new Uint8Array(event.data as ArrayBuffer)
       Y.applyUpdate(doc, data, WS_REMOTE)
 
-      if (!remoteSynced) {
-        remoteSynced = true
+      if (isFirstRemoteUpdate) {
+        isFirstRemoteUpdate = false
         const localUpdate = Y.encodeStateAsUpdate(doc)
         if (socket.readyState === WebSocket.OPEN) {
           socket.send(localUpdate)
@@ -242,6 +265,7 @@ export function createDocumentCollaboration(
     })
 
     socket.addEventListener('close', () => {
+      activeDocumentSockets.delete(socket)
       doc.off('update', onDocUpdate)
       ws = null
       setStatus('offline')
