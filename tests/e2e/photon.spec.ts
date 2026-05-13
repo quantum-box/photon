@@ -75,6 +75,45 @@ test.describe('Photon shell', () => {
     await expect(page.getByText(/Key Findings|Recommendations/)).toBeVisible()
   })
 
+  test('creates and searches issues from chat tools', async ({ page }) => {
+    const title = `Chat command issue ${Date.now()}`
+
+    await page.goto('/chat')
+    await page.getByTestId('chat-message-input').fill(`create issue "${title}"`)
+    await page.getByTestId('chat-send').click()
+
+    await expect(page.getByTestId('issue-tool-result').getByText('Create Issue')).toBeVisible()
+    await expect(page.getByTestId('issue-tool-result').getByText(title)).toBeVisible({
+      timeout: 15_000,
+    })
+    await expect(page.getByText('Created PLT-')).toBeVisible()
+    const createResultText = await page.getByTestId('issue-tool-result').innerText()
+    const identifier = createResultText.match(/PLT-\d+/)?.[0]
+    expect(identifier).toBeTruthy()
+    const issueIdentifier = identifier ?? ''
+
+    await page.getByTestId('chat-message-input').fill(`move ${issueIdentifier} to done`)
+    await page.getByTestId('chat-send').click()
+
+    await expect(page.getByTestId('issue-tool-result').last().getByText('Move Issue')).toBeVisible()
+    await expect(page.getByTestId('issue-tool-result').last().getByText('Done')).toBeVisible({
+      timeout: 15_000,
+    })
+
+    await page.getByTestId('view-table').click()
+    await page.getByPlaceholder('Filter issues...').fill(title)
+    await expect(page.getByText(title)).toBeVisible()
+
+    await page.getByTestId('view-chat').click()
+    await page.getByTestId('chat-message-input').fill(`search issue "${title}"`)
+    await page.getByTestId('chat-send').click()
+
+    await expect(page.getByTestId('issue-tool-result').last().getByText('Issue Search')).toBeVisible()
+    await expect(page.getByTestId('issue-tool-result').last().getByText(title)).toBeVisible({
+      timeout: 15_000,
+    })
+  })
+
   test('creates a doc and syncs Yjs blocks from a shared document URL', async ({ page, browser }) => {
     const title = `E2E local doc ${Date.now()}`
 

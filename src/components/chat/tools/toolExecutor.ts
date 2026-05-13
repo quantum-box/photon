@@ -3,7 +3,22 @@
  * Registry-based system for registering and executing external tools.
  */
 
-import type { ToolDefinition, ToolResult, ToolType, WebSearchResponse, ApiCallResponse } from './types'
+import {
+  createServerIssue,
+  fetchServerIssues,
+  updateServerIssue,
+  type ServerUpdateIssueData,
+} from '../../../lib/issuesApi'
+import type { Issue, Priority, Status } from '../../../data/mock'
+import type {
+  ToolDefinition,
+  IssueToolResponse,
+  ToolResult,
+  ToolRuntimeContext,
+  ToolType,
+  WebSearchResponse,
+  ApiCallResponse,
+} from './types'
 
 // --- Mock data for web search ---
 
@@ -181,6 +196,273 @@ async function executeCodeExec(
   }
 }
 
+const statuses: Status[] = [
+  'backlog',
+  'todo',
+  'in_progress',
+  'in_review',
+  'done',
+  'cancelled',
+]
+const priorities: Priority[] = ['urgent', 'high', 'medium', 'low', 'none']
+
+function requireIssueRuntime(context?: ToolRuntimeContext) {
+  if (!context?.issueTools) {
+    throw new Error('Issue tools are not available in this chat context')
+  }
+  return context.issueTools
+}
+
+function asText(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined
+}
+
+function asStatus(value: unknown): Status | undefined {
+  const normalized = asText(value)?.toLowerCase().replace(/[\s-]+/g, '_')
+  return statuses.includes(normalized as Status) ? (normalized as Status) : undefined
+}
+
+function asPriority(value: unknown): Priority | undefined {
+  const normalized = asText(value)?.toLowerCase()
+  return priorities.includes(normalized as Priority) ? (normalized as Priority) : undefined
+}
+
+function asLabels(value: unknown): string[] | undefined {
+  if (Array.isArray(value)) {
+    return value.filter((label): label is string => typeof label === 'string' && label.trim().length > 0)
+  }
+  const text = asText(value)
+  return text ? text.split(',').map((label) => label.trim()).filter(Boolean) : undefined
+}
+
+function matchesIssueRef(issue: Issue, ref: string) {
+  const normalized = ref.trim().toLowerCase()
+  return (
+    issue.id.toLowerCase() === normalized ||
+    issue.identifier.toLowerCase() === normalized
+  )
+}
+
+async function fetchCanonicalIssues(context?: ToolRuntimeContext) {
+  const runtime = requireIssueRuntime(context)
+  const issues = await fetchServerIssues()
+  runtime.syncIssues(issues)
+  return issues
+}
+
+async function resolveIssue(ref: unknown, context?: ToolRuntimeContext) {
+  const issueRef = asText(ref)
+  if (!issueRef) throw new Error('Issue id or identifier is required')
+
+  const issues = await fetchCanonicalIssues(context)
+  const issue = issues.find((candidate) => matchesIssueRef(candidate, issueRef))
+  if (!issue) throw new Error(`Issue not found: ${issueRef}`)
+  return issue
+}
+
+function filterIssues(issues: Issue[], args: Record<string, unknown>) {
+  const query = asText(args.query)?.toLowerCase()
+  const status = asStatus(args.status)
+  const priority = asPriority(args.priority)
+  const assignee = asText(args.assignee)?.toLowerCase()
+
+  return issues.filter((issue) => {
+    if (status && issue.status !== status) return false
+    if (priority && issue.priority !== priority) return false
+    if (assignee && issue.assignee?.toLowerCase() !== assignee) return false
+    if (!query) return true
+
+    const haystack = [
+      issue.id,
+      issue.identifier,
+      issue.title,
+      issue.description,
+      issue.status,
+      issue.priority,
+      issue.assignee ?? '',
+      issue.project,
+      ...issue.labels,
+    ].join(' ').toLowerCase()
+    return haystack.includes(query)
+  })
+}
+
+function limitIssues(issues: Issue[], args: Record<string, unknown>) {
+  const rawLimit = Number(args.limit)
+  const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 25) : 10
+  return issues.slice(0, limit)
+}
+
+function issueListMessage(action: IssueToolResponse['action'], issues: Issue[], total: number) {
+  const noun = total === 1 ? 'issue' : 'issues'
+  if (action === 'get') return `Found ${issues[0]?.identifier ?? 'issue'}`
+  if (action === 'create') return `Created ${issues[0]?.identifier ?? 'issue'}`
+  if (action === 'update') return `Updated ${issues[0]?.identifier ?? 'issue'}`
+  if (action === 'move') return `Moved ${issues[0]?.identifier ?? 'issue'}`
+  return `${total} ${noun} matched`
+}
+
+async function executeIssueSearch(
+  args: Record<string, unknown>,
+  signal: AbortSignal,
+  context?: ToolRuntimeContext
+): Promise<ToolResult> {
+  const start = Date.now()
+  if (signal.aborted) throw new DOMException('Aborted', 'AbortError')
+  const issues = filterIssues(await fetchCanonicalIssues(context), args)
+  return {
+    data: {
+      action: 'search',
+      issues: limitIssues(issues, args),
+      total: issues.length,
+      message: issueListMessage('search', issues, issues.length),
+    } satisfies IssueToolResponse,
+    duration: Date.now() - start,
+  }
+}
+
+async function executeIssueList(
+  args: Record<string, unknown>,
+  signal: AbortSignal,
+  context?: ToolRuntimeContext
+): Promise<ToolResult> {
+  const start = Date.now()
+  if (signal.aborted) throw new DOMException('Aborted', 'AbortError')
+  const issues = filterIssues(await fetchCanonicalIssues(context), args)
+  return {
+    data: {
+      action: 'list',
+      issues: limitIssues(issues, args),
+      total: issues.length,
+      message: issueListMessage('list', issues, issues.length),
+    } satisfies IssueToolResponse,
+    duration: Date.now() - start,
+  }
+}
+
+async function executeIssueGet(
+  args: Record<string, unknown>,
+  signal: AbortSignal,
+  context?: ToolRuntimeContext
+): Promise<ToolResult> {
+  const start = Date.now()
+  if (signal.aborted) throw new DOMException('Aborted', 'AbortError')
+  const issue = await resolveIssue(args.issueId ?? args.identifier ?? args.id, context)
+  return {
+    data: {
+      action: 'get',
+      issues: [issue],
+      total: 1,
+      message: issueListMessage('get', [issue], 1),
+    } satisfies IssueToolResponse,
+    duration: Date.now() - start,
+  }
+}
+
+async function executeIssueCreate(
+  args: Record<string, unknown>,
+  signal: AbortSignal,
+  context?: ToolRuntimeContext
+): Promise<ToolResult> {
+  const runtime = requireIssueRuntime(context)
+  const start = Date.now()
+  const title = asText(args.title)
+  if (!title) throw new Error('Issue title is required')
+  if (signal.aborted) throw new DOMException('Aborted', 'AbortError')
+
+  const issue = await createServerIssue({
+    title,
+    description: asText(args.description) ?? '',
+    status: asStatus(args.status) ?? 'todo',
+    priority: asPriority(args.priority) ?? 'none',
+    assignee: asText(args.assignee) ?? null,
+    labels: asLabels(args.labels) ?? [],
+    project: asText(args.project),
+  })
+  runtime.syncIssue(issue)
+
+  return {
+    data: {
+      action: 'create',
+      issues: [issue],
+      total: 1,
+      message: issueListMessage('create', [issue], 1),
+    } satisfies IssueToolResponse,
+    duration: Date.now() - start,
+  }
+}
+
+function buildIssueUpdate(args: Record<string, unknown>): ServerUpdateIssueData {
+  const update: ServerUpdateIssueData = {}
+  const title = asText(args.title)
+  const description = asText(args.description)
+  const status = asStatus(args.status)
+  const priority = asPriority(args.priority)
+  const assignee = asText(args.assignee)
+  const labels = asLabels(args.labels)
+  const project = asText(args.project)
+
+  if (title) update.title = title
+  if (description !== undefined) update.description = description
+  if (status) update.status = status
+  if (priority) update.priority = priority
+  if (assignee !== undefined || args.assignee === null) update.assignee = assignee ?? null
+  if (labels) update.labels = labels
+  if (project) update.project = project
+
+  return update
+}
+
+async function executeIssueUpdate(
+  args: Record<string, unknown>,
+  signal: AbortSignal,
+  context?: ToolRuntimeContext
+): Promise<ToolResult> {
+  const runtime = requireIssueRuntime(context)
+  const start = Date.now()
+  const existing = await resolveIssue(args.issueId ?? args.identifier ?? args.id, context)
+  const update = buildIssueUpdate(args)
+  if (Object.keys(update).length === 0) {
+    throw new Error('No issue fields were provided to update')
+  }
+  if (signal.aborted) throw new DOMException('Aborted', 'AbortError')
+
+  const issue = await updateServerIssue(existing.id, update)
+  runtime.syncIssue(issue)
+
+  return {
+    data: {
+      action: 'update',
+      issues: [issue],
+      total: 1,
+      message: issueListMessage('update', [issue], 1),
+    } satisfies IssueToolResponse,
+    duration: Date.now() - start,
+  }
+}
+
+async function executeIssueMove(
+  args: Record<string, unknown>,
+  signal: AbortSignal,
+  context?: ToolRuntimeContext
+): Promise<ToolResult> {
+  return executeIssueUpdate(
+    { ...args, status: asStatus(args.status) ?? asStatus(args.to) },
+    signal,
+    context
+  ).then((result) => {
+    const response = result.data as IssueToolResponse
+    return {
+      ...result,
+      data: {
+        ...response,
+        action: 'move',
+        message: issueListMessage('move', response.issues, response.total),
+      } satisfies IssueToolResponse,
+    }
+  })
+}
+
 // --- Tool registry ---
 
 const toolRegistry = new Map<ToolType, ToolDefinition>()
@@ -204,6 +486,54 @@ registerTool({
   description: 'Search the web for current information',
   icon: 'search',
   execute: executeWebSearch,
+})
+
+registerTool({
+  type: 'issue_search',
+  name: 'Issue Search',
+  description: 'Search Photon issues from the canonical server issue store',
+  icon: 'issues',
+  execute: executeIssueSearch,
+})
+
+registerTool({
+  type: 'issue_list',
+  name: 'Issue List',
+  description: 'List Photon issues from the canonical server issue store',
+  icon: 'issues',
+  execute: executeIssueList,
+})
+
+registerTool({
+  type: 'issue_get',
+  name: 'Issue Lookup',
+  description: 'Get a Photon issue by id or identifier',
+  icon: 'issue',
+  execute: executeIssueGet,
+})
+
+registerTool({
+  type: 'issue_create',
+  name: 'Create Issue',
+  description: 'Create a Photon issue through the canonical server issue API',
+  icon: 'issue-plus',
+  execute: executeIssueCreate,
+})
+
+registerTool({
+  type: 'issue_update',
+  name: 'Update Issue',
+  description: 'Update Photon issue fields through the canonical server issue API',
+  icon: 'issue-edit',
+  execute: executeIssueUpdate,
+})
+
+registerTool({
+  type: 'issue_move',
+  name: 'Move Issue',
+  description: 'Move a Photon issue to another workflow status',
+  icon: 'issue-move',
+  execute: executeIssueMove,
 })
 
 registerTool({
@@ -233,7 +563,8 @@ export function generateToolCallId(): string {
 export async function executeTool(
   type: ToolType,
   args: Record<string, unknown>,
-  signal: AbortSignal
+  signal: AbortSignal,
+  context?: ToolRuntimeContext
 ): Promise<ToolResult> {
   const tool = toolRegistry.get(type)
   if (!tool) {
@@ -241,10 +572,10 @@ export async function executeTool(
   }
 
   try {
-    return await tool.execute(args, signal)
+    return await tool.execute(args, signal, context)
   } catch (err) {
     if (err instanceof DOMException && err.name === 'AbortError') {
-      return { data: null, error: 'Tool execution was cancelled' }
+      return { data: null, error: 'Tool execution was cancelled', cancelled: true }
     }
     return { data: null, error: String(err) }
   }

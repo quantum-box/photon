@@ -3,7 +3,7 @@
  * Detects tool-triggering keywords and executes tools before streaming text.
  */
 
-import type { ToolCall } from './tools/types'
+import type { ToolCall, ToolRuntimeContext, ToolType } from './tools/types'
 import { executeTool, generateToolCallId } from './tools/toolExecutor'
 
 const SAMPLE_RESPONSES = [
@@ -157,13 +157,110 @@ export interface SSECallbacks {
 
 // Detect if a user message should trigger tool calls
 interface DetectedTool {
-  type: 'web_search' | 'api_call' | 'code_exec'
+  type: ToolType
   args: Record<string, unknown>
+}
+
+const statusAliases: Record<string, string> = {
+  backlog: 'backlog',
+  todo: 'todo',
+  'to do': 'todo',
+  'in progress': 'in_progress',
+  in_progress: 'in_progress',
+  progress: 'in_progress',
+  'in review': 'in_review',
+  in_review: 'in_review',
+  review: 'in_review',
+  done: 'done',
+  cancelled: 'cancelled',
+  canceled: 'cancelled',
+}
+
+function extractQuotedText(message: string) {
+  return message.match(/["'「](.+?)["'」]/)?.[1]?.trim()
+}
+
+function extractIssueRef(message: string) {
+  return (
+    message.match(/<issue\s+id=["']([^"']+)["'][^>]*>/i)?.[1] ??
+    message.match(/\bPLT-\d+\b/i)?.[0] ??
+    message.match(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i)?.[0]
+  )
+}
+
+function extractStatus(message: string) {
+  const lower = message.toLowerCase().replace(/[_-]+/g, ' ')
+  const aliases = Object.entries(statusAliases).sort((a, b) => b[0].length - a[0].length)
+  for (const [alias, status] of aliases) {
+    const escaped = alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    if (new RegExp(`(^|[^a-z])${escaped}($|[^a-z])`).test(lower)) return status
+  }
+  return undefined
+}
+
+function extractCreateTitle(message: string) {
+  const quoted = extractQuotedText(message)
+  if (quoted) return quoted
+
+  return message
+    .replace(/(?:please|この内容で|issue|チケット|課題|を|で|作って|作成|create|new|add)/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 160)
 }
 
 function detectToolTriggers(message: string): DetectedTool[] {
   const lower = message.toLowerCase()
   const tools: DetectedTool[] = []
+  const hasIssueIntent = /(?:issue|issues|チケット|課題|plt-\d+|<issue)/i.test(message)
+
+  if (hasIssueIntent) {
+    const issueRef = extractIssueRef(message)
+    const status = extractStatus(message)
+    const isCreate = /(?:create|new|add|作成|作って)/i.test(message)
+    const isMove = Boolean(issueRef && status && /(?:move|set|update|change|to|にして|へ|変更)/i.test(message))
+    const isGet = Boolean(issueRef && /(?:get|show|open|lookup|detail|詳細|見せて)/i.test(message))
+    const isList = /(?:list|show|一覧|まとめ)/i.test(message)
+    const isSearch = /(?:search|find|filter|検索|探し|blocker|ブロッカー)/i.test(message)
+
+    if (isCreate) {
+      tools.push({
+        type: 'issue_create',
+        args: {
+          title: extractCreateTitle(message),
+          status,
+        },
+      })
+      return tools
+    }
+
+    if (isMove) {
+      tools.push({
+        type: 'issue_move',
+        args: {
+          issueId: issueRef,
+          status,
+        },
+      })
+      return tools
+    }
+
+    if (isGet) {
+      tools.push({ type: 'issue_get', args: { issueId: issueRef } })
+      return tools
+    }
+
+    if (isList || isSearch) {
+      const query = extractQuotedText(message) ?? message
+        .replace(/(?:issue|issues|チケット|課題|search|find|filter|検索|探し|一覧|まとめ|show|list)/gi, ' ')
+        .trim()
+      tools.push({
+        type: isList && !isSearch ? 'issue_list' : 'issue_search',
+        args: { query, status, limit: 8 },
+      })
+      return tools
+    }
+  }
 
   // Web search triggers
   const searchPatterns = [
@@ -206,7 +303,8 @@ function detectToolTriggers(message: string): DetectedTool[] {
 
 export function startMockSSE(
   userMessage: string,
-  { onChunk, onDone, onToolCallStart, onToolCallUpdate }: SSECallbacks
+  { onChunk, onDone, onToolCallStart, onToolCallUpdate }: SSECallbacks,
+  context?: ToolRuntimeContext
 ): AbortController {
   const controller = new AbortController()
   const signal = controller.signal
@@ -215,7 +313,7 @@ export function startMockSSE(
 
   if (detectedTools.length > 0 && onToolCallStart && onToolCallUpdate) {
     // Execute tools first, then stream response
-    executeToolsAndStream(detectedTools, signal, onChunk, onDone, onToolCallStart, onToolCallUpdate)
+    executeToolsAndStream(detectedTools, signal, onChunk, onDone, onToolCallStart, onToolCallUpdate, context)
   } else {
     // Normal text-only response
     const response = SAMPLE_RESPONSES[Math.floor(Math.random() * SAMPLE_RESPONSES.length)]
@@ -232,9 +330,11 @@ async function executeToolsAndStream(
   onDone: () => void,
   onToolCallStart: (toolCall: ToolCall) => void,
   onToolCallUpdate: (toolCall: ToolCall) => void,
+  context?: ToolRuntimeContext,
 ) {
   let hasSearch = false
   let hasApi = false
+  let hasIssue = false
 
   for (const tool of tools) {
     if (signal.aborted) { onDone(); return }
@@ -244,7 +344,13 @@ async function executeToolsAndStream(
       type: tool.type,
       name: tool.type === 'web_search' ? 'Web Search'
         : tool.type === 'api_call' ? 'API Call'
-        : 'Code Execution',
+        : tool.type === 'code_exec' ? 'Code Execution'
+        : tool.type === 'issue_search' ? 'Issue Search'
+        : tool.type === 'issue_list' ? 'Issue List'
+        : tool.type === 'issue_get' ? 'Issue Lookup'
+        : tool.type === 'issue_create' ? 'Create Issue'
+        : tool.type === 'issue_update' ? 'Update Issue'
+        : 'Move Issue',
       args: tool.args,
       status: 'running',
     }
@@ -254,18 +360,26 @@ async function executeToolsAndStream(
 
     if (tool.type === 'web_search') hasSearch = true
     if (tool.type === 'api_call') hasApi = true
+    if (tool.type.startsWith('issue_')) hasIssue = true
 
+    let updatedToolCall: ToolCall
     try {
-      const result = await executeTool(tool.type, tool.args, signal)
-      toolCall.status = result.error ? 'error' : 'completed'
-      toolCall.result = result
+      const result = await executeTool(tool.type, tool.args, signal, context)
+      updatedToolCall = {
+        ...toolCall,
+        status: result.cancelled ? 'cancelled' : result.error ? 'error' : 'completed',
+        result,
+      }
     } catch {
-      toolCall.status = 'error'
-      toolCall.result = { data: null, error: 'Tool execution failed' }
+      updatedToolCall = {
+        ...toolCall,
+        status: 'error',
+        result: { data: null, error: 'Tool execution failed' },
+      }
     }
 
     // Notify: tool completed
-    onToolCallUpdate(toolCall)
+    onToolCallUpdate(updatedToolCall)
   }
 
   if (signal.aborted) { onDone(); return }
@@ -278,7 +392,9 @@ async function executeToolsAndStream(
 
   // Pick a follow-up response based on what tools ran
   let response: string
-  if (hasSearch) {
+  if (hasIssue) {
+    response = `Done. I updated the workspace issue data through the server-backed issue store.`
+  } else if (hasSearch) {
     response = SEARCH_FOLLOW_UP_RESPONSES[Math.floor(Math.random() * SEARCH_FOLLOW_UP_RESPONSES.length)]
   } else if (hasApi) {
     response = API_FOLLOW_UP_RESPONSES[Math.floor(Math.random() * API_FOLLOW_UP_RESPONSES.length)]

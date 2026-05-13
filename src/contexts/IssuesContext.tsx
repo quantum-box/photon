@@ -36,6 +36,8 @@ interface IssuesContextValue {
   handleUpdateIssue: (issueId: string, field: keyof Issue, value: string) => void
   handleCreateIssue: (data: CreateIssueData) => void
   handleDeleteIssue: (issueId: string) => void
+  syncIssue: (issue: Issue) => void
+  syncIssues: (issues: Issue[]) => void
   issueCountByStatus: Record<string, number>
 }
 
@@ -305,6 +307,18 @@ export function IssuesProvider({ children }: { children: ReactNode }) {
     })
   }, [])
 
+  const syncIssue = useCallback((issue: Issue) => {
+    ydoc.transact(() => {
+      upsertYIssue(issue)
+    })
+  }, [])
+
+  const syncIssues = useCallback((serverIssues: Issue[]) => {
+    ydoc.transact(() => {
+      reconcileYIssues(serverIssues)
+    })
+  }, [])
+
   return (
     <IssuesContext.Provider
       value={{
@@ -313,6 +327,8 @@ export function IssuesProvider({ children }: { children: ReactNode }) {
         handleUpdateIssue,
         handleCreateIssue,
         handleDeleteIssue,
+        syncIssue,
+        syncIssues,
         issueCountByStatus,
       }}
     >

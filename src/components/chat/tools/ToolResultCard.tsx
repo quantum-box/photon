@@ -1,5 +1,6 @@
 import { memo, useState } from 'react'
-import type { ToolCall, ApiCallResponse } from './types'
+import type { ToolCall, ApiCallResponse, IssueToolResponse } from './types'
+import { statusConfig, priorityConfig } from '../../../data/mock'
 import { WebSearchCard } from './WebSearchCard'
 
 // --- Icons ---
@@ -39,6 +40,35 @@ const CodeIcon = (
   </svg>
 )
 
+const IssueIcon = (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="12" cy="12" r="9" />
+    <path d="M9 12l2 2 4-5" />
+  </svg>
+)
+
+function ToolStatus({ toolCall, loadingText }: { toolCall: ToolCall; loadingText: string }) {
+  const isLoading = toolCall.status === 'pending' || toolCall.status === 'running'
+  if (isLoading) {
+    return (
+      <span className="flex items-center gap-1.5">
+        <div className="tool-spinner" />
+        <span className="text-xs text-subtle">{loadingText}</span>
+      </span>
+    )
+  }
+  if (toolCall.status === 'cancelled') {
+    return <span className="text-xs text-subtle">Cancelled</span>
+  }
+  if (toolCall.status === 'error') {
+    return <span className="text-xs text-priority-urgent">Failed</span>
+  }
+  if (toolCall.result?.duration) {
+    return <span className="text-xs text-subtle">{(toolCall.result.duration / 1000).toFixed(1)}s</span>
+  }
+  return null
+}
+
 // --- API Call Card ---
 
 function ApiCallCard({ toolCall }: { toolCall: ToolCall }) {
@@ -74,18 +104,7 @@ function ApiCallCard({ toolCall }: { toolCall: ToolCall }) {
           </span>
         )}
 
-        {isLoading && (
-          <span className="flex items-center gap-1.5">
-            <div className="tool-spinner" />
-            <span className="text-xs text-subtle">Calling…</span>
-          </span>
-        )}
-
-        {toolCall.result?.duration && (
-          <span className="text-xs text-subtle">
-            {(toolCall.result.duration / 1000).toFixed(1)}s
-          </span>
-        )}
+        <ToolStatus toolCall={toolCall} loadingText="Calling..." />
 
         {!isLoading && <ChevronIcon open={expanded} />}
       </button>
@@ -93,6 +112,12 @@ function ApiCallCard({ toolCall }: { toolCall: ToolCall }) {
       {expanded && response && (
         <div className="px-3 py-2 text-xs font-mono overflow-x-auto border-t border-border bg-code text-foreground">
           <pre className="whitespace-pre-wrap">{JSON.stringify(response.body, null, 2)}</pre>
+        </div>
+      )}
+
+      {toolCall.status === 'error' && (
+        <div className="px-3 py-2 text-xs text-subtle border-t border-border">
+          {toolCall.result?.error || 'API call failed'}
         </div>
       )}
     </div>
@@ -129,18 +154,7 @@ function CodeExecCard({ toolCall }: { toolCall: ToolCall }) {
           </span>
         )}
 
-        {isLoading && (
-          <span className="flex items-center gap-1.5">
-            <div className="tool-spinner" />
-            <span className="text-xs text-subtle">Executing…</span>
-          </span>
-        )}
-
-        {toolCall.result?.duration && (
-          <span className="text-xs text-subtle">
-            {(toolCall.result.duration / 1000).toFixed(1)}s
-          </span>
-        )}
+        <ToolStatus toolCall={toolCall} loadingText="Executing..." />
 
         {!isLoading && <ChevronIcon open={expanded} />}
       </button>
@@ -148,6 +162,88 @@ function CodeExecCard({ toolCall }: { toolCall: ToolCall }) {
       {expanded && result && (
         <div className="px-3 py-2 text-xs font-mono overflow-x-auto border-t border-border bg-code text-foreground">
           <pre className="whitespace-pre-wrap">{result.output}</pre>
+        </div>
+      )}
+
+      {toolCall.status === 'error' && (
+        <div className="px-3 py-2 text-xs text-subtle border-t border-border">
+          {toolCall.result?.error || 'Code execution failed'}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// --- Issue Tool Card ---
+
+function IssueToolCard({ toolCall }: { toolCall: ToolCall }) {
+  const result = toolCall.result?.data as IssueToolResponse | undefined
+  const isLoading = toolCall.status === 'pending' || toolCall.status === 'running'
+  const actionLabel = toolCall.name
+
+  return (
+    <div className="my-2 overflow-hidden rounded-xl border border-border bg-surface" data-testid="issue-tool-result">
+      <div className="flex items-center gap-2 border-b border-border px-3 py-2">
+        <span className="shrink-0 text-accent">{IssueIcon}</span>
+        <span className="min-w-0 flex-1 text-left text-xs font-medium text-foreground">
+          {actionLabel}
+        </span>
+        {result && toolCall.status === 'completed' && (
+          <span className="text-xs text-status-done">
+            {result.message}
+            {toolCall.result?.duration && ` · ${(toolCall.result.duration / 1000).toFixed(1)}s`}
+          </span>
+        )}
+        <ToolStatus toolCall={toolCall} loadingText="Updating..." />
+      </div>
+
+      {isLoading && (
+        <div className="px-3 py-3 text-xs text-subtle">
+          Reading the server issue store...
+        </div>
+      )}
+
+      {toolCall.status === 'completed' && result && (
+        <div className="divide-y divide-border">
+          {result.issues.length === 0 ? (
+            <div className="px-3 py-3 text-xs text-subtle">No matching issues.</div>
+          ) : (
+            result.issues.map((issue) => {
+              const status = statusConfig[issue.status]
+              const priority = priorityConfig[issue.priority]
+              return (
+                <div key={issue.id} className="px-3 py-2.5">
+                  <div className="mb-1 flex min-w-0 items-center gap-2">
+                    <span className="shrink-0 font-mono text-[10px] text-subtle">
+                      {issue.identifier}
+                    </span>
+                    <span className="truncate text-sm font-medium text-foreground">
+                      {issue.title}
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
+                    <span className="inline-flex items-center gap-1" style={{ color: status.color }}>
+                      <span className="h-1.5 w-1.5 rounded-full" style={{ background: status.color }} />
+                      {status.label}
+                    </span>
+                    <span style={{ color: priority.color }}>{priority.icon} {priority.label}</span>
+                    {issue.assignee && <span>{issue.assignee}</span>}
+                    {issue.labels.slice(0, 3).map((label) => (
+                      <span key={label} className="rounded bg-canvas px-1.5 py-0.5 text-subtle">
+                        {label}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )
+            })
+          )}
+        </div>
+      )}
+
+      {(toolCall.status === 'error' || toolCall.status === 'cancelled') && (
+        <div className="px-3 py-3 text-xs text-subtle">
+          {toolCall.result?.error || 'Issue tool did not complete.'}
         </div>
       )}
     </div>
@@ -168,6 +264,13 @@ export const ToolResultCard = memo(function ToolResultCard({ toolCall }: ToolRes
       return <ApiCallCard toolCall={toolCall} />
     case 'code_exec':
       return <CodeExecCard toolCall={toolCall} />
+    case 'issue_search':
+    case 'issue_list':
+    case 'issue_get':
+    case 'issue_create':
+    case 'issue_update':
+    case 'issue_move':
+      return <IssueToolCard toolCall={toolCall} />
     default:
       return (
         <div className="my-2 px-3 py-2 rounded-xl text-xs border border-border text-subtle">
