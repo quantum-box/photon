@@ -86,8 +86,9 @@ test.describe('Photon shell', () => {
     await page.getByLabel('Document title').fill(title)
     await page.keyboard.press('Tab')
     await expect(page.getByRole('link', { name: new RegExp(title) })).toBeVisible()
-    await page.getByPlaceholder('Heading').fill('Local-first editor')
-    await page.getByPlaceholder('Write something').first().fill('Reload proof body')
+    const editor = page.locator('.bn-editor[contenteditable="true"]')
+    await editor.click()
+    await page.keyboard.type('Reload proof body')
     await page.waitForTimeout(500)
 
     const documentUrl = page.url()
@@ -96,17 +97,17 @@ test.describe('Photon shell', () => {
     await sharedPage.goto(documentUrl)
 
     await expect(sharedPage.getByText('Server connected')).toBeVisible()
-    await expect(sharedPage.getByPlaceholder('Heading')).toHaveValue('Local-first editor')
-    await expect(sharedPage.getByPlaceholder('Write something').first()).toHaveValue('Reload proof body')
+    await expect(sharedPage.getByText('Reload proof body')).toBeVisible()
 
-    await page.getByPlaceholder('Write something').first().fill('Synced from first browser')
-    await expect(sharedPage.getByPlaceholder('Write something').first()).toHaveValue('Synced from first browser')
+    await editor.click()
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+A' : 'Control+A')
+    await page.keyboard.type('Synced from first browser')
+    await expect(sharedPage.getByText('Synced from first browser')).toBeVisible()
     await sharedContext.close()
 
     await page.reload()
 
     await expect(page.getByLabel('Document title')).toHaveValue(title)
-    await expect(page.getByPlaceholder('Heading')).toHaveValue('Local-first editor')
-    await expect(page.getByPlaceholder('Write something').first()).toHaveValue('Synced from first browser')
+    await expect(page.getByText('Synced from first browser')).toBeVisible()
   })
 })

@@ -13,6 +13,7 @@ export type DocumentSyncStatus = 'connecting' | 'connected' | 'offline'
 export interface DocumentCollaboration {
   doc: Y.Doc
   blocks: Y.Array<Y.Map<string | boolean>>
+  fragment: Y.XmlFragment
   roomId: string
   synced: Promise<void>
   destroy: () => void
@@ -87,6 +88,7 @@ export function createDocumentCollaboration(
   const doc = new Y.Doc()
   const roomId = buildRoomId(appKitConfig.workspace.id, `doc:${docId}`)
   const blocks = doc.getArray<Y.Map<string | boolean>>(appKitConfig.docs.yjsArrayName)
+  const fragment = doc.getXmlFragment('document-store')
   const persistence = new IndexeddbPersistence(roomId, doc)
   let ws: WebSocket | null = null
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null
@@ -197,6 +199,7 @@ export function createDocumentCollaboration(
   return {
     doc,
     blocks,
+    fragment,
     roomId,
     synced,
     destroy: () => {

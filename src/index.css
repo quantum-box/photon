@@ -264,6 +264,32 @@
   animation: shimmer 1.5s ease-in-out infinite;
 }
 
-.doc-block-textarea {
-  field-sizing: content;
+.photon-blocknote {
+  --bn-colors-editor-text: var(--text-primary);
+  --bn-colors-editor-background: transparent;
+  --bn-colors-menu-text: var(--text-primary);
+  --bn-colors-menu-background: var(--bg-surface);
+  --bn-colors-tooltip-text: var(--text-primary);
+  --bn-colors-tooltip-background: var(--bg-surface);
+  --bn-colors-hovered-text: var(--text-primary);
+  --bn-colors-hovered-background: var(--bg-hover);
+  --bn-colors-selected-text: var(--text-primary);
+  --bn-colors-selected-background: var(--bg-hover);
+  --bn-colors-disabled-text: var(--text-muted);
+  --bn-colors-disabled-background: var(--bg-surface);
+  --bn-colors-shadow: rgba(0, 0, 0, 0.25);
+  --bn-colors-border: var(--border-color);
+  --bn-colors-side-menu: var(--text-muted);
+  color: var(--text-primary);
+}
+
+.photon-blocknote .bn-editor {
+  min-height: 55vh;
+  padding-inline: 0;
+  background: transparent;
+}
+
+.photon-blocknote .bn-block-content {
+  font-size: 0.95rem;
+  line-height: 1.7;
 }

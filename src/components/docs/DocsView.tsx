@@ -1,10 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate } from '@tanstack/react-router'
+import { useCreateBlockNote } from '@blocknote/react'
+import { BlockNoteView } from '@blocknote/shadcn'
+import '@blocknote/core/fonts/inter.css'
 import { appKitConfig } from '../../app/kitConfig'
-import { blockTypes } from '../../lib/docs/docYjs'
-import { useDocumentBlocks } from '../../lib/docs/useDocumentBlocks'
+import type { DocumentCollaboration } from '../../lib/docs/docYjs'
+import { useDocumentCollaboration } from '../../lib/docs/useDocumentCollaboration'
 import { useDocs } from '../../lib/docs/useDocs'
-import type { DocBlock, DocBlockType, DocMetadata } from '../../lib/docs/types'
+import type { DocMetadata } from '../../lib/docs/types'
 
 interface DocsViewProps {
   selectedDocId: string | null
@@ -17,23 +20,6 @@ function formatDate(value: string) {
     hour: '2-digit',
     minute: '2-digit',
   }).format(new Date(value))
-}
-
-function blockPlaceholder(type: DocBlockType) {
-  switch (type) {
-    case 'heading':
-      return 'Heading'
-    case 'checklist':
-      return 'Task'
-    case 'code':
-      return 'Code'
-    case 'quote':
-      return 'Quote'
-    case 'table':
-      return 'Table notes'
-    default:
-      return 'Write something'
-  }
 }
 
 const syncStatusLabels = {
@@ -99,103 +85,31 @@ function DocsList({
   )
 }
 
-function BlockEditor({
-  block,
-  onUpdate,
-  onAddAfter,
-  onDelete,
+function BlockNoteDocumentEditor({
+  collab,
 }: {
-  block: DocBlock
-  onUpdate: (patch: Partial<Omit<DocBlock, 'id'>>) => void
-  onAddAfter: (type?: DocBlockType) => void
-  onDelete: () => void
+  collab: DocumentCollaboration
 }) {
-  const isDivider = block.type === 'divider'
-  const isTable = block.type === 'table'
+  const editor = useCreateBlockNote(
+    {
+      collaboration: {
+        fragment: collab.fragment,
+        user: {
+          name: 'Photon user',
+          color: '#5b5bf7',
+        },
+        showCursorLabels: 'activity',
+      },
+    },
+    [collab.roomId]
+  )
 
   return (
-    <div className="group flex gap-2 rounded px-2 py-1.5 hover:bg-surface-hover">
-      <div className="mt-1.5 flex w-24 shrink-0 items-start gap-1 opacity-70 group-hover:opacity-100">
-        <select
-          aria-label="Block type"
-          className="w-20 rounded border border-border bg-surface px-1 py-1 text-[11px] text-muted outline-none"
-          value={block.type}
-          onChange={(event) => onUpdate({ type: event.target.value as DocBlockType })}
-        >
-          {blockTypes.map((option) => (
-            <option key={option.type} value={option.type}>
-              {option.label}
-            </option>
-          ))}
-        </select>
-        <button
-          className="rounded px-1 text-xs text-subtle hover:bg-panel hover:text-foreground"
-          title="Add block"
-          onClick={() => onAddAfter()}
-        >
-          +
-        </button>
-      </div>
-
-      <div className="min-w-0 flex-1">
-        {isDivider ? (
-          <div className="py-4">
-            <div className="h-px bg-border" />
-          </div>
-        ) : isTable ? (
-          <div className="rounded border border-dashed border-border bg-surface px-3 py-2 text-sm text-muted">
-            Table placeholder
-            <textarea
-              className="doc-block-textarea mt-2 min-h-16 w-full resize-none bg-transparent text-sm text-foreground outline-none"
-              value={block.text}
-              placeholder={blockPlaceholder(block.type)}
-              onChange={(event) => onUpdate({ text: event.target.value })}
-            />
-          </div>
-        ) : (
-          <div className="flex min-w-0 items-start gap-2">
-            {block.type === 'checklist' && (
-              <input
-                aria-label="Checklist done"
-                className="mt-2"
-                type="checkbox"
-                checked={block.checked}
-                onChange={(event) => onUpdate({ checked: event.target.checked })}
-              />
-            )}
-            <textarea
-              className={`doc-block-textarea min-h-8 w-full resize-none bg-transparent outline-none ${
-                block.type === 'heading'
-                  ? 'text-2xl font-semibold leading-snug'
-                  : block.type === 'code'
-                    ? 'rounded bg-code px-3 py-2 font-mono text-sm text-code-text'
-                    : block.type === 'quote'
-                      ? 'border-l-2 border-accent pl-3 text-sm italic text-muted'
-                      : 'text-sm leading-6 text-foreground'
-              }`}
-              value={block.text}
-              placeholder={blockPlaceholder(block.type)}
-              rows={block.type === 'code' ? 4 : 1}
-              onChange={(event) => onUpdate({ text: event.target.value })}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter' && !event.shiftKey && block.type !== 'code') {
-                  event.preventDefault()
-                  onAddAfter()
-                }
-              }}
-            />
-          </div>
-        )}
-      </div>
-
-      <button
-        className="mt-1 h-6 rounded px-1.5 text-xs text-subtle opacity-0 hover:bg-panel hover:text-foreground group-hover:opacity-100"
-        title="Delete block"
-        onClick={onDelete}
-      >
-        ×
-      </button>
-    </div>
+    <BlockNoteView
+      editor={editor}
+      className="photon-blocknote"
+      data-theming-css-variables-demo
+    />
   )
 }
 
@@ -206,7 +120,7 @@ function DocumentEditor({
   doc: DocMetadata
   onRename: (title: string) => void
 }) {
-  const { blocks, ready, syncStatus, roomId, updateBlock, addBlockAfter, deleteBlock } = useDocumentBlocks(doc.id)
+  const { collab, ready, syncStatus, roomId } = useDocumentCollaboration(doc.id)
   const [title, setTitle] = useState(doc.title)
 
   useEffect(() => {
@@ -259,39 +173,12 @@ function DocumentEditor({
 
       <div className="min-h-0 flex-1 overflow-y-auto px-3 py-4 md:px-8">
         <div className="mx-auto max-w-3xl">
-          {!ready ? (
+          {!ready || !collab ? (
             <div className="shimmer rounded bg-surface px-3 py-2 text-sm text-subtle">
               Loading document...
             </div>
           ) : (
-            <div className="space-y-1">
-              <div className="sticky top-0 z-10 mb-3 flex gap-1 overflow-x-auto border-b border-border bg-canvas/95 px-2 pb-3 pt-1 backdrop-blur">
-                {blockTypes.map((option) => (
-                  <button
-                    key={option.type}
-                    className="shrink-0 rounded border border-border bg-surface px-2 py-1 text-xs text-muted hover:bg-surface-hover hover:text-foreground"
-                    onClick={() => addBlockAfter(blocks.at(-1)?.id ?? null, option.type)}
-                  >
-                    + {option.label}
-                  </button>
-                ))}
-              </div>
-              {blocks.map((block) => (
-                <BlockEditor
-                  key={block.id}
-                  block={block}
-                  onUpdate={(patch) => updateBlock(block.id, patch)}
-                  onAddAfter={(type) => addBlockAfter(block.id, type)}
-                  onDelete={() => deleteBlock(block.id)}
-                />
-              ))}
-              <button
-                className="ml-[6.5rem] mt-2 rounded px-3 py-1.5 text-xs text-muted hover:bg-surface-hover hover:text-foreground"
-                onClick={() => addBlockAfter(blocks.at(-1)?.id ?? null)}
-              >
-                + Add block
-              </button>
-            </div>
+            <BlockNoteDocumentEditor collab={collab} />
           )}
         </div>
       </div>
