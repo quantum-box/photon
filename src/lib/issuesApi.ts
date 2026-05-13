@@ -1,4 +1,4 @@
-import { appKitConfig } from '../app/kitConfig'
+import { appKitConfig } from '../app/kitConfig.js'
 import type { Issue, Priority, Status } from '../data/mock'
 
 export interface ServerIssue {

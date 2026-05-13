@@ -1,6 +1,6 @@
 import * as Y from 'yjs'
 import { IndexeddbPersistence } from 'y-indexeddb'
-import { appKitConfig, buildConfiguredSyncWebsocketUrl, buildSyncWebsocketPath } from '../../app/kitConfig'
+import { appKitConfig } from '../../app/kitConfig.js'
 
 // ---------------------------------------------------------------------------
 // Y.Doc singleton
@@ -86,14 +86,13 @@ const MAX_BACKOFF = 30_000
 let disposed = false
 
 function getWsUrl(): string {
-  const configuredUrl = buildConfiguredSyncWebsocketUrl(appKitConfig.sync.issuesRoomId)
-  if (configuredUrl) {
-    return configuredUrl
+  if (appKitConfig.sync.websocketUrl) {
+    return appKitConfig.sync.websocketUrl
   }
 
   const loc = window.location
   const proto = loc.protocol === 'https:' ? 'wss:' : 'ws:'
-  return `${proto}//${loc.host}${buildSyncWebsocketPath(appKitConfig.sync.issuesRoomId)}`
+  return `${proto}//${loc.host}${appKitConfig.frontendWorker.websocketPath}`
 }
 
 function scheduleReconnect() {

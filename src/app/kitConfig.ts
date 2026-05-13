@@ -1,4 +1,14 @@
+export type DeploymentMode = 'local' | 'cloud' | 'onprem'
+export type FrontendWorkerRuntime = 'cloudflare-workers' | 'workerd'
+export type SyncBackend = 'rust-server' | 'cloudflare-durable-object'
+export type AppServerBackend = 'rust-server' | 'external-api'
+
 export interface AppKitConfig {
+  app: {
+    id: string
+    displayName: string
+    storageNamespace: string
+  }
   workspace: {
     id: string
     name: string
@@ -21,6 +31,7 @@ export interface AppKitConfig {
     yjsArrayName: string
   }
   sync: {
+    backend: SyncBackend
     workspaceId: string
     issuesRoomId: string
     yjsArrayName: string
@@ -28,17 +39,64 @@ export interface AppKitConfig {
     websocketPath: string
     websocketUrl?: string
     websocketBaseUrl?: string
+    roomParam: string
   }
   server: {
+    backend: AppServerBackend
     apiBaseUrl?: string
     issuesPath: string
+  }
+  frontendWorker: {
+    enabled: true
+    runtime: FrontendWorkerRuntime
+    healthPath: string
+    websocketPath: string
+    role: 'frontend-edge-companion'
   }
   storage: {
     themeKey: string
   }
 }
 
-const DEFAULT_WORKSPACE_ID = 'photon-default'
+function isDeploymentMode(value: string | undefined): value is DeploymentMode {
+  return value === 'local' || value === 'cloud' || value === 'onprem'
+}
+
+function isSyncBackend(value: string | undefined): value is SyncBackend {
+  return value === 'rust-server' || value === 'cloudflare-durable-object'
+}
+
+function isAppServerBackend(value: string | undefined): value is AppServerBackend {
+  return value === 'rust-server' || value === 'external-api'
+}
+
+export function resolveDeploymentMode(value: string | undefined): DeploymentMode {
+  return isDeploymentMode(value) ? value : 'local'
+}
+
+export function resolveFrontendWorkerRuntime(
+  deploymentMode: DeploymentMode,
+  value: string | undefined
+): FrontendWorkerRuntime {
+  if (value === 'workerd' || value === 'cloudflare-workers') return value
+  return deploymentMode === 'onprem' ? 'workerd' : 'cloudflare-workers'
+}
+
+export function resolveSyncBackend(
+  deploymentMode: DeploymentMode,
+  value: string | undefined
+): SyncBackend {
+  if (isSyncBackend(value)) return value
+  return deploymentMode === 'cloud' ? 'cloudflare-durable-object' : 'rust-server'
+}
+
+export function resolveAppServerBackend(value: string | undefined): AppServerBackend {
+  return isAppServerBackend(value) ? value : 'rust-server'
+}
+
+export function namespacedKey(namespace: string, suffix: string): string {
+  return `${namespace}-${suffix}`
+}
 
 /**
  * Build a sync relay room id following the convention recorded in
@@ -65,10 +123,25 @@ export function buildConfiguredSyncWebsocketUrl(roomId: string): string | undefi
   return websocketBaseUrl ? appendRoomQuery(websocketBaseUrl, roomId) : undefined
 }
 
+const viteEnv = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env ?? {}
+const deploymentMode = resolveDeploymentMode(viteEnv.VITE_PHOTON_DEPLOYMENT_MODE)
+const syncBackend = resolveSyncBackend(deploymentMode, viteEnv.VITE_PHOTON_SYNC_BACKEND)
+const frontendWorkerRuntime = resolveFrontendWorkerRuntime(
+  deploymentMode,
+  viteEnv.VITE_PHOTON_FRONTEND_WORKER_RUNTIME
+)
+const appProfile = {
+  id: 'photon',
+  displayName: 'Photon',
+  storageNamespace: 'photon',
+} as const
+const DEFAULT_WORKSPACE_ID = 'photon-default'
 const issuesRoomId = buildRoomId(DEFAULT_WORKSPACE_ID, 'issues')
-const websocketBaseUrl = import.meta.env.VITE_PHOTON_SYNC_WS_URL as string | undefined
+const syncWebsocketPath = appendRoomQuery('/ws', issuesRoomId)
+const websocketBaseUrl = viteEnv.VITE_PHOTON_SYNC_WS_URL
 
 export const appKitConfig: AppKitConfig = {
+  app: appProfile,
   workspace: {
     id: DEFAULT_WORKSPACE_ID,
     name: 'Photon',
@@ -100,6 +173,7 @@ export const appKitConfig: AppKitConfig = {
     yjsArrayName: 'blocks',
   },
   sync: {
+    backend: syncBackend,
     workspaceId: DEFAULT_WORKSPACE_ID,
     issuesRoomId,
     yjsArrayName: 'issues',
@@ -107,12 +181,21 @@ export const appKitConfig: AppKitConfig = {
     websocketPath: buildSyncWebsocketPath(issuesRoomId),
     websocketUrl: buildConfiguredSyncWebsocketUrl(issuesRoomId),
     websocketBaseUrl,
+    roomParam: 'room',
   },
   server: {
-    apiBaseUrl: import.meta.env.VITE_PHOTON_API_BASE_URL,
+    backend: resolveAppServerBackend(viteEnv.VITE_PHOTON_APP_SERVER_BACKEND),
+    apiBaseUrl: viteEnv.VITE_PHOTON_API_BASE_URL,
     issuesPath: '/api/issues',
   },
+  frontendWorker: {
+    enabled: true,
+    runtime: frontendWorkerRuntime,
+    healthPath: '/api/health',
+    websocketPath: syncWebsocketPath,
+    role: 'frontend-edge-companion',
+  },
   storage: {
-    themeKey: 'photon-theme',
+    themeKey: namespacedKey(appProfile.storageNamespace, 'theme'),
   },
 }
