@@ -7,6 +7,7 @@ import { FilePreviewModal } from '../files/FilePreviewModal'
 import { type FileAttachment, detectFileType } from '../files/types'
 import type { ToolCall } from './tools/types'
 import { appKitConfig } from '../../app/kitConfig'
+import { useIssues } from '../../contexts/IssuesContext'
 
 const ACCEPTED_TYPES = '.pdf,.xlsx,.xls,.csv,.docx,.pptx'
 
@@ -32,6 +33,7 @@ function createFileAttachment(file: File): FileAttachment {
 }
 
 export function ChatView() {
+  const { issues, syncIssue, syncIssues } = useIssues()
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [isStreaming, setIsStreaming] = useState(false)
@@ -111,42 +113,46 @@ export function ChatView() {
     const prompt = fileContext ? `${fileContext}\n${text}` : text
 
     // Start SSE stream with tool call support
-    const controller = startMockSSE(prompt, {
-      onChunk(chunk) {
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === assistantId ? { ...m, content: m.content + chunk } : m
-          )
-        )
-      },
-      onDone() {
-        setIsStreaming(false)
-        setStreamingId(null)
-      },
-      onToolCallStart(toolCall: ToolCall) {
-        setMessages((prev) =>
-          prev.map((m) => {
-            if (m.id !== assistantId) return m
-            const existing = m.toolCalls || []
-            return { ...m, toolCalls: [...existing, toolCall] }
-          })
-        )
-      },
-      onToolCallUpdate(toolCall: ToolCall) {
-        setMessages((prev) =>
-          prev.map((m) => {
-            if (m.id !== assistantId) return m
-            const updated = (m.toolCalls || []).map((tc) =>
-              tc.id === toolCall.id ? toolCall : tc
+    const controller = startMockSSE(
+      prompt,
+      {
+        onChunk(chunk) {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantId ? { ...m, content: m.content + chunk } : m
             )
-            return { ...m, toolCalls: updated }
-          })
-        )
+          )
+        },
+        onDone() {
+          setIsStreaming(false)
+          setStreamingId(null)
+        },
+        onToolCallStart(toolCall: ToolCall) {
+          setMessages((prev) =>
+            prev.map((m) => {
+              if (m.id !== assistantId) return m
+              const existing = m.toolCalls || []
+              return { ...m, toolCalls: [...existing, toolCall] }
+            })
+          )
+        },
+        onToolCallUpdate(toolCall: ToolCall) {
+          setMessages((prev) =>
+            prev.map((m) => {
+              if (m.id !== assistantId) return m
+              const updated = (m.toolCalls || []).map((tc) =>
+                tc.id === toolCall.id ? toolCall : tc
+              )
+              return { ...m, toolCalls: updated }
+            })
+          )
+        },
       },
-    })
+      { issueTools: { issues, syncIssue, syncIssues } }
+    )
 
     abortRef.current = controller
-  }, [input, isStreaming, pendingFiles])
+  }, [input, isStreaming, issues, pendingFiles, syncIssue, syncIssues])
 
   const handleStop = useCallback(() => {
     abortRef.current?.abort()
@@ -189,42 +195,46 @@ export function ChatView() {
     setMessages([...newMessages, assistantMsg])
     setIsStreaming(true)
 
-    const controller = startMockSSE(userText, {
-      onChunk(chunk) {
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === assistantId ? { ...m, content: m.content + chunk } : m
-          )
-        )
-      },
-      onDone() {
-        setIsStreaming(false)
-        setStreamingId(null)
-      },
-      onToolCallStart(toolCall: ToolCall) {
-        setMessages((prev) =>
-          prev.map((m) => {
-            if (m.id !== assistantId) return m
-            const existing = m.toolCalls || []
-            return { ...m, toolCalls: [...existing, toolCall] }
-          })
-        )
-      },
-      onToolCallUpdate(toolCall: ToolCall) {
-        setMessages((prev) =>
-          prev.map((m) => {
-            if (m.id !== assistantId) return m
-            const updated = (m.toolCalls || []).map((tc) =>
-              tc.id === toolCall.id ? toolCall : tc
+    const controller = startMockSSE(
+      userText,
+      {
+        onChunk(chunk) {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantId ? { ...m, content: m.content + chunk } : m
             )
-            return { ...m, toolCalls: updated }
-          })
-        )
+          )
+        },
+        onDone() {
+          setIsStreaming(false)
+          setStreamingId(null)
+        },
+        onToolCallStart(toolCall: ToolCall) {
+          setMessages((prev) =>
+            prev.map((m) => {
+              if (m.id !== assistantId) return m
+              const existing = m.toolCalls || []
+              return { ...m, toolCalls: [...existing, toolCall] }
+            })
+          )
+        },
+        onToolCallUpdate(toolCall: ToolCall) {
+          setMessages((prev) =>
+            prev.map((m) => {
+              if (m.id !== assistantId) return m
+              const updated = (m.toolCalls || []).map((tc) =>
+                tc.id === toolCall.id ? toolCall : tc
+              )
+              return { ...m, toolCalls: updated }
+            })
+          )
+        },
       },
-    })
+      { issueTools: { issues, syncIssue, syncIssues } }
+    )
 
     abortRef.current = controller
-  }, [isStreaming, messages])
+  }, [isStreaming, issues, messages, syncIssue, syncIssues])
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -309,6 +319,7 @@ export function ChatView() {
               <div className="mx-auto flex max-w-md flex-wrap justify-center gap-2">
                 {[
                   { icon: '\u{1F50D}', label: 'Web Search', hint: 'Search for React 19 features' },
+                  { icon: '◎', label: 'Issues', hint: 'Create issue "Follow up from chat"' },
                   { icon: '\u{1F50C}', label: 'API Calls', hint: 'Check API status' },
                   { icon: '\u{1F4CE}', label: 'File Upload', hint: 'PDF, XLSX, CSV, DOCX, PPTX' },
                 ].map((tool) => (

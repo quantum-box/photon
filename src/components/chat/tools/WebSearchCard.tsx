@@ -59,6 +59,7 @@ interface WebSearchCardProps {
 export const WebSearchCard = memo(function WebSearchCard({ toolCall }: WebSearchCardProps) {
   const isLoading = toolCall.status === 'pending' || toolCall.status === 'running'
   const isError = toolCall.status === 'error'
+  const isCancelled = toolCall.status === 'cancelled'
   const query = String(toolCall.args.query || '')
   const response = toolCall.result?.data as WebSearchResponse | undefined
 
@@ -110,6 +111,11 @@ export const WebSearchCard = memo(function WebSearchCard({ toolCall }: WebSearch
               {toolCall.result?.error || 'Search failed'}
             </span>
           )}
+          {isCancelled && (
+            <span className="text-xs text-subtle">
+              Cancelled
+            </span>
+          )}
         </div>
       </div>
 
@@ -127,6 +133,12 @@ export const WebSearchCard = memo(function WebSearchCard({ toolCall }: WebSearch
       {isError && (
         <div className="px-3 py-3 text-xs text-subtle">
           Could not complete the search. Please try again.
+        </div>
+      )}
+
+      {isCancelled && (
+        <div className="px-3 py-3 text-xs text-subtle">
+          Search was cancelled.
         </div>
       )}
     </div>
