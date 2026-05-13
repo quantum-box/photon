@@ -5,24 +5,17 @@ import {
   type DocumentSyncStatus,
 } from './docYjs'
 
-export function useDocumentCollaboration(docId: string | null) {
-  const [collab, setCollab] = useState<DocumentCollaboration | null>(null)
-  const [ready, setReady] = useState(false)
+export function useDocumentCollaboration(docId: string) {
   const [syncStatus, setSyncStatus] = useState<DocumentSyncStatus>('connecting')
+  const [collab] = useState<DocumentCollaboration>(() =>
+    createDocumentCollaboration(docId, setSyncStatus)
+  )
+  const [ready, setReady] = useState(false)
 
   useEffect(() => {
-    if (!docId) {
-      setCollab(null)
-      setReady(false)
-      setSyncStatus('connecting')
-      return
-    }
-
     let disposed = false
-    const nextCollab = createDocumentCollaboration(docId, setSyncStatus)
-    setCollab(nextCollab)
 
-    nextCollab.synced.then(() => {
+    collab.synced.then(() => {
       if (!disposed) {
         setReady(true)
       }
@@ -30,17 +23,16 @@ export function useDocumentCollaboration(docId: string | null) {
 
     return () => {
       disposed = true
-      nextCollab.destroy()
-      setReady(false)
+      collab.destroy()
     }
-  }, [docId])
+  }, [collab])
 
   return useMemo(
     () => ({
       collab,
       ready,
       syncStatus,
-      roomId: collab?.roomId ?? null,
+      roomId: collab.roomId,
     }),
     [collab, ready, syncStatus]
   )

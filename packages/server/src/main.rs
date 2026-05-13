@@ -572,7 +572,12 @@ async fn handle_ws(socket: WebSocket, state: Arc<RoomState>) {
                 Message::Text(text) => {
                     if serde_json::from_str::<serde_json::Value>(&text)
                         .ok()
-                        .and_then(|value| value.get("type").and_then(|kind| kind.as_str()).map(str::to_owned))
+                        .and_then(|value| {
+                            value
+                                .get("type")
+                                .and_then(|kind| kind.as_str())
+                                .map(str::to_owned)
+                        })
                         .as_deref()
                         == Some("awareness")
                     {

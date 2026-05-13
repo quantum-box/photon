@@ -112,19 +112,14 @@ function BlockNoteDocumentEditor({
   )
 }
 
-function DocumentEditor({
+function DocumentTitleInput({
   doc,
   onRename,
 }: {
   doc: DocMetadata
   onRename: (title: string) => void
 }) {
-  const { collab, ready, syncStatus, roomId } = useDocumentCollaboration(doc.id)
   const [title, setTitle] = useState(doc.title)
-
-  useEffect(() => {
-    setTitle(doc.title)
-  }, [doc.id, doc.title])
 
   useEffect(() => {
     const trimmedTitle = title.trim()
@@ -138,15 +133,29 @@ function DocumentEditor({
   }, [doc.title, onRename, title])
 
   return (
+    <input
+      aria-label="Document title"
+      className="w-full bg-transparent text-xl font-semibold outline-none"
+      value={title}
+      onChange={(event) => setTitle(event.target.value)}
+      onBlur={() => onRename(title)}
+    />
+  )
+}
+
+function DocumentEditor({
+  doc,
+  onRename,
+}: {
+  doc: DocMetadata
+  onRename: (title: string) => void
+}) {
+  const { collab, ready, syncStatus, roomId } = useDocumentCollaboration(doc.id)
+
+  return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <div className="border-b border-border px-4 py-3">
-        <input
-          aria-label="Document title"
-          className="w-full bg-transparent text-xl font-semibold outline-none"
-          value={title}
-          onChange={(event) => setTitle(event.target.value)}
-          onBlur={() => onRename(title)}
-        />
+        <DocumentTitleInput key={doc.id} doc={doc} onRename={onRename} />
         <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-subtle">
           <span className="inline-flex items-center gap-1">
             <span
@@ -172,7 +181,7 @@ function DocumentEditor({
 
       <div className="min-h-0 flex-1 overflow-y-auto px-3 py-4 md:px-8">
         <div className="mx-auto max-w-3xl">
-          {!ready || !collab ? (
+          {!ready ? (
             <div className="shimmer rounded bg-surface px-3 py-2 text-sm text-subtle">
               Loading document...
             </div>
@@ -231,6 +240,7 @@ export function DocsView({ selectedDocId }: DocsViewProps) {
       <div className="mt-1 flex min-h-0 min-w-0 flex-1 overflow-hidden bg-canvas md:mt-0">
         {selectedDoc ? (
           <DocumentEditor
+            key={selectedDoc.id}
             doc={selectedDoc}
             onRename={(title) => {
               void renameDocument(selectedDoc.id, title)

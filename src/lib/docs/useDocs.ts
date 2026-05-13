@@ -6,21 +6,35 @@ export function useDocs() {
   const [docs, setDocs] = useState<DocMetadata[]>([])
   const [ready, setReady] = useState(false)
 
+  const loadDocs = useCallback(async () => {
+    return listDocs()
+  }, [])
+
   const refresh = useCallback(async () => {
-    const nextDocs = await listDocs()
+    const nextDocs = await loadDocs()
     setDocs(nextDocs)
     setReady(true)
-  }, [])
+  }, [loadDocs])
 
   useEffect(() => {
     let cancelled = false
 
-    refresh().catch((error: unknown) => {
-      if (!cancelled) {
-        console.warn('Failed to load local documents', error)
-        setReady(true)
+    async function loadInitialDocs() {
+      try {
+        const nextDocs = await loadDocs()
+        if (!cancelled) {
+          setDocs(nextDocs)
+          setReady(true)
+        }
+      } catch (error: unknown) {
+        if (!cancelled) {
+          console.warn('Failed to load local documents', error)
+          setReady(true)
+        }
       }
-    })
+    }
+
+    void loadInitialDocs()
 
     const unsubscribe = subscribeDocs(() => {
       if (!cancelled) {
@@ -32,7 +46,7 @@ export function useDocs() {
       cancelled = true
       unsubscribe()
     }
-  }, [refresh])
+  }, [loadDocs, refresh])
 
   const createDocument = useCallback(async (title?: string) => {
     return createDoc({ title })
