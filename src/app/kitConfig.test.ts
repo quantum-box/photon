@@ -5,6 +5,8 @@ import {
   buildSyncWebsocketPath,
   namespacedKey,
   resolveAppServerBackend,
+  resolveChatStreamMode,
+  resolveChatStreamTransport,
   resolveDeploymentMode,
   resolveFrontendWorkerRuntime,
   resolveSyncBackend,
@@ -34,6 +36,10 @@ describe('appKitConfig', () => {
     expect(appKitConfig.docs.yjsArrayName).toBe('blocks')
     expect(appKitConfig.sync.roomParam).toBe('room')
     expect(appKitConfig.server.issuesPath).toBe('/api/issues')
+    expect(appKitConfig.chat.stream.mode).toBe('mock')
+    expect(appKitConfig.chat.stream.transport).toBe('sse')
+    expect(appKitConfig.chat.stream.endpoint).toBe('/api/agent/chat/stream')
+    expect(appKitConfig.chat.stream.toolResultPath).toBe('/api/agent/tool-results')
   })
 
   it('keeps the Cloudflare worker as a required frontend-side component', () => {
@@ -64,6 +70,12 @@ describe('appKitConfig', () => {
 
     expect(resolveAppServerBackend(undefined)).toBe('rust-server')
     expect(resolveAppServerBackend('external-api')).toBe('external-api')
+
+    expect(resolveChatStreamMode('local', undefined)).toBe('mock')
+    expect(resolveChatStreamMode('cloud', undefined)).toBe('backend')
+    expect(resolveChatStreamMode('onprem', 'mock')).toBe('mock')
+    expect(resolveChatStreamTransport(undefined)).toBe('sse')
+    expect(resolveChatStreamTransport('websocket')).toBe('websocket')
   })
 
   it('builds storage keys from the app namespace', () => {
