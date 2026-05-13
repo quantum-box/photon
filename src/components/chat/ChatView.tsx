@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef, type KeyboardEvent } from 'react'
 import { ChatMessage, type Message } from './ChatMessage'
 import { useAutoScroll } from './useAutoScroll'
-import { startMockSSE } from './mockSSE'
+import { startChatStream } from './stream/startChatStream'
 import { FileChip } from '../files/FileChip'
 import { FilePreviewModal } from '../files/FilePreviewModal'
 import { type FileAttachment, detectFileType } from '../files/types'
@@ -73,6 +73,67 @@ export function ChatView() {
     })
   }, [])
 
+  const startAssistantStream = useCallback((
+    assistantId: string,
+    prompt: string,
+    conversation: Message[]
+  ) => {
+    const controller = startChatStream(
+      {
+        prompt,
+        messages: conversation.map((message) => ({ role: message.role, content: message.content })),
+        context: { issueTools: { issues, syncIssue, syncIssues } },
+      },
+      {
+        onChunk(chunk) {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantId ? { ...m, content: m.content + chunk } : m
+            )
+          )
+        },
+        onDone() {
+          setIsStreaming(false)
+          setStreamingId(null)
+        },
+        onError(error) {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantId && m.content.length === 0
+                ? { ...m, content: `Chat stream error: ${error.message}` }
+                : m
+            )
+          )
+        },
+        onToolCallStart(toolCall: ToolCall) {
+          setMessages((prev) =>
+            prev.map((m) => {
+              if (m.id !== assistantId) return m
+              const existing = m.toolCalls || []
+              return { ...m, toolCalls: [...existing, toolCall] }
+            })
+          )
+        },
+        onToolCallUpdate(toolCall: ToolCall) {
+          setMessages((prev) =>
+            prev.map((m) => {
+              if (m.id !== assistantId) return m
+              const existing = m.toolCalls || []
+              const hasToolCall = existing.some((tc) => tc.id === toolCall.id)
+              const updated = hasToolCall
+                ? existing.map((tc) => tc.id === toolCall.id ? toolCall : tc)
+                : [...existing, toolCall]
+              return { ...m, toolCalls: updated }
+            })
+          )
+        },
+      },
+      appKitConfig.chat.stream
+    )
+
+    abortRef.current = controller
+  }, [issues, syncIssue, syncIssues])
+
   const handleSend = useCallback(() => {
     const text = input.trim()
     if ((!text && pendingFiles.length === 0) || isStreaming) return
@@ -96,7 +157,8 @@ export function ChatView() {
       timestamp: Date.now(),
     }
 
-    setMessages((prev) => [...prev, userMsg, assistantMsg])
+    const conversation = [...messages, userMsg, assistantMsg]
+    setMessages(conversation)
     setInput('')
     setPendingFiles([])
     setIsStreaming(true)
@@ -112,47 +174,8 @@ export function ChatView() {
       : ''
     const prompt = fileContext ? `${fileContext}\n${text}` : text
 
-    // Start SSE stream with tool call support
-    const controller = startMockSSE(
-      prompt,
-      {
-        onChunk(chunk) {
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === assistantId ? { ...m, content: m.content + chunk } : m
-            )
-          )
-        },
-        onDone() {
-          setIsStreaming(false)
-          setStreamingId(null)
-        },
-        onToolCallStart(toolCall: ToolCall) {
-          setMessages((prev) =>
-            prev.map((m) => {
-              if (m.id !== assistantId) return m
-              const existing = m.toolCalls || []
-              return { ...m, toolCalls: [...existing, toolCall] }
-            })
-          )
-        },
-        onToolCallUpdate(toolCall: ToolCall) {
-          setMessages((prev) =>
-            prev.map((m) => {
-              if (m.id !== assistantId) return m
-              const updated = (m.toolCalls || []).map((tc) =>
-                tc.id === toolCall.id ? toolCall : tc
-              )
-              return { ...m, toolCalls: updated }
-            })
-          )
-        },
-      },
-      { issueTools: { issues, syncIssue, syncIssues } }
-    )
-
-    abortRef.current = controller
-  }, [input, isStreaming, issues, pendingFiles, syncIssue, syncIssues])
+    startAssistantStream(assistantId, prompt, conversation)
+  }, [input, isStreaming, messages, pendingFiles, startAssistantStream])
 
   const handleStop = useCallback(() => {
     abortRef.current?.abort()
@@ -192,49 +215,12 @@ export function ChatView() {
       timestamp: Date.now(),
     }
 
-    setMessages([...newMessages, assistantMsg])
+    const conversation = [...newMessages, assistantMsg]
+    setMessages(conversation)
     setIsStreaming(true)
 
-    const controller = startMockSSE(
-      userText,
-      {
-        onChunk(chunk) {
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === assistantId ? { ...m, content: m.content + chunk } : m
-            )
-          )
-        },
-        onDone() {
-          setIsStreaming(false)
-          setStreamingId(null)
-        },
-        onToolCallStart(toolCall: ToolCall) {
-          setMessages((prev) =>
-            prev.map((m) => {
-              if (m.id !== assistantId) return m
-              const existing = m.toolCalls || []
-              return { ...m, toolCalls: [...existing, toolCall] }
-            })
-          )
-        },
-        onToolCallUpdate(toolCall: ToolCall) {
-          setMessages((prev) =>
-            prev.map((m) => {
-              if (m.id !== assistantId) return m
-              const updated = (m.toolCalls || []).map((tc) =>
-                tc.id === toolCall.id ? toolCall : tc
-              )
-              return { ...m, toolCalls: updated }
-            })
-          )
-        },
-      },
-      { issueTools: { issues, syncIssue, syncIssues } }
-    )
-
-    abortRef.current = controller
-  }, [isStreaming, issues, messages, syncIssue, syncIssues])
+    startAssistantStream(assistantId, userText, conversation)
+  }, [isStreaming, messages, startAssistantStream])
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {

@@ -2,6 +2,8 @@ export type DeploymentMode = 'local' | 'cloud' | 'onprem'
 export type FrontendWorkerRuntime = 'cloudflare-workers' | 'workerd'
 export type SyncBackend = 'rust-server' | 'cloudflare-durable-object'
 export type AppServerBackend = 'rust-server' | 'external-api'
+export type ChatStreamMode = 'mock' | 'backend'
+export type ChatStreamTransport = 'sse' | 'websocket'
 
 export interface AppKitConfig {
   app: {
@@ -24,6 +26,14 @@ export interface AppKitConfig {
   chat: {
     productName: string
     disclaimer: string
+    stream: {
+      mode: ChatStreamMode
+      transport: ChatStreamTransport
+      endpoint: string
+      websocketUrl?: string
+      authToken?: string
+      toolResultPath?: string
+    }
   }
   docs: {
     pgliteDataDir: string
@@ -70,6 +80,14 @@ function isAppServerBackend(value: string | undefined): value is AppServerBacken
   return value === 'rust-server' || value === 'external-api'
 }
 
+function isChatStreamMode(value: string | undefined): value is ChatStreamMode {
+  return value === 'mock' || value === 'backend'
+}
+
+function isChatStreamTransport(value: string | undefined): value is ChatStreamTransport {
+  return value === 'sse' || value === 'websocket'
+}
+
 export function resolveDeploymentMode(value: string | undefined): DeploymentMode {
   return isDeploymentMode(value) ? value : 'local'
 }
@@ -92,6 +110,18 @@ export function resolveSyncBackend(
 
 export function resolveAppServerBackend(value: string | undefined): AppServerBackend {
   return isAppServerBackend(value) ? value : 'rust-server'
+}
+
+export function resolveChatStreamMode(
+  deploymentMode: DeploymentMode,
+  value: string | undefined
+): ChatStreamMode {
+  if (isChatStreamMode(value)) return value
+  return deploymentMode === 'local' ? 'mock' : 'backend'
+}
+
+export function resolveChatStreamTransport(value: string | undefined): ChatStreamTransport {
+  return isChatStreamTransport(value) ? value : 'sse'
 }
 
 export function namespacedKey(namespace: string, suffix: string): string {
@@ -139,6 +169,7 @@ const DEFAULT_WORKSPACE_ID = 'photon-default'
 const issuesRoomId = buildRoomId(DEFAULT_WORKSPACE_ID, 'issues')
 const syncWebsocketPath = appendRoomQuery('/ws', issuesRoomId)
 const websocketBaseUrl = viteEnv.VITE_PHOTON_SYNC_WS_URL
+const chatStreamEndpoint = viteEnv.VITE_PHOTON_AGENT_STREAM_URL ?? '/api/agent/chat/stream'
 
 export const appKitConfig: AppKitConfig = {
   app: appProfile,
@@ -166,6 +197,14 @@ export const appKitConfig: AppKitConfig = {
   chat: {
     productName: 'Photon Chat',
     disclaimer: 'Photon AI can make mistakes. Verify important information.',
+    stream: {
+      mode: resolveChatStreamMode(deploymentMode, viteEnv.VITE_PHOTON_CHAT_STREAM_MODE),
+      transport: resolveChatStreamTransport(viteEnv.VITE_PHOTON_CHAT_STREAM_TRANSPORT),
+      endpoint: chatStreamEndpoint,
+      websocketUrl: viteEnv.VITE_PHOTON_AGENT_WS_URL,
+      authToken: viteEnv.VITE_PHOTON_AGENT_AUTH_TOKEN,
+      toolResultPath: viteEnv.VITE_PHOTON_AGENT_TOOL_RESULT_PATH ?? '/api/agent/tool-results',
+    },
   },
   docs: {
     pgliteDataDir: 'idb://photon-docs',
