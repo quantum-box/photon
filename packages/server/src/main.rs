@@ -509,6 +509,19 @@ async fn get_or_create_room(
     Ok(room)
 }
 
+fn is_awareness_message(text: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(text)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("type")
+                .and_then(|kind| kind.as_str())
+                .map(str::to_owned)
+        })
+        .as_deref()
+        == Some("awareness")
+}
+
 async fn handle_ws(socket: WebSocket, state: Arc<RoomState>) {
     let (mut ws_sender, mut ws_receiver) = socket.split();
     let active_count = state.active_connections.fetch_add(1, Ordering::SeqCst) + 1;
@@ -569,21 +582,10 @@ async fn handle_ws(socket: WebSocket, state: Arc<RoomState>) {
                         tracing::error!(error = %err, "Failed to persist yjs update");
                     }
                 },
-                Message::Text(text) => {
-                    if serde_json::from_str::<serde_json::Value>(&text)
-                        .ok()
-                        .and_then(|value| {
-                            value
-                                .get("type")
-                                .and_then(|kind| kind.as_str())
-                                .map(str::to_owned)
-                        })
-                        .as_deref()
-                        == Some("awareness")
-                    {
-                        let _ = recv_state.presence_tx.send(text);
-                    }
+                Message::Text(text) if is_awareness_message(&text) => {
+                    let _ = recv_state.presence_tx.send(text);
                 }
+                Message::Text(_) => {}
                 Message::Close(_) => break,
                 _ => {}
             }
