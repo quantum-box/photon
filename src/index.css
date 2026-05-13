@@ -263,3 +263,7 @@
 .shimmer {
   animation: shimmer 1.5s ease-in-out infinite;
 }
+
+.doc-block-textarea {
+  field-sizing: content;
+}

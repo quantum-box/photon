@@ -15,6 +15,11 @@ export interface AppKitConfig {
     productName: string
     disclaimer: string
   }
+  docs: {
+    pgliteDataDir: string
+    defaultTitle: string
+    yjsArrayName: string
+  }
   sync: {
     workspaceId: string
     issuesRoomId: string
@@ -22,6 +27,7 @@ export interface AppKitConfig {
     persistenceKey: string
     websocketPath: string
     websocketUrl?: string
+    websocketBaseUrl?: string
   }
   server: {
     apiBaseUrl?: string
@@ -49,6 +55,14 @@ export function buildRoomId(workspaceId: string, surface: string): string {
 function appendRoomQuery(base: string, roomId: string): string {
   const separator = base.includes('?') ? '&' : '?'
   return `${base}${separator}room=${roomId}`
+}
+
+export function buildSyncWebsocketPath(roomId: string): string {
+  return appendRoomQuery('/ws', roomId)
+}
+
+export function buildConfiguredSyncWebsocketUrl(roomId: string): string | undefined {
+  return websocketBaseUrl ? appendRoomQuery(websocketBaseUrl, roomId) : undefined
 }
 
 const issuesRoomId = buildRoomId(DEFAULT_WORKSPACE_ID, 'issues')
@@ -80,13 +94,19 @@ export const appKitConfig: AppKitConfig = {
     productName: 'Photon Chat',
     disclaimer: 'Photon AI can make mistakes. Verify important information.',
   },
+  docs: {
+    pgliteDataDir: 'idb://photon-docs',
+    defaultTitle: 'Untitled doc',
+    yjsArrayName: 'blocks',
+  },
   sync: {
     workspaceId: DEFAULT_WORKSPACE_ID,
     issuesRoomId,
     yjsArrayName: 'issues',
     persistenceKey: issuesRoomId,
-    websocketPath: appendRoomQuery('/ws', issuesRoomId),
-    websocketUrl: websocketBaseUrl ? appendRoomQuery(websocketBaseUrl, issuesRoomId) : undefined,
+    websocketPath: buildSyncWebsocketPath(issuesRoomId),
+    websocketUrl: buildConfiguredSyncWebsocketUrl(issuesRoomId),
+    websocketBaseUrl,
   },
   server: {
     apiBaseUrl: import.meta.env.VITE_PHOTON_API_BASE_URL,
