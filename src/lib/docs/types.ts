@@ -15,6 +15,17 @@ export interface DocMetadata {
   updatedAt: string
 }
 
+export interface DocumentIssueLink {
+  id: string
+  docId: string
+  docTitle?: string
+  issueId: string
+  issueIdentifier: string
+  issueTitle: string
+  selectedText: string
+  createdAt: string
+}
+
 export interface DocBlock {
   id: string
   type: DocBlockType
@@ -30,4 +41,12 @@ export interface CreateDocInput {
 
 export interface UpdateDocInput {
   title?: string
+}
+
+export interface LinkDocIssueInput {
+  docId: string
+  issueId: string
+  issueIdentifier: string
+  issueTitle: string
+  selectedText?: string
 }

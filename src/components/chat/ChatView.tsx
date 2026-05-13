@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, type KeyboardEvent } from 'react'
+import { useState, useCallback, useEffect, useRef, type KeyboardEvent } from 'react'
 import { ChatMessage, type Message } from './ChatMessage'
 import { useAutoScroll } from './useAutoScroll'
 import { startChatStream } from './stream/startChatStream'
@@ -8,6 +8,12 @@ import { type FileAttachment, detectFileType } from '../files/types'
 import type { ToolCall } from './tools/types'
 import { appKitConfig } from '../../app/kitConfig'
 import { useIssues } from '../../contexts/IssuesContext'
+import { listDocIssueLinks } from '../../lib/docs/docsDb'
+import {
+  readStoredDocContext,
+  readStoredSelectedText,
+  type WorkspaceDocContext,
+} from '../../lib/docs/workspaceContext'
 
 const ACCEPTED_TYPES = '.pdf,.xlsx,.xls,.csv,.docx,.pptx'
 
@@ -41,6 +47,7 @@ export function ChatView() {
   const [pendingFiles, setPendingFiles] = useState<FileAttachment[]>([])
   const [previewFile, setPreviewFile] = useState<FileAttachment | null>(null)
   const [isDragOver, setIsDragOver] = useState(false)
+  const [documentContext, setDocumentContext] = useState<WorkspaceDocContext | null>(null)
   const abortRef = useRef<AbortController | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -53,6 +60,28 @@ export function ChatView() {
     latestContent.length,
     latestToolCalls,
   ])
+
+  const refreshDocumentContext = useCallback(() => {
+    const stored = readStoredDocContext()
+    if (!stored) {
+      setDocumentContext(null)
+      return
+    }
+
+    void listDocIssueLinks(stored.docId).then((relatedIssues) => {
+      setDocumentContext({
+        ...stored,
+        selectedText: readStoredSelectedText(stored.docId),
+        relatedIssues,
+      })
+    })
+  }, [])
+
+  useEffect(() => {
+    queueMicrotask(refreshDocumentContext)
+    window.addEventListener('focus', refreshDocumentContext)
+    return () => window.removeEventListener('focus', refreshDocumentContext)
+  }, [refreshDocumentContext])
 
   const handleFilesSelected = useCallback((files: FileList | File[]) => {
     const fileArray = Array.from(files)
@@ -82,7 +111,10 @@ export function ChatView() {
       {
         prompt,
         messages: conversation.map((message) => ({ role: message.role, content: message.content })),
-        context: { issueTools: { issues, syncIssue, syncIssues } },
+        context: {
+          issueTools: { issues, syncIssue, syncIssues },
+          documentContext,
+        },
       },
       {
         onChunk(chunk) {
@@ -132,7 +164,7 @@ export function ChatView() {
     )
 
     abortRef.current = controller
-  }, [issues, syncIssue, syncIssues])
+  }, [documentContext, issues, syncIssue, syncIssues])
 
   const handleSend = useCallback(() => {
     const text = input.trim()
@@ -371,6 +403,31 @@ export function ChatView() {
 
       {/* Input area */}
       <div className="border-t border-border px-1 py-2 md:px-4 md:py-3">
+        {documentContext && (
+          <div
+            data-testid="chat-document-context"
+            className="mb-2 flex flex-wrap items-center gap-2 rounded border border-border bg-surface px-3 py-2 text-xs text-muted"
+          >
+            <span className="font-medium text-foreground">{documentContext.title}</span>
+            {documentContext.selectedText && (
+              <span className="max-w-xs truncate">
+                Selected: {documentContext.selectedText}
+              </span>
+            )}
+            {documentContext.relatedIssues.length > 0 && (
+              <span>
+                {documentContext.relatedIssues.length} related issues
+              </span>
+            )}
+            <button
+              className="ml-auto rounded bg-surface-hover px-2 py-1 text-xs text-foreground"
+              onClick={refreshDocumentContext}
+            >
+              Refresh
+            </button>
+          </div>
+        )}
+
         {/* Pending file attachments */}
         {pendingFiles.length > 0 && (
           <div className="flex flex-wrap gap-2 mb-2">

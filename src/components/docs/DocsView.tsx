@@ -1,14 +1,25 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate } from '@tanstack/react-router'
-import { useCreateBlockNote } from '@blocknote/react'
+import { useCreateBlockNote, useEditorSelectionChange } from '@blocknote/react'
 import { BlockNoteView } from '@blocknote/shadcn'
 import '@blocknote/core/fonts/inter.css'
 import '@blocknote/shadcn/style.css'
 import { appKitConfig } from '../../app/kitConfig'
+import { useIssues } from '../../contexts/IssuesContext'
+import { createServerIssue } from '../../lib/issuesApi'
 import type { DocumentCollaboration } from '../../lib/docs/docYjs'
 import { useDocumentCollaboration } from '../../lib/docs/useDocumentCollaboration'
 import { useDocs } from '../../lib/docs/useDocs'
-import type { DocMetadata } from '../../lib/docs/types'
+import {
+  linkDocIssue,
+  listDocIssueLinks,
+} from '../../lib/docs/docsDb'
+import {
+  setCurrentDocContext,
+  setCurrentDocSelectedText,
+} from '../../lib/docs/workspaceContext'
+import type { DocMetadata, DocumentIssueLink } from '../../lib/docs/types'
+import type { Issue } from '../../data/mock'
 
 interface DocsViewProps {
   selectedDocId: string | null
@@ -88,8 +99,14 @@ function DocsList({
 
 function BlockNoteDocumentEditor({
   collab,
+  linkedIssue,
+  selectedText,
+  onSelectedTextChange,
 }: {
   collab: DocumentCollaboration
+  linkedIssue: Issue | null
+  selectedText: string
+  onSelectedTextChange: (text: string) => void
 }) {
   const editor = useCreateBlockNote(
     {
@@ -103,12 +120,35 @@ function BlockNoteDocumentEditor({
     [collab.roomId]
   )
 
+  useEditorSelectionChange(() => {
+    onSelectedTextChange(editor.getSelectedText().trim())
+  }, editor)
+
+  useEffect(() => {
+    if (!linkedIssue) return
+    const currentBlock = editor.getTextCursorPosition().block
+    const blocks = editor.tryParseMarkdownToBlocks(
+      `Linked issue: [${linkedIssue.identifier} ${linkedIssue.title}](/issues/${linkedIssue.identifier})`
+    )
+    editor.insertBlocks(blocks, currentBlock, 'after')
+  }, [editor, linkedIssue])
+
   return (
-    <BlockNoteView
-      editor={editor}
-      className="photon-blocknote"
-      data-theming-css-variables-demo
-    />
+    <div>
+      {selectedText && (
+        <div
+          data-testid="doc-selected-text"
+          className="mb-3 rounded border border-border bg-surface px-3 py-2 text-xs text-muted"
+        >
+          Selected: <span className="text-foreground">{selectedText}</span>
+        </div>
+      )}
+      <BlockNoteView
+        editor={editor}
+        className="photon-blocknote"
+        data-theming-css-variables-demo
+      />
+    </div>
   )
 }
 
@@ -145,12 +185,46 @@ function DocumentTitleInput({
 
 function DocumentEditor({
   doc,
+  issues,
+  links,
+  onIssueLinked,
+  onCreateIssueFromSelection,
   onRename,
 }: {
   doc: DocMetadata
+  issues: Issue[]
+  links: DocumentIssueLink[]
+  onIssueLinked: (issue: Issue, selectedText: string) => Promise<void>
+  onCreateIssueFromSelection: (selectedText: string) => Promise<Issue | null>
   onRename: (title: string) => void
 }) {
   const { collab, ready, syncStatus, roomId } = useDocumentCollaboration(doc.id)
+  const [selectedText, setSelectedText] = useState('')
+  const [selectedIssueId, setSelectedIssueId] = useState('')
+  const [insertedIssue, setInsertedIssue] = useState<Issue | null>(null)
+
+  useEffect(() => {
+    setCurrentDocContext(doc.id, doc.title, `/documents/${doc.id}`)
+  }, [doc.id, doc.title])
+
+  const handleSelectedTextChange = useCallback((text: string) => {
+    if (!text) return
+    setSelectedText(text)
+    setCurrentDocSelectedText(doc.id, text)
+  }, [doc.id])
+
+  const handleLinkSelectedIssue = async () => {
+    const issue = issues.find((candidate) => candidate.id === selectedIssueId)
+    if (!issue) return
+    await onIssueLinked(issue, selectedText)
+    setInsertedIssue(issue)
+    setSelectedIssueId('')
+  }
+
+  const handleCreateFromSelection = async () => {
+    const issue = await onCreateIssueFromSelection(selectedText)
+    if (issue) setInsertedIssue(issue)
+  }
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
@@ -177,6 +251,52 @@ function DocumentEditor({
             </>
           )}
         </div>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <select
+            data-testid="doc-link-issue-select"
+            aria-label="Link issue to document"
+            className="max-w-xs rounded border border-border bg-surface px-2 py-1.5 text-xs text-foreground"
+            value={selectedIssueId}
+            onChange={(event) => setSelectedIssueId(event.target.value)}
+          >
+            <option value="">Link issue...</option>
+            {issues.slice(0, 100).map((issue) => (
+              <option key={issue.id} value={issue.id}>
+                {issue.identifier} {issue.title}
+              </option>
+            ))}
+          </select>
+          <button
+            data-testid="doc-link-issue"
+            className="rounded bg-surface-hover px-2.5 py-1.5 text-xs font-medium text-foreground disabled:opacity-40"
+            disabled={!selectedIssueId}
+            onClick={() => void handleLinkSelectedIssue()}
+          >
+            Link
+          </button>
+          <button
+            data-testid="doc-create-issue-from-selection"
+            className="rounded bg-accent px-2.5 py-1.5 text-xs font-medium text-white disabled:opacity-40"
+            disabled={!selectedText}
+            onClick={() => void handleCreateFromSelection()}
+          >
+            Create issue from selection
+          </button>
+        </div>
+        {links.length > 0 && (
+          <div className="mt-2 flex flex-wrap gap-1.5" data-testid="doc-related-issues">
+            {links.map((link) => (
+              <Link
+                key={link.id}
+                to="/issues/$issueId"
+                params={{ issueId: link.issueIdentifier }}
+                className="rounded bg-surface-hover px-2 py-1 text-xs text-muted no-underline hover:text-foreground"
+              >
+                {link.issueIdentifier}
+              </Link>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-3 py-4 md:px-8">
@@ -186,7 +306,12 @@ function DocumentEditor({
               Loading document...
             </div>
           ) : (
-            <BlockNoteDocumentEditor collab={collab} />
+            <BlockNoteDocumentEditor
+              collab={collab}
+              linkedIssue={insertedIssue}
+              selectedText={selectedText}
+              onSelectedTextChange={handleSelectedTextChange}
+            />
           )}
         </div>
       </div>
@@ -196,7 +321,9 @@ function DocumentEditor({
 
 export function DocsView({ selectedDocId }: DocsViewProps) {
   const { docs, ready, createDocument, ensureDocument, renameDocument } = useDocs()
+  const { issues, syncIssue } = useIssues()
   const navigate = useNavigate()
+  const [linksByDocId, setLinksByDocId] = useState<Record<string, DocumentIssueLink[]>>({})
   const selectedDoc = useMemo(
     () => {
       const existingDoc = docs.find((doc) => doc.id === selectedDocId)
@@ -219,10 +346,52 @@ export function DocsView({ selectedDocId }: DocsViewProps) {
     void ensureDocument(selectedDocId)
   }, [ensureDocument, ready, selectedDoc, selectedDocId])
 
+  useEffect(() => {
+    if (!selectedDoc) return
+    let cancelled = false
+    void listDocIssueLinks(selectedDoc.id).then((links) => {
+      if (!cancelled) {
+        setLinksByDocId((prev) => ({ ...prev, [selectedDoc.id]: links }))
+      }
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [selectedDoc])
+
   const handleCreate = async () => {
     const doc = await createDocument()
     void navigate({ to: '/documents/$documentId', params: { documentId: doc.id } })
   }
+
+  const handleIssueLinked = useCallback(async (issue: Issue, selectedText: string) => {
+    if (!selectedDoc) return
+    const link = await linkDocIssue({
+      docId: selectedDoc.id,
+      issueId: issue.id,
+      issueIdentifier: issue.identifier,
+      issueTitle: issue.title,
+      selectedText,
+    })
+    setLinksByDocId((prev) => ({
+      ...prev,
+      [selectedDoc.id]: [link, ...(prev[selectedDoc.id] ?? []).filter((item) => item.id !== link.id)],
+    }))
+  }, [selectedDoc])
+
+  const handleCreateIssueFromSelection = useCallback(async (selectedText: string) => {
+    if (!selectedDoc || !selectedText.trim()) return null
+    const issue = await createServerIssue({
+      title: selectedText.trim().slice(0, 120),
+      description: `Created from document "${selectedDoc.title}".\n\n> ${selectedText.trim()}`,
+      status: 'todo',
+      priority: 'none',
+      labels: ['docs'],
+    })
+    syncIssue(issue)
+    await handleIssueLinked(issue, selectedText)
+    return issue
+  }, [handleIssueLinked, selectedDoc, syncIssue])
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col p-1 md:flex-row md:p-2">
@@ -233,6 +402,10 @@ export function DocsView({ selectedDocId }: DocsViewProps) {
           <DocumentEditor
             key={selectedDoc.id}
             doc={selectedDoc}
+            issues={issues}
+            links={linksByDocId[selectedDoc.id] ?? []}
+            onIssueLinked={handleIssueLinked}
+            onCreateIssueFromSelection={handleCreateIssueFromSelection}
             onRename={(title) => {
               void renameDocument(selectedDoc.id, title)
             }}

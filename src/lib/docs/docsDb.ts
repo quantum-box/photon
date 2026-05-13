@@ -1,6 +1,12 @@
 import { PGlite } from '@electric-sql/pglite'
 import { appKitConfig } from '../../app/kitConfig'
-import type { CreateDocInput, DocMetadata, UpdateDocInput } from './types'
+import type {
+  CreateDocInput,
+  DocMetadata,
+  DocumentIssueLink,
+  LinkDocIssueInput,
+  UpdateDocInput,
+} from './types'
 
 interface DocRow {
   id: string
@@ -8,6 +14,17 @@ interface DocRow {
   workspace_id: string
   created_at: string
   updated_at: string
+}
+
+interface DocumentIssueLinkRow {
+  id: string
+  doc_id: string
+  doc_title?: string
+  issue_id: string
+  issue_identifier: string
+  issue_title: string
+  selected_text: string
+  created_at: string
 }
 
 type DocsListener = () => void
@@ -26,6 +43,26 @@ const dbPromise = PGlite.create(appKitConfig.docs.pgliteDataDir).then(async (db)
 
     CREATE INDEX IF NOT EXISTS documents_workspace_updated_idx
       ON documents (workspace_id, updated_at DESC);
+
+    CREATE TABLE IF NOT EXISTS document_issue_links (
+      id TEXT PRIMARY KEY,
+      doc_id TEXT NOT NULL,
+      issue_id TEXT NOT NULL,
+      issue_identifier TEXT NOT NULL,
+      issue_title TEXT NOT NULL,
+      selected_text TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      UNIQUE (doc_id, issue_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS document_issue_links_doc_idx
+      ON document_issue_links (doc_id, created_at DESC);
+
+    CREATE INDEX IF NOT EXISTS document_issue_links_issue_idx
+      ON document_issue_links (issue_id, created_at DESC);
+
+    CREATE INDEX IF NOT EXISTS document_issue_links_identifier_idx
+      ON document_issue_links (issue_identifier, created_at DESC);
   `)
   return db
 })
@@ -42,6 +79,19 @@ function toDoc(row: DocRow): DocMetadata {
 
 function emitDocsChanged() {
   listeners.forEach((listener) => listener())
+}
+
+function toDocumentIssueLink(row: DocumentIssueLinkRow): DocumentIssueLink {
+  return {
+    id: row.id,
+    docId: row.doc_id,
+    docTitle: row.doc_title,
+    issueId: row.issue_id,
+    issueIdentifier: row.issue_identifier,
+    issueTitle: row.issue_title,
+    selectedText: row.selected_text,
+    createdAt: row.created_at,
+  }
 }
 
 export function subscribeDocs(listener: DocsListener) {
@@ -145,4 +195,84 @@ export async function touchDoc(docId: string): Promise<void> {
     [new Date().toISOString(), docId, appKitConfig.workspace.id]
   )
   emitDocsChanged()
+}
+
+export async function linkDocIssue(input: LinkDocIssueInput): Promise<DocumentIssueLink> {
+  const db = await dbPromise
+  const now = new Date().toISOString()
+  const link = {
+    id: globalThis.crypto?.randomUUID?.() ?? `doc-link-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    docId: input.docId,
+    issueId: input.issueId,
+    issueIdentifier: input.issueIdentifier,
+    issueTitle: input.issueTitle,
+    selectedText: input.selectedText?.trim() ?? '',
+    createdAt: now,
+  }
+
+  const result = await db.query<DocumentIssueLinkRow>(
+    `
+      INSERT INTO document_issue_links (
+        id, doc_id, issue_id, issue_identifier, issue_title, selected_text, created_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      ON CONFLICT (doc_id, issue_id) DO UPDATE SET
+        issue_identifier = EXCLUDED.issue_identifier,
+        issue_title = EXCLUDED.issue_title,
+        selected_text = CASE
+          WHEN EXCLUDED.selected_text <> '' THEN EXCLUDED.selected_text
+          ELSE document_issue_links.selected_text
+        END
+      RETURNING id, doc_id, issue_id, issue_identifier, issue_title, selected_text, created_at
+    `,
+    [
+      link.id,
+      link.docId,
+      link.issueId,
+      link.issueIdentifier,
+      link.issueTitle,
+      link.selectedText,
+      link.createdAt,
+    ]
+  )
+
+  await touchDoc(input.docId)
+  return toDocumentIssueLink(result.rows[0])
+}
+
+export async function listDocIssueLinks(docId: string): Promise<DocumentIssueLink[]> {
+  const db = await dbPromise
+  const result = await db.query<DocumentIssueLinkRow>(
+    `
+      SELECT id, doc_id, issue_id, issue_identifier, issue_title, selected_text, created_at
+      FROM document_issue_links
+      WHERE doc_id = $1
+      ORDER BY created_at DESC
+    `,
+    [docId]
+  )
+  return result.rows.map(toDocumentIssueLink)
+}
+
+export async function listIssueDocLinks(issueId: string, issueIdentifier: string): Promise<DocumentIssueLink[]> {
+  const db = await dbPromise
+  const result = await db.query<DocumentIssueLinkRow>(
+    `
+      SELECT
+        document_issue_links.id,
+        document_issue_links.doc_id,
+        documents.title AS doc_title,
+        document_issue_links.issue_id,
+        document_issue_links.issue_identifier,
+        document_issue_links.issue_title,
+        document_issue_links.selected_text,
+        document_issue_links.created_at
+      FROM document_issue_links
+      LEFT JOIN documents ON documents.id = document_issue_links.doc_id
+      WHERE document_issue_links.issue_id = $1 OR document_issue_links.issue_identifier = $2
+      ORDER BY document_issue_links.created_at DESC
+    `,
+    [issueId, issueIdentifier]
+  )
+  return result.rows.map(toDocumentIssueLink)
 }
