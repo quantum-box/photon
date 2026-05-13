@@ -3,8 +3,9 @@ export interface FileAttachment {
   name: string
   size: number
   type: string
-  url: string // object URL
-  file: File
+  url?: string // object URL or remote download URL
+  file?: File
+  previewType?: FileType
 }
 
 export type FileType = 'pdf' | 'excel' | 'csv' | 'docx' | 'pptx' | 'unknown'
@@ -20,6 +21,11 @@ export function detectFileType(file: File): FileType {
   if (ext === 'docx' || mime.includes('wordprocessingml')) return 'docx'
   if (ext === 'pptx' || mime.includes('presentationml')) return 'pptx'
   return 'unknown'
+}
+
+export function detectAttachmentFileType(file: Pick<FileAttachment, 'name' | 'type' | 'previewType'>): FileType {
+  if (file.previewType) return file.previewType
+  return detectFileType(new File([], file.name, { type: file.type }))
 }
 
 export function formatFileSize(bytes: number): string {

@@ -75,6 +75,32 @@ test.describe('Photon shell', () => {
     await expect(page.getByText(/Key Findings|Recommendations/)).toBeVisible()
   })
 
+  test('syncs chat attachment metadata back into the workspace view', async ({ page }) => {
+    const filename = `chat-attachment-${Date.now()}.pdf`
+
+    await page.goto('/chat')
+    const chooserPromise = page.waitForEvent('filechooser')
+    await page.getByTestId('chat-attach-file').click()
+    const chooser = await chooserPromise
+    await chooser.setFiles({
+      name: filename,
+      mimeType: 'application/pdf',
+      buffer: Buffer.from('%PDF-1.4\n% Photon attachment metadata smoke\n'),
+    })
+    await expect(page.getByText(filename)).toBeVisible()
+
+    await page.getByTestId('chat-send').click()
+    await expect(page.getByText(filename)).toBeVisible({ timeout: 15_000 })
+
+    await page.getByTestId('view-table').click()
+    await expect(page).toHaveURL(/\/issues$/)
+    await page.getByTestId('view-chat').click()
+
+    await expect(page.getByTestId('chat-workspace-attachments').getByText(filename)).toBeVisible({
+      timeout: 15_000,
+    })
+  })
+
   test('creates and searches issues from chat tools', async ({ page }) => {
     const title = `Chat command issue ${Date.now()}`
 

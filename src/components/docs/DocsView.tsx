@@ -14,6 +14,11 @@ import {
   linkDocIssue,
   listDocIssueLinks,
 } from '../../lib/docs/docsDb'
+import { toFileAttachment } from '../../lib/attachments/presentation'
+import { useWorkspaceAttachments } from '../../lib/attachments/useWorkspaceAttachments'
+import { FileChip } from '../files/FileChip'
+import { FilePreviewModal } from '../files/FilePreviewModal'
+import type { FileAttachment } from '../files/types'
 import {
   setCurrentDocContext,
   setCurrentDocSelectedText,
@@ -190,6 +195,8 @@ function DocumentEditor({
   onIssueLinked,
   onCreateIssueFromSelection,
   onRename,
+  attachments,
+  onAttachFiles,
 }: {
   doc: DocMetadata
   issues: Issue[]
@@ -197,11 +204,14 @@ function DocumentEditor({
   onIssueLinked: (issue: Issue, selectedText: string) => Promise<void>
   onCreateIssueFromSelection: (selectedText: string) => Promise<Issue | null>
   onRename: (title: string) => void
+  attachments: FileAttachment[]
+  onAttachFiles: (files: FileList | File[]) => void
 }) {
   const { collab, ready, syncStatus, roomId } = useDocumentCollaboration(doc.id)
   const [selectedText, setSelectedText] = useState('')
   const [selectedIssueId, setSelectedIssueId] = useState('')
   const [insertedIssue, setInsertedIssue] = useState<Issue | null>(null)
+  const [previewFile, setPreviewFile] = useState<FileAttachment | null>(null)
 
   useEffect(() => {
     setCurrentDocContext(doc.id, doc.title, `/documents/${doc.id}`)
@@ -282,6 +292,20 @@ function DocumentEditor({
           >
             Create issue from selection
           </button>
+          <label className="cursor-pointer rounded bg-surface-hover px-2.5 py-1.5 text-xs font-medium text-foreground">
+            Attach
+            <input
+              data-testid="doc-attach-file"
+              type="file"
+              multiple
+              accept={appKitConfig.attachments.acceptedTypes}
+              className="hidden"
+              onChange={(event) => {
+                if (event.target.files) onAttachFiles(event.target.files)
+                event.target.value = ''
+              }}
+            />
+          </label>
         </div>
         {links.length > 0 && (
           <div className="mt-2 flex flex-wrap gap-1.5" data-testid="doc-related-issues">
@@ -294,6 +318,17 @@ function DocumentEditor({
               >
                 {link.issueIdentifier}
               </Link>
+            ))}
+          </div>
+        )}
+        {attachments.length > 0 && (
+          <div className="mt-2 flex flex-wrap gap-2" data-testid="doc-attachments">
+            {attachments.map((attachment) => (
+              <FileChip
+                key={attachment.id}
+                file={attachment}
+                onPreview={setPreviewFile}
+              />
             ))}
           </div>
         )}
@@ -315,6 +350,9 @@ function DocumentEditor({
           )}
         </div>
       </div>
+      {previewFile && (
+        <FilePreviewModal file={previewFile} onClose={() => setPreviewFile(null)} />
+      )}
     </div>
   )
 }
@@ -322,6 +360,7 @@ function DocumentEditor({
 export function DocsView({ selectedDocId }: DocsViewProps) {
   const { docs, ready, createDocument, ensureDocument, renameDocument } = useDocs()
   const { issues, syncIssue } = useIssues()
+  const { createAttachment, attachmentsForSurface } = useWorkspaceAttachments()
   const navigate = useNavigate()
   const [linksByDocId, setLinksByDocId] = useState<Record<string, DocumentIssueLink[]>>({})
   const selectedDoc = useMemo(
@@ -393,6 +432,20 @@ export function DocsView({ selectedDocId }: DocsViewProps) {
     return issue
   }, [handleIssueLinked, selectedDoc, syncIssue])
 
+  const handleAttachFiles = useCallback((files: FileList | File[]) => {
+    if (!selectedDoc) return
+    void Promise.all(
+      Array.from(files).map((file) =>
+        createAttachment({
+          file,
+          links: [{ surfaceType: 'document', surfaceId: selectedDoc.id }],
+        })
+      )
+    ).catch((error: unknown) => {
+      console.warn('Failed to persist document attachment metadata', error)
+    })
+  }, [createAttachment, selectedDoc])
+
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col p-1 md:flex-row md:p-2">
       <DocsList docs={docs} selectedDocId={selectedDocId} onCreate={handleCreate} />
@@ -409,6 +462,8 @@ export function DocsView({ selectedDocId }: DocsViewProps) {
             onRename={(title) => {
               void renameDocument(selectedDoc.id, title)
             }}
+            attachments={attachmentsForSurface({ surfaceType: 'document', surfaceId: selectedDoc.id }).map(toFileAttachment)}
+            onAttachFiles={handleAttachFiles}
           />
         ) : !ready ? (
           <div className="flex flex-1 items-center justify-center text-sm text-subtle">

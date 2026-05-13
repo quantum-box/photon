@@ -41,8 +41,27 @@ use yrs::{updates::decoder::Decode, Doc, ReadTxn, StateVector, Transact, Update}
         create_issue,
         update_issue,
         delete_issue,
+        list_attachments,
+        get_attachment,
+        create_attachment,
+        update_attachment,
+        delete_attachment,
+        link_attachment,
+        delete_attachment_link,
     ),
-    components(schemas(Issue, CreateIssue, UpdateIssue, IssueListResponse, HealthResponse)),
+    components(schemas(
+        Issue,
+        CreateIssue,
+        UpdateIssue,
+        IssueListResponse,
+        Attachment,
+        AttachmentLink,
+        CreateAttachment,
+        UpdateAttachment,
+        CreateAttachmentLink,
+        AttachmentListResponse,
+        HealthResponse
+    )),
     info(
         title = "Photon API",
         version = "0.1.0",
@@ -149,6 +168,101 @@ pub struct IssueListResponse {
     pub total: i64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct AttachmentLink {
+    pub id: String,
+    pub attachment_id: String,
+    pub surface_type: String,
+    pub surface_id: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct Attachment {
+    pub id: String,
+    pub workspace_id: String,
+    pub filename: String,
+    pub content_type: String,
+    pub byte_size: i64,
+    pub storage_provider: String,
+    pub storage_key: String,
+    pub content_status: String,
+    pub preview_metadata: serde_json::Value,
+    pub created_by: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+    pub links: Vec<AttachmentLink>,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct AttachmentRecord {
+    pub id: String,
+    pub workspace_id: String,
+    pub filename: String,
+    pub content_type: String,
+    pub byte_size: i64,
+    pub storage_provider: String,
+    pub storage_key: String,
+    pub content_status: String,
+    pub preview_metadata: String,
+    pub created_by: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct AttachmentLinkRecord {
+    pub id: String,
+    pub attachment_id: String,
+    pub surface_type: String,
+    pub surface_id: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct CreateAttachmentLink {
+    pub surface_type: String,
+    pub surface_id: String,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct CreateAttachment {
+    pub workspace_id: String,
+    pub filename: String,
+    pub content_type: String,
+    pub byte_size: i64,
+    pub storage_provider: String,
+    pub storage_key: Option<String>,
+    #[serde(default = "default_attachment_content_status")]
+    pub content_status: String,
+    #[serde(default)]
+    pub preview_metadata: serde_json::Value,
+    pub created_by: Option<String>,
+    #[serde(default)]
+    pub links: Vec<CreateAttachmentLink>,
+}
+
+fn default_attachment_content_status() -> String {
+    "local_cache".into()
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct UpdateAttachment {
+    pub filename: Option<String>,
+    pub content_type: Option<String>,
+    pub byte_size: Option<i64>,
+    pub storage_provider: Option<String>,
+    pub storage_key: Option<String>,
+    pub content_status: Option<String>,
+    pub preview_metadata: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct AttachmentListResponse {
+    pub attachments: Vec<Attachment>,
+    pub total: i64,
+}
+
 #[derive(Debug, Serialize, ToSchema)]
 pub struct HealthResponse {
     pub status: String,
@@ -158,6 +272,9 @@ pub struct HealthResponse {
 pub struct ListParams {
     pub limit: Option<i64>,
     pub offset: Option<i64>,
+    pub workspace_id: Option<String>,
+    pub surface_type: Option<String>,
+    pub surface_id: Option<String>,
 }
 
 fn now_timestamp() -> String {
@@ -190,6 +307,10 @@ fn serialize_labels(labels: &[String]) -> String {
     serde_json::to_string(labels).unwrap_or_else(|_| "[]".into())
 }
 
+fn parse_preview_metadata(raw: &str) -> serde_json::Value {
+    serde_json::from_str(raw).unwrap_or_else(|_| serde_json::json!({}))
+}
+
 async fn next_issue_identifier(pool: &SqlitePool) -> Result<String, sqlx::Error> {
     let max_number: Option<i64> = sqlx::query_scalar(
         "SELECT MAX(CAST(SUBSTR(identifier, 5) AS INTEGER))
@@ -213,6 +334,73 @@ async fn fetch_issue_by_id(pool: &SqlitePool, id: &str) -> Result<Option<Issue>,
     .map(Into::into);
 
     Ok(issue)
+}
+
+async fn fetch_attachment_links(
+    pool: &SqlitePool,
+    attachment_id: &str,
+) -> Result<Vec<AttachmentLink>, sqlx::Error> {
+    let links = sqlx::query_as::<_, AttachmentLinkRecord>(
+        "SELECT id, attachment_id, surface_type, surface_id, created_at
+         FROM attachment_links
+         WHERE attachment_id = ?
+         ORDER BY created_at ASC",
+    )
+    .bind(attachment_id)
+    .fetch_all(pool)
+    .await?
+    .into_iter()
+    .map(|record| AttachmentLink {
+        id: record.id,
+        attachment_id: record.attachment_id,
+        surface_type: record.surface_type,
+        surface_id: record.surface_id,
+        created_at: record.created_at,
+    })
+    .collect();
+
+    Ok(links)
+}
+
+async fn attachment_from_record(
+    pool: &SqlitePool,
+    record: AttachmentRecord,
+) -> Result<Attachment, sqlx::Error> {
+    let links = fetch_attachment_links(pool, &record.id).await?;
+    Ok(Attachment {
+        id: record.id,
+        workspace_id: record.workspace_id,
+        filename: record.filename,
+        content_type: record.content_type,
+        byte_size: record.byte_size,
+        storage_provider: record.storage_provider,
+        storage_key: record.storage_key,
+        content_status: record.content_status,
+        preview_metadata: parse_preview_metadata(&record.preview_metadata),
+        created_by: record.created_by,
+        created_at: record.created_at,
+        updated_at: record.updated_at,
+        links,
+    })
+}
+
+async fn fetch_attachment_by_id(
+    pool: &SqlitePool,
+    id: &str,
+) -> Result<Option<Attachment>, sqlx::Error> {
+    let record = sqlx::query_as::<_, AttachmentRecord>(
+        "SELECT id, workspace_id, filename, content_type, byte_size, storage_provider, storage_key,
+                content_status, preview_metadata, created_by, created_at, updated_at
+         FROM attachments WHERE id = ?",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+
+    match record {
+        Some(record) => attachment_from_record(pool, record).await.map(Some),
+        None => Ok(None),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -454,6 +642,329 @@ async fn delete_issue(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/attachments",
+    params(
+        ("limit" = Option<i64>, Query, description = "Max items to return"),
+        ("offset" = Option<i64>, Query, description = "Items to skip"),
+        ("workspace_id" = Option<String>, Query, description = "Workspace scope"),
+        ("surface_type" = Option<String>, Query, description = "issue, chat, or document"),
+        ("surface_id" = Option<String>, Query, description = "Surface identifier"),
+    ),
+    responses((status = 200, description = "List of attachment metadata", body = AttachmentListResponse)),
+    tag = "attachments"
+)]
+async fn list_attachments(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<ListParams>,
+) -> Result<Json<AttachmentListResponse>, AppError> {
+    let limit = params.limit.unwrap_or(100);
+    let offset = params.offset.unwrap_or(0);
+    let workspace_id = params
+        .workspace_id
+        .unwrap_or_else(|| "photon-default".into());
+
+    let records = if let (Some(surface_type), Some(surface_id)) =
+        (params.surface_type.as_deref(), params.surface_id.as_deref())
+    {
+        sqlx::query_as::<_, AttachmentRecord>(
+            "SELECT attachments.id, attachments.workspace_id, attachments.filename, attachments.content_type,
+                    attachments.byte_size, attachments.storage_provider, attachments.storage_key,
+                    attachments.content_status, attachments.preview_metadata, attachments.created_by,
+                    attachments.created_at, attachments.updated_at
+             FROM attachments
+             INNER JOIN attachment_links ON attachment_links.attachment_id = attachments.id
+             WHERE attachments.workspace_id = ?
+               AND attachment_links.surface_type = ?
+               AND attachment_links.surface_id = ?
+             ORDER BY attachments.updated_at DESC
+             LIMIT ? OFFSET ?",
+        )
+        .bind(&workspace_id)
+        .bind(surface_type)
+        .bind(surface_id)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&state.db)
+        .await?
+    } else {
+        sqlx::query_as::<_, AttachmentRecord>(
+            "SELECT id, workspace_id, filename, content_type, byte_size, storage_provider, storage_key,
+                    content_status, preview_metadata, created_by, created_at, updated_at
+             FROM attachments
+             WHERE workspace_id = ?
+             ORDER BY updated_at DESC
+             LIMIT ? OFFSET ?",
+        )
+        .bind(&workspace_id)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&state.db)
+        .await?
+    };
+
+    let total: (i64,) = if let (Some(surface_type), Some(surface_id)) =
+        (params.surface_type.as_deref(), params.surface_id.as_deref())
+    {
+        sqlx::query_as(
+            "SELECT COUNT(*)
+             FROM attachments
+             INNER JOIN attachment_links ON attachment_links.attachment_id = attachments.id
+             WHERE attachments.workspace_id = ?
+               AND attachment_links.surface_type = ?
+               AND attachment_links.surface_id = ?",
+        )
+        .bind(&workspace_id)
+        .bind(surface_type)
+        .bind(surface_id)
+        .fetch_one(&state.db)
+        .await?
+    } else {
+        sqlx::query_as("SELECT COUNT(*) FROM attachments WHERE workspace_id = ?")
+            .bind(&workspace_id)
+            .fetch_one(&state.db)
+            .await?
+    };
+
+    let mut attachments = Vec::with_capacity(records.len());
+    for record in records {
+        attachments.push(attachment_from_record(&state.db, record).await?);
+    }
+
+    Ok(Json(AttachmentListResponse {
+        attachments,
+        total: total.0,
+    }))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/attachments/:id",
+    params(("id" = String, Path, description = "Attachment ID")),
+    responses(
+        (status = 200, description = "Attachment found", body = Attachment),
+        (status = 404, description = "Attachment not found"),
+    ),
+    tag = "attachments"
+)]
+async fn get_attachment(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<Attachment>, AppError> {
+    let attachment = fetch_attachment_by_id(&state.db, &id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+
+    Ok(Json(attachment))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/attachments",
+    request_body = CreateAttachment,
+    responses((status = 201, description = "Attachment metadata created", body = Attachment)),
+    tag = "attachments"
+)]
+async fn create_attachment(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<CreateAttachment>,
+) -> Result<(StatusCode, Json<Attachment>), AppError> {
+    let id = Uuid::new_v4().to_string();
+    let now = now_timestamp();
+    let filename = payload.filename.trim().to_string();
+    let storage_key = payload
+        .storage_key
+        .and_then(|value| normalize_optional_text(Some(value)))
+        .unwrap_or_else(|| format!("{}/attachments/{}", payload.workspace_id, id));
+    let preview_metadata =
+        serde_json::to_string(&payload.preview_metadata).unwrap_or_else(|_| "{}".into());
+
+    sqlx::query(
+        "INSERT INTO attachments (
+            id, workspace_id, filename, content_type, byte_size, storage_provider, storage_key,
+            content_status, preview_metadata, created_by, created_at, updated_at
+         )
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&id)
+    .bind(&payload.workspace_id)
+    .bind(&filename)
+    .bind(&payload.content_type)
+    .bind(payload.byte_size)
+    .bind(&payload.storage_provider)
+    .bind(&storage_key)
+    .bind(&payload.content_status)
+    .bind(&preview_metadata)
+    .bind(&payload.created_by)
+    .bind(&now)
+    .bind(&now)
+    .execute(&state.db)
+    .await?;
+
+    for link in payload.links {
+        upsert_attachment_link(&state.db, &id, &payload.workspace_id, link).await?;
+    }
+
+    let attachment = fetch_attachment_by_id(&state.db, &id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+
+    Ok((StatusCode::CREATED, Json(attachment)))
+}
+
+#[utoipa::path(
+    put,
+    path = "/api/attachments/:id",
+    params(("id" = String, Path, description = "Attachment ID")),
+    request_body = UpdateAttachment,
+    responses(
+        (status = 200, description = "Attachment updated", body = Attachment),
+        (status = 404, description = "Attachment not found"),
+    ),
+    tag = "attachments"
+)]
+async fn update_attachment(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(payload): Json<UpdateAttachment>,
+) -> Result<Json<Attachment>, AppError> {
+    let existing = fetch_attachment_by_id(&state.db, &id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let now = now_timestamp();
+    let preview_metadata = payload
+        .preview_metadata
+        .map(|metadata| serde_json::to_string(&metadata).unwrap_or_else(|_| "{}".into()))
+        .unwrap_or_else(|| {
+            serde_json::to_string(&existing.preview_metadata).unwrap_or_else(|_| "{}".into())
+        });
+
+    sqlx::query(
+        "UPDATE attachments
+         SET filename = ?, content_type = ?, byte_size = ?, storage_provider = ?,
+             storage_key = ?, content_status = ?, preview_metadata = ?, updated_at = ?
+         WHERE id = ?",
+    )
+    .bind(payload.filename.unwrap_or(existing.filename))
+    .bind(payload.content_type.unwrap_or(existing.content_type))
+    .bind(payload.byte_size.unwrap_or(existing.byte_size))
+    .bind(
+        payload
+            .storage_provider
+            .unwrap_or(existing.storage_provider),
+    )
+    .bind(payload.storage_key.unwrap_or(existing.storage_key))
+    .bind(payload.content_status.unwrap_or(existing.content_status))
+    .bind(preview_metadata)
+    .bind(now)
+    .bind(&id)
+    .execute(&state.db)
+    .await?;
+
+    let attachment = fetch_attachment_by_id(&state.db, &id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    Ok(Json(attachment))
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/attachments/:id",
+    params(("id" = String, Path, description = "Attachment ID")),
+    responses((status = 204, description = "Attachment metadata deleted")),
+    tag = "attachments"
+)]
+async fn delete_attachment(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, AppError> {
+    let result = sqlx::query("DELETE FROM attachments WHERE id = ?")
+        .bind(&id)
+        .execute(&state.db)
+        .await?;
+
+    if result.rows_affected() == 0 {
+        return Err(AppError::NotFound);
+    }
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn upsert_attachment_link(
+    pool: &SqlitePool,
+    attachment_id: &str,
+    workspace_id: &str,
+    link: CreateAttachmentLink,
+) -> Result<(), sqlx::Error> {
+    let link_id = Uuid::new_v4().to_string();
+    let now = now_timestamp();
+    sqlx::query(
+        "INSERT INTO attachment_links (id, attachment_id, workspace_id, surface_type, surface_id, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT (attachment_id, surface_type, surface_id) DO NOTHING",
+    )
+    .bind(link_id)
+    .bind(attachment_id)
+    .bind(workspace_id)
+    .bind(link.surface_type)
+    .bind(link.surface_id)
+    .bind(now)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/attachments/:id/links",
+    params(("id" = String, Path, description = "Attachment ID")),
+    request_body = CreateAttachmentLink,
+    responses((status = 200, description = "Attachment linked", body = Attachment)),
+    tag = "attachments"
+)]
+async fn link_attachment(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(payload): Json<CreateAttachmentLink>,
+) -> Result<Json<Attachment>, AppError> {
+    let attachment = fetch_attachment_by_id(&state.db, &id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    upsert_attachment_link(&state.db, &id, &attachment.workspace_id, payload).await?;
+    let attachment = fetch_attachment_by_id(&state.db, &id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    Ok(Json(attachment))
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/attachments/:id/links/:link_id",
+    params(
+        ("id" = String, Path, description = "Attachment ID"),
+        ("link_id" = String, Path, description = "Attachment link ID"),
+    ),
+    responses((status = 204, description = "Attachment link removed")),
+    tag = "attachments"
+)]
+async fn delete_attachment_link(
+    State(state): State<Arc<AppState>>,
+    Path((id, link_id)): Path<(String, String)>,
+) -> Result<StatusCode, AppError> {
+    let result = sqlx::query("DELETE FROM attachment_links WHERE attachment_id = ? AND id = ?")
+        .bind(&id)
+        .bind(&link_id)
+        .execute(&state.db)
+        .await?;
+
+    if result.rows_affected() == 0 {
+        return Err(AppError::NotFound);
+    }
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
 // ---------------------------------------------------------------------------
 // WebSocket — yrs CRDT sync
 // ---------------------------------------------------------------------------
@@ -644,6 +1155,9 @@ async fn init_db(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         .execute(pool)
         .await?;
     sqlx::raw_sql(include_str!("../migrations/002_create_yjs_state.sql"))
+        .execute(pool)
+        .await?;
+    sqlx::raw_sql(include_str!("../migrations/003_create_attachments.sql"))
         .execute(pool)
         .await?;
     ensure_issue_projection_columns(pool).await?;
@@ -1077,6 +1591,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "/api/issues/:id",
             get(get_issue).put(update_issue).delete(delete_issue),
         )
+        // Attachment metadata + surface links
+        .route(
+            "/api/attachments",
+            get(list_attachments).post(create_attachment),
+        )
+        .route(
+            "/api/attachments/:id",
+            get(get_attachment)
+                .put(update_attachment)
+                .delete(delete_attachment),
+        )
+        .route(
+            "/api/attachments/:id/links",
+            axum::routing::post(link_attachment),
+        )
+        .route(
+            "/api/attachments/:id/links/:link_id",
+            axum::routing::delete(delete_attachment_link),
+        )
         // WebSocket
         .route("/ws", get(ws_handler))
         // Swagger UI
@@ -1131,6 +1664,24 @@ mod tests {
             .route(
                 "/api/issues/:id",
                 get(get_issue).put(update_issue).delete(delete_issue),
+            )
+            .route(
+                "/api/attachments",
+                get(list_attachments).post(create_attachment),
+            )
+            .route(
+                "/api/attachments/:id",
+                get(get_attachment)
+                    .put(update_attachment)
+                    .delete(delete_attachment),
+            )
+            .route(
+                "/api/attachments/:id/links",
+                axum::routing::post(link_attachment),
+            )
+            .route(
+                "/api/attachments/:id/links/:link_id",
+                axum::routing::delete(delete_attachment_link),
             )
             .with_state(state.clone());
 
@@ -1337,6 +1888,87 @@ mod tests {
             .unwrap();
 
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_attachment_metadata_can_link_multiple_surfaces() {
+        let (app, _) = test_app().await;
+
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/attachments")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "workspace_id": "photon-default",
+                            "filename": "brief.pdf",
+                            "content_type": "application/pdf",
+                            "byte_size": 42,
+                            "storage_provider": "web-object-storage",
+                            "content_status": "local_cache",
+                            "preview_metadata": { "fileType": "pdf" },
+                            "links": [
+                                { "surface_type": "issue", "surface_id": "issue-1" },
+                                { "surface_type": "document", "surface_id": "doc-1" }
+                            ]
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let created: Attachment = serde_json::from_slice(&body).unwrap();
+        assert_eq!(created.filename, "brief.pdf");
+        assert_eq!(created.links.len(), 2);
+
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(&format!("/api/attachments/{}/links", created.id))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "surface_type": "chat",
+                            "surface_id": "general"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/attachments?workspace_id=photon-default&surface_type=chat&surface_id=general")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let list: AttachmentListResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(list.total, 1);
+        assert_eq!(list.attachments[0].id, created.id);
+        assert_eq!(list.attachments[0].links.len(), 3);
     }
 
     // -----------------------------------------------------------------------

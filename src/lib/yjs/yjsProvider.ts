@@ -8,6 +8,7 @@ import { appKitConfig } from '../../app/kitConfig.js'
 
 export const ydoc = new Y.Doc()
 export const issuesArray = ydoc.getArray<Y.Map<string>>(appKitConfig.sync.yjsArrayName)
+export const attachmentsArray = ydoc.getArray<Y.Map<string>>(appKitConfig.attachments.yjsArrayName)
 
 // ---------------------------------------------------------------------------
 // IndexedDB persistence

@@ -1,4 +1,4 @@
-import { type FileAttachment, detectFileType } from './types'
+import { type FileAttachment, detectAttachmentFileType } from './types'
 import { PdfViewer } from './PdfViewer'
 import { SpreadsheetViewer } from './SpreadsheetViewer'
 import { DocxViewer } from './DocxViewer'
@@ -10,19 +10,35 @@ interface FilePreviewModalProps {
 }
 
 export function FilePreviewModal({ file, onClose }: FilePreviewModalProps) {
-  const fileType = detectFileType(file.file)
+  const fileType = detectAttachmentFileType(file)
+  const canPreviewLocalFile = Boolean(file.file)
+  const downloadUrl = file.url
 
   const renderViewer = () => {
+    if (!canPreviewLocalFile && fileType !== 'pdf') {
+      return (
+        <div className="flex h-full items-center justify-center px-6 text-center">
+          <p className="text-sm text-subtle">
+            Preview metadata is synced. Open this file from the device that uploaded it or download it when object storage is configured.
+          </p>
+        </div>
+      )
+    }
+
     switch (fileType) {
       case 'pdf':
-        return <PdfViewer url={file.url} name={file.name} />
+        return file.url ? <PdfViewer url={file.url} name={file.name} /> : (
+          <div className="flex h-full items-center justify-center text-sm text-subtle">
+            PDF content is not cached on this device.
+          </div>
+        )
       case 'excel':
       case 'csv':
-        return <SpreadsheetViewer file={file.file} name={file.name} />
+        return file.file ? <SpreadsheetViewer file={file.file} name={file.name} /> : null
       case 'docx':
-        return <DocxViewer file={file.file} name={file.name} />
+        return file.file ? <DocxViewer file={file.file} name={file.name} /> : null
       case 'pptx':
-        return <PptxViewer file={file.file} name={file.name} />
+        return file.file ? <PptxViewer file={file.file} name={file.name} /> : null
       default:
         return (
           <div className="flex items-center justify-center h-full">
@@ -52,13 +68,15 @@ export function FilePreviewModal({ file, onClose }: FilePreviewModalProps) {
             </span>
           </div>
           <div className="flex shrink-0 items-center gap-2">
-            <a
-              href={file.url}
-              download={file.name}
-              className="px-3 py-1 rounded text-xs cursor-pointer bg-surface-hover text-muted"
-            >
-              Download
-            </a>
+            {downloadUrl && (
+              <a
+                href={downloadUrl}
+                download={file.name}
+                className="px-3 py-1 rounded text-xs cursor-pointer bg-surface-hover text-muted"
+              >
+                Download
+              </a>
+            )}
             <button
               onClick={onClose}
               className="w-7 h-7 rounded flex items-center justify-center text-sm cursor-pointer transition-colors text-subtle hover:bg-surface-hover hover:text-foreground"

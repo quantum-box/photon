@@ -40,6 +40,14 @@ export interface AppKitConfig {
     defaultTitle: string
     yjsArrayName: string
   }
+  attachments: {
+    yjsArrayName: string
+    endpoint: string
+    acceptedTypes: string
+    maxPreviewBytes: number
+    webStorageProvider: 'web-object-storage'
+    tauriStorageProvider: 'tauri-local-file-cache'
+  }
   sync: {
     backend: SyncBackend
     workspaceId: string
@@ -210,6 +218,14 @@ export const appKitConfig: AppKitConfig = {
     pgliteDataDir: 'idb://photon-docs',
     defaultTitle: 'Untitled doc',
     yjsArrayName: 'blocks',
+  },
+  attachments: {
+    yjsArrayName: 'attachments',
+    endpoint: '/api/attachments',
+    acceptedTypes: '.pdf,.xlsx,.xls,.csv,.docx,.pptx',
+    maxPreviewBytes: 25 * 1024 * 1024,
+    webStorageProvider: 'web-object-storage',
+    tauriStorageProvider: 'tauri-local-file-cache',
   },
   sync: {
     backend: syncBackend,
