@@ -1,4 +1,4 @@
-import { type FileAttachment, detectFileType, formatFileSize, getFileIcon, getFileColor } from './types'
+import { type FileAttachment, detectAttachmentFileType, formatFileSize, getFileIcon, getFileColor } from './types'
 
 interface FileChipProps {
   file: FileAttachment
@@ -7,7 +7,7 @@ interface FileChipProps {
 }
 
 export function FileChip({ file, onPreview, onRemove }: FileChipProps) {
-  const fileType = detectFileType(file.file)
+  const fileType = detectAttachmentFileType(file)
   const icon = getFileIcon(fileType)
   const color = getFileColor(fileType)
   const ext = file.name.split('.').pop()?.toUpperCase() ?? ''

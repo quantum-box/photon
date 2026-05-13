@@ -17,6 +17,7 @@ import { CreateIssueModal } from './components/CreateIssueModal'
 import { ChatView } from './components/chat/ChatView'
 import { DocsView } from './components/docs/DocsView'
 import { IssuesProvider, useIssues } from './contexts/IssuesContext'
+import { AttachmentsProvider } from './lib/attachments/useWorkspaceAttachments'
 import type { Status, Issue } from './data/mock'
 import type { SortingState } from '@tanstack/react-table'
 
@@ -54,12 +55,14 @@ const rootRoute = createRootRoute({
     const [createModalOpen, setCreateModalOpen] = useState(false)
     return (
       <IssuesProvider>
-        <CreateModalContext.Provider value={{ open: createModalOpen, setOpen: setCreateModalOpen }}>
-          <div className="flex h-full min-w-0 flex-col overflow-hidden md:flex-row">
-            <Sidebar />
-            <Outlet />
-          </div>
-        </CreateModalContext.Provider>
+        <AttachmentsProvider>
+          <CreateModalContext.Provider value={{ open: createModalOpen, setOpen: setCreateModalOpen }}>
+            <div className="flex h-full min-w-0 flex-col overflow-hidden md:flex-row">
+              <Sidebar />
+              <Outlet />
+            </div>
+          </CreateModalContext.Provider>
+        </AttachmentsProvider>
       </IssuesProvider>
     )
   },

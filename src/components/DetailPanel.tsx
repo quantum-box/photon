@@ -11,6 +11,12 @@ import {
 } from '../data/mock'
 import { listIssueDocLinks } from '../lib/docs/docsDb'
 import type { DocumentIssueLink } from '../lib/docs/types'
+import { useWorkspaceAttachments } from '../lib/attachments/useWorkspaceAttachments'
+import { toFileAttachment } from '../lib/attachments/presentation'
+import { appKitConfig } from '../app/kitConfig'
+import { FileChip } from './files/FileChip'
+import { FilePreviewModal } from './files/FilePreviewModal'
+import type { FileAttachment } from './files/types'
 
 interface DetailPanelProps {
   issue: Issue | null
@@ -22,6 +28,8 @@ interface DetailPanelProps {
 export function DetailPanel({ issue, onClose, onUpdateIssue, onDeleteIssue }: DetailPanelProps) {
   const [deleteConfirm, setDeleteConfirm] = useState(false)
   const [relatedDocs, setRelatedDocs] = useState<DocumentIssueLink[]>([])
+  const [previewFile, setPreviewFile] = useState<FileAttachment | null>(null)
+  const { createAttachment, attachmentsForSurface } = useWorkspaceAttachments()
 
   // Reset confirm dialog when issue changes
   useEffect(() => {
@@ -51,6 +59,21 @@ export function DetailPanel({ issue, onClose, onUpdateIssue, onDeleteIssue }: De
       onDeleteIssue(issue.id)
       onClose()
     }
+  }
+
+  const issueAttachments = attachmentsForSurface({ surfaceType: 'issue', surfaceId: issue.id }).map(toFileAttachment)
+
+  const handleAttachFiles = (files: FileList | File[]) => {
+    void Promise.all(
+      Array.from(files).map((file) =>
+        createAttachment({
+          file,
+          links: [{ surfaceType: 'issue', surfaceId: issue.id }],
+        })
+      )
+    ).catch((error: unknown) => {
+      console.warn('Failed to persist issue attachment metadata', error)
+    })
   }
 
   return (
@@ -309,6 +332,49 @@ export function DetailPanel({ issue, onClose, onUpdateIssue, onDeleteIssue }: De
           className="mt-5 border-t pt-4"
           style={{ borderColor: 'var(--border-color)' }}
         >
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <h3
+              className="text-xs font-medium uppercase tracking-wider"
+              style={{ color: 'var(--text-muted)' }}
+            >
+              Attachments
+            </h3>
+            <label className="cursor-pointer rounded px-2 py-1 text-xs" style={{ background: 'var(--bg-hover)' }}>
+              Attach
+              <input
+                data-testid="issue-attach-file"
+                type="file"
+                multiple
+                accept={appKitConfig.attachments.acceptedTypes}
+                className="hidden"
+                onChange={(event) => {
+                  if (event.target.files) handleAttachFiles(event.target.files)
+                  event.target.value = ''
+                }}
+              />
+            </label>
+          </div>
+          {issueAttachments.length > 0 ? (
+            <div className="mb-4 flex flex-wrap gap-2" data-testid="issue-attachments">
+              {issueAttachments.map((attachment) => (
+                <FileChip
+                  key={attachment.id}
+                  file={attachment}
+                  onPreview={setPreviewFile}
+                />
+              ))}
+            </div>
+          ) : (
+            <p className="mb-4 text-sm" style={{ color: 'var(--text-muted)' }}>
+              No attachments yet.
+            </p>
+          )}
+        </div>
+
+        <div
+          className="mt-5 border-t pt-4"
+          style={{ borderColor: 'var(--border-color)' }}
+        >
           <h3
             className="mb-2 text-xs font-medium uppercase tracking-wider"
             style={{ color: 'var(--text-muted)' }}
@@ -351,6 +417,9 @@ export function DetailPanel({ issue, onClose, onUpdateIssue, onDeleteIssue }: De
           onConfirm={handleDelete}
           onCancel={() => setDeleteConfirm(false)}
         />
+      )}
+      {previewFile && (
+        <FilePreviewModal file={previewFile} onClose={() => setPreviewFile(null)} />
       )}
     </div>
   )

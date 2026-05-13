@@ -8,6 +8,9 @@ import { type FileAttachment, detectFileType } from '../files/types'
 import type { ToolCall } from './tools/types'
 import { appKitConfig } from '../../app/kitConfig'
 import { useIssues } from '../../contexts/IssuesContext'
+import { toFileAttachment } from '../../lib/attachments/presentation'
+import { useWorkspaceAttachments } from '../../lib/attachments/useWorkspaceAttachments'
+import type { AttachmentSurfaceRef } from '../../lib/attachments/types'
 import { listDocIssueLinks } from '../../lib/docs/docsDb'
 import {
   readStoredDocContext,
@@ -15,7 +18,7 @@ import {
   type WorkspaceDocContext,
 } from '../../lib/docs/workspaceContext'
 
-const ACCEPTED_TYPES = '.pdf,.xlsx,.xls,.csv,.docx,.pptx'
+const CHAT_SURFACE_ID = 'general'
 
 let nextId = 1
 function genId() {
@@ -35,11 +38,13 @@ function createFileAttachment(file: File): FileAttachment {
     type: file.type,
     url: URL.createObjectURL(file),
     file,
+    previewType: detectFileType(file),
   }
 }
 
 export function ChatView() {
   const { issues, syncIssue, syncIssues } = useIssues()
+  const { createAttachment, attachmentsForSurface } = useWorkspaceAttachments()
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [isStreaming, setIsStreaming] = useState(false)
@@ -97,7 +102,7 @@ export function ChatView() {
   const handleRemovePendingFile = useCallback((fileId: string) => {
     setPendingFiles((prev) => {
       const file = prev.find((f) => f.id === fileId)
-      if (file) URL.revokeObjectURL(file.url)
+      if (file?.url) URL.revokeObjectURL(file.url)
       return prev.filter((f) => f.id !== fileId)
     })
   }, [])
@@ -166,9 +171,33 @@ export function ChatView() {
     abortRef.current = controller
   }, [documentContext, issues, syncIssue, syncIssues])
 
-  const handleSend = useCallback(() => {
+  const chatAttachments = attachmentsForSurface({ surfaceType: 'chat', surfaceId: CHAT_SURFACE_ID })
+
+  const handleSend = useCallback(async () => {
     const text = input.trim()
     if ((!text && pendingFiles.length === 0) || isStreaming) return
+
+    const surfaces: AttachmentSurfaceRef[] = [{ surfaceType: 'chat', surfaceId: CHAT_SURFACE_ID }]
+    if (documentContext) {
+      surfaces.push({ surfaceType: 'document', surfaceId: documentContext.docId })
+    }
+
+    const syncedAttachments = await Promise.all(
+      pendingFiles.map(async (pendingFile) => {
+        if (!pendingFile.file) return pendingFile
+        try {
+          const attachment = await createAttachment({
+            file: pendingFile.file,
+            links: surfaces,
+          })
+          if (pendingFile.url) URL.revokeObjectURL(pendingFile.url)
+          return toFileAttachment(attachment)
+        } catch (error) {
+          console.warn('Failed to persist attachment metadata', error)
+          return pendingFile
+        }
+      })
+    )
 
     // Add user message with attachments
     const userMsg: Message = {
@@ -176,7 +205,7 @@ export function ChatView() {
       role: 'user',
       content: text,
       timestamp: Date.now(),
-      attachments: pendingFiles.length > 0 ? [...pendingFiles] : undefined,
+      attachments: syncedAttachments.length > 0 ? syncedAttachments : undefined,
     }
 
     // Prepare assistant message placeholder
@@ -207,7 +236,7 @@ export function ChatView() {
     const prompt = fileContext ? `${fileContext}\n${text}` : text
 
     startAssistantStream(assistantId, prompt, conversation)
-  }, [input, isStreaming, messages, pendingFiles, startAssistantStream])
+  }, [createAttachment, documentContext, input, isStreaming, messages, pendingFiles, startAssistantStream])
 
   const handleStop = useCallback(() => {
     abortRef.current?.abort()
@@ -332,6 +361,17 @@ export function ChatView() {
               <p className="text-sm mb-4 text-subtle">
                 Send a message to start a conversation
               </p>
+              {chatAttachments.length > 0 && (
+                <div className="mb-4 flex max-w-md flex-wrap justify-center gap-2" data-testid="chat-workspace-attachments">
+                  {chatAttachments.slice(0, 6).map((attachment) => (
+                    <FileChip
+                      key={attachment.id}
+                      file={toFileAttachment(attachment)}
+                      onPreview={setPreviewFile}
+                    />
+                  ))}
+                </div>
+              )}
 
               {/* Tool capability hints */}
               <div className="mx-auto flex max-w-md flex-wrap justify-center gap-2">
@@ -457,7 +497,7 @@ export function ChatView() {
           <input
             ref={fileInputRef}
             type="file"
-            accept={ACCEPTED_TYPES}
+            accept={appKitConfig.attachments.acceptedTypes}
             multiple
             className="hidden"
             onChange={(e) => {
