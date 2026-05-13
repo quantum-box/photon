@@ -1,6 +1,6 @@
 import * as Y from 'yjs'
 import { IndexeddbPersistence } from 'y-indexeddb'
-import { appKitConfig } from '../../app/kitConfig'
+import { appKitConfig } from '../../app/kitConfig.js'
 
 // ---------------------------------------------------------------------------
 // Y.Doc singleton
@@ -92,7 +92,7 @@ function getWsUrl(): string {
 
   const loc = window.location
   const proto = loc.protocol === 'https:' ? 'wss:' : 'ws:'
-  return `${proto}//${loc.host}${appKitConfig.sync.websocketPath}`
+  return `${proto}//${loc.host}${appKitConfig.frontendWorker.websocketPath}`
 }
 
 function scheduleReconnect() {
