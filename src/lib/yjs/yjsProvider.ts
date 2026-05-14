@@ -8,6 +8,10 @@ import { appKitConfig } from '../../app/kitConfig.js'
 
 export const ydoc = new Y.Doc()
 export const issuesArray = ydoc.getArray<Y.Map<string>>(appKitConfig.sync.yjsArrayName)
+export const databasesArray = ydoc.getArray<Y.Map<string>>(appKitConfig.sync.databasesArrayName)
+export const workflowCanvasesMap = ydoc.getMap<string>(
+  appKitConfig.sync.workflowCanvasesMapName
+)
 export const attachmentsArray = ydoc.getArray<Y.Map<string>>(appKitConfig.attachments.yjsArrayName)
 
 // ---------------------------------------------------------------------------
@@ -131,6 +135,7 @@ export function connectWs() {
     backoff = 1000 // reset backoff on successful connect
     setStatus('connected')
     ydoc.on('update', onDocUpdate)
+    socket.send(Y.encodeStateAsUpdate(ydoc))
   })
 
   socket.addEventListener('message', (event) => {

@@ -1,14 +1,15 @@
 import { useNavigate, useRouterState, Link } from '@tanstack/react-router'
-import { statusConfig, type Status } from '../data/mock'
+import { useState } from 'react'
+import type { FormEvent } from 'react'
+import type { Status } from '../data/mock'
 import { useDatabaseRecords } from '../contexts/IssuesContext'
+import { useWorkspaceDatabases } from '../contexts/DatabasesContext'
 import { useTheme } from '../contexts/ThemeContext'
 import type { ThemeMode } from '../contexts/ThemeContext'
 import { useConnectionStatus, useSyncPresence } from '../lib/yjs/useYjsIssues'
 import { appKitConfig } from '../app/kitConfig'
 
-const views = [
-  { id: 'table' as const, label: 'Table', to: '/databases' as const },
-  { id: 'kanban' as const, label: 'Board', to: '/databases/board' as const },
+const workspaceLinks = [
   { id: 'docs' as const, label: 'Docs', to: '/docs' as const },
   { id: 'chat' as const, label: 'Chat', to: '/chat' as const },
 ] as const
@@ -88,31 +89,51 @@ const statusLabels: Record<string, string> = {
 }
 
 export function Sidebar() {
-  const { recordCountByStatus } = useDatabaseRecords()
+  const { records } = useDatabaseRecords()
+  const { databases, addDatabase } = useWorkspaceDatabases()
   const navigate = useNavigate()
   const connStatus = useConnectionStatus()
   const { onlineCount } = useSyncPresence()
+  const [newDatabaseName, setNewDatabaseName] = useState('')
+  const [sideNavOpen, setSideNavOpen] = useState(true)
 
   const pathname = useRouterState({ select: (s) => s.location.pathname })
   const search = useRouterState({ select: (s) => s.location.search }) as {
+    database?: string
     status?: Status
   }
-  const statusFilter = search.status ?? null
+  const selectedDatabaseId = search.database
 
   const currentView = pathname.startsWith('/databases/board')
     ? 'kanban'
+    : pathname.startsWith('/databases/workflow')
+      ? 'workflow'
     : pathname.startsWith('/docs') || pathname.startsWith('/documents')
       ? 'docs'
     : pathname.startsWith('/chat')
       ? 'chat'
       : 'table'
 
-  const handleStatusFilter = (status: Status | null) => {
-    const to = currentView === 'kanban' ? '/databases/board' : '/databases'
+  const handleDatabaseSelect = (databaseId: string | null) => {
+    const to =
+      currentView === 'kanban'
+        ? '/databases/board'
+        : currentView === 'workflow'
+          ? '/databases/workflow'
+          : '/databases'
     void navigate({
       to,
-      search: status ? { status } : {},
+      search: databaseId ? { database: databaseId } : {},
     })
+  }
+
+  const handleCreateDatabase = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    const database = addDatabase(newDatabaseName)
+    if (!database) return
+
+    setNewDatabaseName('')
+    handleDatabaseSelect(database.id)
   }
 
   const workspaceHeader = (presenceTestId: string) => (
@@ -139,96 +160,164 @@ export function Sidebar() {
     </div>
   )
 
-  const viewLinks = (testIdSuffix = '') => (
-    <div className="flex gap-1 px-1">
-      {views.map((view) => (
+  const databaseFilters = (
+    <>
+      <button
+        className={`flex shrink-0 items-center justify-between gap-2 rounded px-2 py-1.5 text-sm transition-colors md:w-full ${
+          !selectedDatabaseId
+            ? 'bg-surface-hover text-foreground'
+            : 'text-muted hover:bg-surface-hover'
+        }`}
+        onClick={() => handleDatabaseSelect(null)}
+      >
+        <span>All databases</span>
+        <span className="text-xs text-subtle">{records.length}</span>
+      </button>
+      {databases.map((item) => {
+        const count = records.filter((record) => record.project === item.label).length
+        return (
+          <button
+            key={item.id}
+            data-testid={`database-${item.id}`}
+            className={`flex shrink-0 items-center justify-between gap-2 rounded px-2 py-1.5 text-sm transition-colors md:w-full ${
+              selectedDatabaseId === item.id
+                ? 'bg-surface-hover text-foreground'
+                : 'text-muted hover:bg-surface-hover'
+            }`}
+            onClick={() => handleDatabaseSelect(item.id)}
+          >
+            <span className="flex min-w-0 items-center gap-2">
+              <span className="h-2 w-2 shrink-0 rounded-full bg-accent" />
+              <span className="truncate">{item.label}</span>
+            </span>
+            <span className="text-xs text-subtle">{count}</span>
+          </button>
+        )
+      })}
+      <form className="mt-2 flex gap-1 px-0.5" onSubmit={handleCreateDatabase}>
+        <input
+          data-testid="new-database-name"
+          value={newDatabaseName}
+          onChange={(event) => setNewDatabaseName(event.target.value)}
+          className="min-w-0 flex-1 rounded border border-border bg-surface px-2 py-1 text-xs outline-none focus:border-accent"
+          placeholder="New database"
+        />
+        <button
+          data-testid="create-database"
+          type="submit"
+          className="rounded bg-surface-hover px-2 py-1 text-xs font-medium text-muted hover:text-foreground"
+        >
+          Add
+        </button>
+      </form>
+    </>
+  )
+
+  const workspaceNavigation = (testIdSuffix = '') => (
+    <div className="grid grid-cols-2 gap-1 px-1">
+      {workspaceLinks.map((view) => (
         <Link
           key={view.id}
           data-testid={`view-${view.id}${testIdSuffix}`}
           to={view.to}
-          search={
-            view.id !== 'chat' && statusFilter
-            && view.id !== 'docs'
-              ? { status: statusFilter }
-              : {}
-          }
           className={`flex-1 px-2 py-1 rounded text-xs font-medium transition-colors text-center block no-underline ${
             currentView === view.id
               ? 'bg-accent text-white'
               : 'text-muted'
           }`}
         >
-          {view.label}
+          <span className="block truncate">{view.label}</span>
         </Link>
       ))}
     </div>
-  )
-
-  const statusFilters = (
-    <>
-      <button
-        className={`flex shrink-0 items-center justify-between gap-2 px-2 py-1.5 rounded text-sm transition-colors md:w-full ${
-          statusFilter === null
-            ? 'text-foreground bg-surface-hover'
-            : 'text-muted hover:bg-surface-hover'
-        }`}
-        onClick={() => handleStatusFilter(null)}
-      >
-        <span>All</span>
-        <span className="text-xs text-subtle">
-          {Object.values(recordCountByStatus).reduce(
-            (a, b) => a + b,
-            0
-          )}
-        </span>
-      </button>
-      {(
-        Object.entries(statusConfig) as [
-          Status,
-          (typeof statusConfig)[Status],
-        ][]
-      ).map(([key, config]) => (
-        <button
-          key={key}
-          className={`flex shrink-0 items-center justify-between gap-2 px-2 py-1.5 rounded text-sm transition-colors md:w-full ${
-            statusFilter === key
-              ? 'text-foreground bg-surface-hover'
-              : 'text-muted hover:bg-surface-hover'
-          }`}
-          onClick={() =>
-            handleStatusFilter(statusFilter === key ? null : key)
-          }
-        >
-          <span className="flex items-center gap-2">
-            <span style={{ color: config.color }}>{config.icon}</span>
-            <span>{config.label}</span>
-          </span>
-          <span className="text-xs text-subtle">
-            {recordCountByStatus[key] || 0}
-          </span>
-        </button>
-      ))}
-    </>
   )
 
   return (
     <>
       <div className="flex shrink-0 flex-col border-b border-border bg-panel md:hidden">
         {workspaceHeader('sync-presence-status-mobile')}
-        <div className="px-2 py-2 border-b border-border">
-          {viewLinks('-mobile')}
+        <div className="flex gap-1 overflow-x-auto border-b border-border px-2 py-2">
+          {databaseFilters}
         </div>
-        <div className="flex gap-1 overflow-x-auto px-2 py-2">
-          {statusFilters}
+        <div className="px-2 py-2">
+          {workspaceNavigation('-mobile')}
         </div>
       </div>
 
-      <aside className="hidden md:flex flex-col h-full border-r border-border w-sidebar min-w-sidebar bg-panel">
+      {!sideNavOpen && (
+        <aside
+          data-testid="side-nav"
+          className="hidden h-full w-16 shrink-0 flex-col items-center border-r border-border bg-panel px-2 py-3 md:flex"
+        >
+          <button
+            data-testid="toggle-side-nav"
+            className="mb-3 flex h-7 w-full items-center justify-center rounded bg-surface-hover text-[10px] font-semibold text-muted hover:text-foreground"
+            title="Open sidebar"
+            onClick={() => setSideNavOpen(true)}
+          >
+            Open
+          </button>
+          <Link
+            data-testid="nav-databases"
+            to={currentView === 'kanban' ? '/databases/board' : currentView === 'workflow' ? '/databases/workflow' : '/databases'}
+            search={{ database: selectedDatabaseId }}
+            className={`mb-1 flex h-8 w-8 items-center justify-center rounded text-sm no-underline transition-colors ${
+              currentView === 'table' || currentView === 'kanban' || currentView === 'workflow'
+                ? 'bg-surface-hover text-foreground'
+                : 'text-muted hover:bg-surface-hover'
+            }`}
+            title="Databases"
+          >
+            ▦
+          </Link>
+          <div className="mt-auto flex flex-col gap-1">
+            {workspaceLinks.map((view) => (
+              <Link
+                key={view.id}
+                data-testid={`view-${view.id}`}
+                to={view.to}
+                className={`flex h-8 w-8 items-center justify-center rounded text-[10px] font-medium no-underline transition-colors ${
+                  currentView === view.id ? 'bg-accent text-white' : 'text-muted hover:bg-surface-hover'
+                }`}
+                title={view.label}
+              >
+                {view.label.slice(0, 1)}
+              </Link>
+            ))}
+          </div>
+        </aside>
+      )}
+
+      {sideNavOpen && (
+      <aside data-testid="side-nav" className="hidden md:flex flex-col h-full border-r border-border w-sidebar min-w-sidebar bg-panel">
         {/* Workspace */}
-        {workspaceHeader('sync-presence-status')}
+        <div className="relative">
+          {workspaceHeader('sync-presence-status')}
+          <button
+            data-testid="toggle-side-nav"
+            className="absolute right-2 top-2 flex h-6 w-6 items-center justify-center rounded bg-surface-hover text-xs text-muted hover:text-foreground"
+            title="Close sidebar"
+            onClick={() => setSideNavOpen(false)}
+          >
+            ‹
+          </button>
+        </div>
 
       {/* Navigation */}
       <div className="px-2 py-3">
+        <Link
+          data-testid="nav-databases"
+          to={currentView === 'kanban' ? '/databases/board' : currentView === 'workflow' ? '/databases/workflow' : '/databases'}
+          search={{ database: selectedDatabaseId }}
+          className={`mb-1 flex items-center gap-2 rounded px-2 py-1.5 text-sm text-left transition-colors no-underline ${
+            currentView === 'table' || currentView === 'kanban' || currentView === 'workflow'
+              ? 'bg-surface-hover text-foreground'
+              : 'text-muted hover:bg-surface-hover'
+          }`}
+        >
+          <span>▦</span>
+          <span>Databases</span>
+        </Link>
         {appKitConfig.workspace.primaryNav.map((item) => (
           <button
             key={item.id}
@@ -240,49 +329,32 @@ export function Sidebar() {
         ))}
       </div>
 
-      {/* View Toggle */}
-      <div className="px-2 py-2 border-t border-b border-border">
-        <div className="px-2 mb-1">
-          <span className="text-xs font-medium uppercase tracking-wider text-subtle">
-            View
-          </span>
-        </div>
-        {viewLinks()}
-      </div>
-
-      {/* Status Filter */}
-      <div className="px-2 py-3 flex-1 overflow-y-auto">
-        <div className="px-2 mb-1">
-          <span className="text-xs font-medium uppercase tracking-wider text-subtle">
-            Status
-          </span>
-        </div>
-        <div className="flex flex-col gap-0.5">
-          {statusFilters}
-        </div>
-      </div>
-
-      {/* Teams */}
+      {/* Databases */}
       <div className="px-2 py-3 border-t border-border">
         <div className="px-2 mb-1">
           <span className="text-xs font-medium uppercase tracking-wider text-subtle">
-            Projects
+            Databases
           </span>
         </div>
-        {appKitConfig.workspace.projects.map((item) => (
-          <button
-            key={item.id}
-            className="flex items-center gap-2 w-full px-2 py-1.5 rounded text-sm transition-colors text-muted hover:bg-surface-hover"
-          >
-            <span className="w-2 h-2 rounded-full bg-accent" />
-            <span>{item.label}</span>
-          </button>
-        ))}
+        <div className="flex flex-col gap-0.5">
+          {databaseFilters}
+        </div>
+      </div>
+
+      {/* Workspace Views */}
+      <div className="px-2 py-3 flex-1 overflow-y-auto border-t border-border">
+        <div className="px-2 mb-1">
+          <span className="text-xs font-medium uppercase tracking-wider text-subtle">
+            Workspace
+          </span>
+        </div>
+        {workspaceNavigation()}
       </div>
 
       {/* Theme Toggle */}
       <ThemeToggle />
       </aside>
+      )}
     </>
   )
 }
