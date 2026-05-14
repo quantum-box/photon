@@ -30,6 +30,8 @@ export interface CreateIssueData {
   project?: string
 }
 
+export type CreateRecordData = CreateIssueData
+
 interface IssuesContextValue {
   issues: Issue[]
   handleMoveIssue: (issueId: string, newStatus: Status) => void
@@ -351,4 +353,30 @@ export function useIssues() {
   const ctx = useContext(IssuesContext)
   if (!ctx) throw new Error('useIssues must be used within IssuesProvider')
   return ctx
+}
+
+export const DatabaseRecordsProvider = IssuesProvider
+
+export function useDatabaseRecords() {
+  const {
+    issues,
+    handleMoveIssue,
+    handleUpdateIssue,
+    handleCreateIssue,
+    handleDeleteIssue,
+    syncIssue,
+    syncIssues,
+    issueCountByStatus,
+  } = useIssues()
+
+  return {
+    records: issues,
+    handleMoveRecord: handleMoveIssue,
+    handleUpdateRecord: handleUpdateIssue,
+    handleCreateRecord: handleCreateIssue,
+    handleDeleteRecord: handleDeleteIssue,
+    syncRecord: syncIssue,
+    syncRecords: syncIssues,
+    recordCountByStatus: issueCountByStatus,
+  }
 }

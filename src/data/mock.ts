@@ -17,6 +17,8 @@ export interface Issue {
   description: string
 }
 
+export type DatabaseRecord = Issue
+
 export const mockUsers = appKitConfig.workspace.users
 const projects = appKitConfig.workspace.projects.map((project) => project.label)
 const labelSets = [
@@ -116,6 +118,7 @@ function makeIssue(title: string, status: Status): Issue {
 }
 
 export const mockIssues: Issue[] = generateIssues()
+export const mockDatabaseRecords: DatabaseRecord[] = mockIssues
 
 export const statusConfig: Record<Status, { label: string; color: string; icon: string }> = {
   backlog: { label: 'Backlog', color: 'var(--text-muted)', icon: '○' },

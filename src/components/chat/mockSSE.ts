@@ -149,7 +149,7 @@ If you need to drill deeper into any particular service or need historical trend
 ]
 
 const DOCUMENT_CONTEXT_RESPONSE =
-  'I have the current document context available, including the active document, selected text, and related issues. I can use that context when creating or searching issues.'
+  'I have the current document context available, including the active document, selected text, and related records. I can use that context when creating or searching records.'
 
 export interface SSECallbacks {
   onChunk: (text: string) => void
@@ -206,7 +206,7 @@ function extractCreateTitle(message: string) {
   if (quoted) return quoted
 
   return message
-    .replace(/(?:please|この内容で|issue|チケット|課題|を|で|作って|作成|create|new|add)/gi, ' ')
+    .replace(/(?:please|この内容で|record|records|database|databases|issue|チケット|課題|を|で|作って|作成|create|new|add)/gi, ' ')
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 160)
@@ -215,7 +215,7 @@ function extractCreateTitle(message: string) {
 function detectToolTriggers(message: string): DetectedTool[] {
   const lower = message.toLowerCase()
   const tools: DetectedTool[] = []
-  const hasIssueIntent = /(?:issue|issues|チケット|課題|plt-\d+|<issue)/i.test(message)
+  const hasIssueIntent = /(?:record|records|database|databases|issue|issues|チケット|課題|plt-\d+|<issue)/i.test(message)
 
   if (hasIssueIntent) {
     const issueRef = extractIssueRef(message)
@@ -255,7 +255,7 @@ function detectToolTriggers(message: string): DetectedTool[] {
 
     if (isList || isSearch) {
       const query = extractQuotedText(message) ?? message
-        .replace(/(?:issue|issues|チケット|課題|search|find|filter|検索|探し|一覧|まとめ|show|list)/gi, ' ')
+        .replace(/(?:record|records|database|databases|issue|issues|チケット|課題|search|find|filter|検索|探し|一覧|まとめ|show|list)/gi, ' ')
         .trim()
       tools.push({
         type: isList && !isSearch ? 'issue_list' : 'issue_search',
@@ -352,12 +352,12 @@ async function executeToolsAndStream(
       name: tool.type === 'web_search' ? 'Web Search'
         : tool.type === 'api_call' ? 'API Call'
         : tool.type === 'code_exec' ? 'Code Execution'
-        : tool.type === 'issue_search' ? 'Issue Search'
-        : tool.type === 'issue_list' ? 'Issue List'
-        : tool.type === 'issue_get' ? 'Issue Lookup'
-        : tool.type === 'issue_create' ? 'Create Issue'
-        : tool.type === 'issue_update' ? 'Update Issue'
-        : 'Move Issue',
+        : tool.type === 'issue_search' ? 'Database Search'
+        : tool.type === 'issue_list' ? 'Database List'
+        : tool.type === 'issue_get' ? 'Record Lookup'
+        : tool.type === 'issue_create' ? 'Create Record'
+        : tool.type === 'issue_update' ? 'Update Record'
+        : 'Move Record',
       args: tool.args,
       status: 'running',
     }
@@ -400,7 +400,7 @@ async function executeToolsAndStream(
   // Pick a follow-up response based on what tools ran
   let response: string
   if (hasIssue) {
-    response = `Done. I updated the workspace issue data through the server-backed issue store.`
+    response = `Done. I updated the workspace database record through the server-backed record store.`
   } else if (hasSearch) {
     response = SEARCH_FOLLOW_UP_RESPONSES[Math.floor(Math.random() * SEARCH_FOLLOW_UP_RESPONSES.length)]
   } else if (hasApi) {

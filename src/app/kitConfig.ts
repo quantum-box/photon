@@ -186,8 +186,8 @@ export const appKitConfig: AppKitConfig = {
     name: 'Photon',
     initial: 'P',
     primaryNav: [
-      { id: 'my-issues', label: 'My Issues', icon: '👤' },
-      { id: 'all-issues', label: 'All Issues', icon: '📋' },
+      { id: 'my-records', label: 'My Records', icon: '👤' },
+      { id: 'all-records', label: 'All Records', icon: '📋' },
       { id: 'active', label: 'Active', icon: '⚡' },
     ],
     projects: [

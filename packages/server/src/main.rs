@@ -1807,7 +1807,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("PUT")
-                    .uri(&format!("/api/issues/{}", created.id))
+                    .uri(format!("/api/issues/{}", created.id))
                     .header("content-type", "application/json")
                     .body(Body::from(
                         serde_json::json!({
@@ -1867,7 +1867,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("DELETE")
-                    .uri(&format!("/api/issues/{}", created.id))
+                    .uri(format!("/api/issues/{}", created.id))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1880,7 +1880,7 @@ mod tests {
         let resp = app
             .oneshot(
                 Request::builder()
-                    .uri(&format!("/api/issues/{}", created.id))
+                    .uri(format!("/api/issues/{}", created.id))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1935,7 +1935,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri(&format!("/api/attachments/{}/links", created.id))
+                    .uri(format!("/api/attachments/{}/links", created.id))
                     .header("content-type", "application/json")
                     .body(Body::from(
                         serde_json::json!({
