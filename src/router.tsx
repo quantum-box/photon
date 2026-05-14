@@ -16,9 +16,9 @@ import { DetailPanel } from './components/DetailPanel'
 import { CreateIssueModal } from './components/CreateIssueModal'
 import { ChatView } from './components/chat/ChatView'
 import { DocsView } from './components/docs/DocsView'
-import { IssuesProvider, useIssues } from './contexts/IssuesContext'
+import { DatabaseRecordsProvider, useDatabaseRecords } from './contexts/IssuesContext'
 import { AttachmentsProvider } from './lib/attachments/useWorkspaceAttachments'
-import type { Status, Issue } from './data/mock'
+import type { Status, DatabaseRecord } from './data/mock'
 import type { SortingState } from '@tanstack/react-table'
 
 // ── Search params ──────────────────────────────────────────────
@@ -54,7 +54,7 @@ const rootRoute = createRootRoute({
   component: function RootLayout() {
     const [createModalOpen, setCreateModalOpen] = useState(false)
     return (
-      <IssuesProvider>
+      <DatabaseRecordsProvider>
         <AttachmentsProvider>
           <CreateModalContext.Provider value={{ open: createModalOpen, setOpen: setCreateModalOpen }}>
             <div className="flex h-full min-w-0 flex-col overflow-hidden md:flex-row">
@@ -63,33 +63,33 @@ const rootRoute = createRootRoute({
             </div>
           </CreateModalContext.Provider>
         </AttachmentsProvider>
-      </IssuesProvider>
+      </DatabaseRecordsProvider>
     )
   },
 })
 
-// ── Index Route (redirect → /issues) ──────────────────────────
+// ── Index Route (redirect → /databases) ───────────────────────
 
 const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/',
   beforeLoad: () => {
-    throw redirect({ to: '/issues' })
+    throw redirect({ to: '/databases' })
   },
 })
 
-// ── Issues Layout Route (/issues) ─────────────────────────────
+// ── Databases Layout Route (/databases) ───────────────────────
 
-const issuesRoute = createRoute({
+const databasesRoute = createRoute({
   getParentRoute: () => rootRoute,
-  path: 'issues',
+  path: 'databases',
   validateSearch: validateIssueSearch,
-  component: IssuesLayout,
+  component: DatabasesLayout,
 })
 
-function IssuesLayout() {
-  const { status, sort, desc } = issuesRoute.useSearch()
-  const { issues, handleUpdateIssue, handleCreateIssue } = useIssues()
+function DatabasesLayout() {
+  const { status, sort, desc } = databasesRoute.useSearch()
+  const { records, handleUpdateRecord, handleCreateRecord } = useDatabaseRecords()
   const navigate = useNavigate()
   const { open: createModalOpen, setOpen: setCreateModalOpen } = useCreateModal()
 
@@ -98,19 +98,19 @@ function IssuesLayout() {
     from: issueDetailRoute.id,
     shouldThrow: false,
   })
-  const selectedIdentifier = (detailMatch?.params as { issueId?: string })?.issueId ?? null
+  const selectedIdentifier = (detailMatch?.params as { recordId?: string })?.recordId ?? null
 
-  const filteredIssues = useMemo(
-    () => (status ? issues.filter((i) => i.status === status) : issues),
-    [issues, status]
+  const filteredRecords = useMemo(
+    () => (status ? records.filter((record) => record.status === status) : records),
+    [records, status]
   )
 
-  const selectedIssue = useMemo(
+  const selectedRecord = useMemo(
     () =>
       selectedIdentifier
-        ? issues.find((i) => i.identifier === selectedIdentifier) ?? null
+        ? records.find((record) => record.identifier === selectedIdentifier) ?? null
         : null,
-    [issues, selectedIdentifier]
+    [records, selectedIdentifier]
   )
 
   // Controlled sorting from URL params
@@ -131,14 +131,14 @@ function IssuesLayout() {
       }
       if (selectedIdentifier) {
         void navigate({
-          to: '/issues/$issueId',
-          params: { issueId: selectedIdentifier },
+          to: '/databases/$recordId',
+          params: { recordId: selectedIdentifier },
           search: newSearch,
           replace: true,
         })
       } else {
         void navigate({
-          to: '/issues',
+          to: '/databases',
           search: newSearch,
           replace: true,
         })
@@ -147,22 +147,22 @@ function IssuesLayout() {
     [sorting, navigate, status, selectedIdentifier]
   )
 
-  const handleSelectIssue = useCallback(
-    (issue: Issue) => {
-      if (selectedIssue?.id === issue.id) {
+  const handleSelectRecord = useCallback(
+    (record: DatabaseRecord) => {
+      if (selectedRecord?.id === record.id) {
         void navigate({
-          to: '/issues',
+          to: '/databases',
           search: { status, sort, desc },
         })
       } else {
         void navigate({
-          to: '/issues/$issueId',
-          params: { issueId: issue.identifier },
+          to: '/databases/$recordId',
+          params: { recordId: record.identifier },
           search: { status, sort, desc },
         })
       }
     },
-    [navigate, status, sort, desc, selectedIssue]
+    [navigate, status, sort, desc, selectedRecord]
   )
 
   return (
@@ -174,7 +174,7 @@ function IssuesLayout() {
           style={{ borderColor: 'var(--border-color)' }}
         >
           <div className="flex min-w-0 items-center gap-2 md:gap-3">
-            <h1 className="text-sm font-semibold">Issues</h1>
+            <h1 className="text-sm font-semibold">Databases</h1>
             {status && (
               <span
                 className="text-xs px-2 py-0.5 rounded-full flex min-w-0 items-center gap-1"
@@ -187,7 +187,7 @@ function IssuesLayout() {
                 <button
                   onClick={() =>
                     void navigate({
-                      to: '/issues',
+                      to: '/databases',
                       search: { sort, desc },
                     })
                   }
@@ -206,7 +206,7 @@ function IssuesLayout() {
               style={{ background: 'var(--accent)', color: '#fff' }}
               onClick={() => setCreateModalOpen(true)}
             >
-              + New Issue
+              + New Record
             </button>
           </div>
         </div>
@@ -214,11 +214,11 @@ function IssuesLayout() {
         {/* Table View */}
         <div className="flex-1 min-h-0 mt-1">
           <TableView
-            issues={filteredIssues}
-            selectedIssueId={selectedIssue?.id ?? null}
-            onSelectIssue={handleSelectIssue}
-            onUpdateIssue={handleUpdateIssue}
-            onCreateIssue={handleCreateIssue}
+            issues={filteredRecords}
+            selectedIssueId={selectedRecord?.id ?? null}
+            onSelectIssue={handleSelectRecord}
+            onUpdateIssue={handleUpdateRecord}
+            onCreateIssue={handleCreateRecord}
             sorting={sorting}
             onSortingChange={handleSortingChange}
           />
@@ -228,56 +228,56 @@ function IssuesLayout() {
       <CreateIssueModal
         open={createModalOpen}
         onClose={() => setCreateModalOpen(false)}
-        onCreate={handleCreateIssue}
+        onCreate={handleCreateRecord}
       />
     </>
   )
 }
 
-// ── Issues Index Route (no detail panel) ──────────────────────
+// ── Databases Index Route (no detail panel) ───────────────────
 
 const issuesIndexRoute = createRoute({
-  getParentRoute: () => issuesRoute,
+  getParentRoute: () => databasesRoute,
   path: '/',
   component: () => null,
 })
 
-// ── Issue Detail Route (/issues/$issueId) ─────────────────────
+// ── Record Detail Route (/databases/$recordId) ────────────────
 
 const issueDetailRoute = createRoute({
-  getParentRoute: () => issuesRoute,
-  path: '$issueId',
-  component: IssueDetailPanel,
+  getParentRoute: () => databasesRoute,
+  path: '$recordId',
+  component: RecordDetailPanel,
 })
 
-function IssueDetailPanel() {
-  const { issueId } = issueDetailRoute.useParams()
-  const { status, sort, desc } = issuesRoute.useSearch()
-  const { issues, handleUpdateIssue, handleDeleteIssue } = useIssues()
+function RecordDetailPanel() {
+  const { recordId } = issueDetailRoute.useParams()
+  const { status, sort, desc } = databasesRoute.useSearch()
+  const { records, handleUpdateRecord, handleDeleteRecord } = useDatabaseRecords()
   const navigate = useNavigate()
 
-  const issue = useMemo(
-    () => issues.find((i) => i.identifier === issueId) ?? null,
-    [issues, issueId]
+  const record = useMemo(
+    () => records.find((candidate) => candidate.identifier === recordId) ?? null,
+    [records, recordId]
   )
 
   return (
     <DetailPanel
-      issue={issue}
+      issue={record}
       onClose={() =>
-        void navigate({ to: '/issues', search: { status, sort, desc } })
+        void navigate({ to: '/databases', search: { status, sort, desc } })
       }
-      onUpdateIssue={handleUpdateIssue}
-      onDeleteIssue={handleDeleteIssue}
+      onUpdateIssue={handleUpdateRecord}
+      onDeleteIssue={handleDeleteRecord}
     />
   )
 }
 
-// ── Kanban Route (/kanban) ────────────────────────────────────
+// ── Board Route (/databases/board) ────────────────────────────
 
 const kanbanRoute = createRoute({
   getParentRoute: () => rootRoute,
-  path: 'kanban',
+  path: 'databases/board',
   validateSearch: (search: Record<string, unknown>): { status?: Status } => ({
     status: typeof search.status === 'string' ? (search.status as Status) : undefined,
   }),
@@ -286,25 +286,25 @@ const kanbanRoute = createRoute({
 
 function KanbanPage() {
   const { status } = kanbanRoute.useSearch()
-  const { issues, handleMoveIssue, handleUpdateIssue, handleDeleteIssue, handleCreateIssue } = useIssues()
-  const [selectedIssue, setSelectedIssue] = useState<Issue | null>(null)
+  const { records, handleMoveRecord, handleUpdateRecord, handleDeleteRecord, handleCreateRecord } = useDatabaseRecords()
+  const [selectedRecord, setSelectedRecord] = useState<DatabaseRecord | null>(null)
   const navigate = useNavigate()
   const { open: createModalOpen, setOpen: setCreateModalOpen } = useCreateModal()
 
-  const filteredIssues = useMemo(
-    () => (status ? issues.filter((i) => i.status === status) : issues),
-    [issues, status]
+  const filteredRecords = useMemo(
+    () => (status ? records.filter((record) => record.status === status) : records),
+    [records, status]
   )
 
-  // Keep selectedIssue in sync with live issues (handles edits & deletes)
-  const liveSelectedIssue = useMemo(
-    () => (selectedIssue ? issues.find((i) => i.id === selectedIssue.id) ?? null : null),
-    [issues, selectedIssue]
+  // Keep the selected record in sync with live data (handles edits & deletes)
+  const liveSelectedRecord = useMemo(
+    () => (selectedRecord ? records.find((record) => record.id === selectedRecord.id) ?? null : null),
+    [records, selectedRecord]
   )
 
-  const handleSelectIssue = useCallback(
-    (issue: Issue) => {
-      setSelectedIssue((prev) => (prev?.id === issue.id ? null : issue))
+  const handleSelectRecord = useCallback(
+    (record: DatabaseRecord) => {
+      setSelectedRecord((prev) => (prev?.id === record.id ? null : record))
     },
     []
   )
@@ -330,7 +330,7 @@ function KanbanPage() {
                 {status}
                 <button
                   onClick={() =>
-                    void navigate({ to: '/kanban', search: {} })
+                    void navigate({ to: '/databases/board', search: {} })
                   }
                   className="ml-1 hover:opacity-75"
                   style={{ color: 'var(--text-muted)' }}
@@ -347,7 +347,7 @@ function KanbanPage() {
               style={{ background: 'var(--accent)', color: '#fff' }}
               onClick={() => setCreateModalOpen(true)}
             >
-              + New Issue
+              + New Record
             </button>
           </div>
         </div>
@@ -355,28 +355,28 @@ function KanbanPage() {
         {/* Kanban View */}
         <div className="flex-1 min-h-0 mt-1">
           <KanbanView
-            issues={filteredIssues}
-            selectedIssueId={selectedIssue?.id ?? null}
-            onSelectIssue={handleSelectIssue}
-            onMoveIssue={handleMoveIssue}
+            issues={filteredRecords}
+            selectedIssueId={selectedRecord?.id ?? null}
+            onSelectIssue={handleSelectRecord}
+            onMoveIssue={handleMoveRecord}
           />
         </div>
       </div>
-      {liveSelectedIssue && (
+      {liveSelectedRecord && (
         <DetailPanel
-          issue={liveSelectedIssue}
-          onClose={() => setSelectedIssue(null)}
-          onUpdateIssue={handleUpdateIssue}
+          issue={liveSelectedRecord}
+          onClose={() => setSelectedRecord(null)}
+          onUpdateIssue={handleUpdateRecord}
           onDeleteIssue={(id) => {
-            handleDeleteIssue(id)
-            setSelectedIssue(null)
+            handleDeleteRecord(id)
+            setSelectedRecord(null)
           }}
         />
       )}
       <CreateIssueModal
         open={createModalOpen}
         onClose={() => setCreateModalOpen(false)}
-        onCreate={handleCreateIssue}
+        onCreate={handleCreateRecord}
       />
     </>
   )
@@ -425,6 +425,35 @@ const documentDetailRoute = createRoute({
   component: DocsPage,
 })
 
+// ── Legacy Route Redirects ────────────────────────────────────
+
+const legacyIssuesRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: 'issues',
+  beforeLoad: () => {
+    throw redirect({ to: '/databases' })
+  },
+})
+
+const legacyIssueDetailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: 'issues/$issueId',
+  beforeLoad: ({ params }) => {
+    throw redirect({
+      to: '/databases/$recordId',
+      params: { recordId: params.issueId },
+    })
+  },
+})
+
+const legacyKanbanRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: 'kanban',
+  beforeLoad: () => {
+    throw redirect({ to: '/databases/board' })
+  },
+})
+
 function DocsPage() {
   const detailMatch = useMatch({
     from: documentDetailRoute.id,
@@ -439,8 +468,11 @@ function DocsPage() {
 
 const routeTree = rootRoute.addChildren([
   indexRoute,
-  issuesRoute.addChildren([issuesIndexRoute, issueDetailRoute]),
+  databasesRoute.addChildren([issuesIndexRoute, issueDetailRoute]),
   kanbanRoute,
+  legacyIssuesRoute,
+  legacyIssueDetailRoute,
+  legacyKanbanRoute,
   chatRoute,
   docsRoute,
   documentDetailRoute,

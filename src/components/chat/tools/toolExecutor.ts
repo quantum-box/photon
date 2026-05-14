@@ -208,7 +208,7 @@ const priorities: Priority[] = ['urgent', 'high', 'medium', 'low', 'none']
 
 function requireIssueRuntime(context?: ToolRuntimeContext) {
   if (!context?.issueTools) {
-    throw new Error('Issue tools are not available in this chat context')
+    throw new Error('Database tools are not available in this chat context')
   }
   return context.issueTools
 }
@@ -252,11 +252,11 @@ async function fetchCanonicalIssues(context?: ToolRuntimeContext) {
 
 async function resolveIssue(ref: unknown, context?: ToolRuntimeContext) {
   const issueRef = asText(ref)
-  if (!issueRef) throw new Error('Issue id or identifier is required')
+  if (!issueRef) throw new Error('Record id or identifier is required')
 
   const issues = await fetchCanonicalIssues(context)
   const issue = issues.find((candidate) => matchesIssueRef(candidate, issueRef))
-  if (!issue) throw new Error(`Issue not found: ${issueRef}`)
+  if (!issue) throw new Error(`Record not found: ${issueRef}`)
   return issue
 }
 
@@ -294,11 +294,11 @@ function limitIssues(issues: Issue[], args: Record<string, unknown>) {
 }
 
 function issueListMessage(action: IssueToolResponse['action'], issues: Issue[], total: number) {
-  const noun = total === 1 ? 'issue' : 'issues'
-  if (action === 'get') return `Found ${issues[0]?.identifier ?? 'issue'}`
-  if (action === 'create') return `Created ${issues[0]?.identifier ?? 'issue'}`
-  if (action === 'update') return `Updated ${issues[0]?.identifier ?? 'issue'}`
-  if (action === 'move') return `Moved ${issues[0]?.identifier ?? 'issue'}`
+  const noun = total === 1 ? 'record' : 'records'
+  if (action === 'get') return `Found ${issues[0]?.identifier ?? 'record'}`
+  if (action === 'create') return `Created ${issues[0]?.identifier ?? 'record'}`
+  if (action === 'update') return `Updated ${issues[0]?.identifier ?? 'record'}`
+  if (action === 'move') return `Moved ${issues[0]?.identifier ?? 'record'}`
   return `${total} ${noun} matched`
 }
 
@@ -367,7 +367,7 @@ async function executeIssueCreate(
   const runtime = requireIssueRuntime(context)
   const start = Date.now()
   const title = asText(args.title)
-  if (!title) throw new Error('Issue title is required')
+  if (!title) throw new Error('Record title is required')
   if (signal.aborted) throw new DOMException('Aborted', 'AbortError')
 
   const issue = await createServerIssue({
@@ -423,7 +423,7 @@ async function executeIssueUpdate(
   const existing = await resolveIssue(args.issueId ?? args.identifier ?? args.id, context)
   const update = buildIssueUpdate(args)
   if (Object.keys(update).length === 0) {
-    throw new Error('No issue fields were provided to update')
+    throw new Error('No record fields were provided to update')
   }
   if (signal.aborted) throw new DOMException('Aborted', 'AbortError')
 
@@ -490,49 +490,49 @@ registerTool({
 
 registerTool({
   type: 'issue_search',
-  name: 'Issue Search',
-  description: 'Search Photon issues from the canonical server issue store',
-  icon: 'issues',
+  name: 'Database Search',
+  description: 'Search Photon database records from the canonical server record store',
+  icon: 'database',
   execute: executeIssueSearch,
 })
 
 registerTool({
   type: 'issue_list',
-  name: 'Issue List',
-  description: 'List Photon issues from the canonical server issue store',
-  icon: 'issues',
+  name: 'Database List',
+  description: 'List Photon database records from the canonical server record store',
+  icon: 'database',
   execute: executeIssueList,
 })
 
 registerTool({
   type: 'issue_get',
-  name: 'Issue Lookup',
-  description: 'Get a Photon issue by id or identifier',
-  icon: 'issue',
+  name: 'Record Lookup',
+  description: 'Get a Photon database record by id or identifier',
+  icon: 'record',
   execute: executeIssueGet,
 })
 
 registerTool({
   type: 'issue_create',
-  name: 'Create Issue',
-  description: 'Create a Photon issue through the canonical server issue API',
-  icon: 'issue-plus',
+  name: 'Create Record',
+  description: 'Create a Photon database record through the canonical server record API',
+  icon: 'record-plus',
   execute: executeIssueCreate,
 })
 
 registerTool({
   type: 'issue_update',
-  name: 'Update Issue',
-  description: 'Update Photon issue fields through the canonical server issue API',
-  icon: 'issue-edit',
+  name: 'Update Record',
+  description: 'Update Photon database record fields through the canonical server record API',
+  icon: 'record-edit',
   execute: executeIssueUpdate,
 })
 
 registerTool({
   type: 'issue_move',
-  name: 'Move Issue',
-  description: 'Move a Photon issue to another workflow status',
-  icon: 'issue-move',
+  name: 'Move Record',
+  description: 'Move a Photon database record to another workflow status',
+  icon: 'record-move',
   execute: executeIssueMove,
 })
 

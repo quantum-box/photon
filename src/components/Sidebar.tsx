@@ -1,14 +1,14 @@
 import { useNavigate, useRouterState, Link } from '@tanstack/react-router'
 import { statusConfig, type Status } from '../data/mock'
-import { useIssues } from '../contexts/IssuesContext'
+import { useDatabaseRecords } from '../contexts/IssuesContext'
 import { useTheme } from '../contexts/ThemeContext'
 import type { ThemeMode } from '../contexts/ThemeContext'
 import { useConnectionStatus, useSyncPresence } from '../lib/yjs/useYjsIssues'
 import { appKitConfig } from '../app/kitConfig'
 
 const views = [
-  { id: 'table' as const, label: 'Table', to: '/issues' as const },
-  { id: 'kanban' as const, label: 'Board', to: '/kanban' as const },
+  { id: 'table' as const, label: 'Table', to: '/databases' as const },
+  { id: 'kanban' as const, label: 'Board', to: '/databases/board' as const },
   { id: 'docs' as const, label: 'Docs', to: '/docs' as const },
   { id: 'chat' as const, label: 'Chat', to: '/chat' as const },
 ] as const
@@ -88,7 +88,7 @@ const statusLabels: Record<string, string> = {
 }
 
 export function Sidebar() {
-  const { issueCountByStatus } = useIssues()
+  const { recordCountByStatus } = useDatabaseRecords()
   const navigate = useNavigate()
   const connStatus = useConnectionStatus()
   const { onlineCount } = useSyncPresence()
@@ -99,7 +99,7 @@ export function Sidebar() {
   }
   const statusFilter = search.status ?? null
 
-  const currentView = pathname.startsWith('/kanban')
+  const currentView = pathname.startsWith('/databases/board')
     ? 'kanban'
     : pathname.startsWith('/docs') || pathname.startsWith('/documents')
       ? 'docs'
@@ -108,7 +108,7 @@ export function Sidebar() {
       : 'table'
 
   const handleStatusFilter = (status: Status | null) => {
-    const to = currentView === 'kanban' ? '/kanban' : '/issues'
+    const to = currentView === 'kanban' ? '/databases/board' : '/databases'
     void navigate({
       to,
       search: status ? { status } : {},
@@ -176,7 +176,7 @@ export function Sidebar() {
       >
         <span>All</span>
         <span className="text-xs text-subtle">
-          {Object.values(issueCountByStatus).reduce(
+          {Object.values(recordCountByStatus).reduce(
             (a, b) => a + b,
             0
           )}
@@ -204,7 +204,7 @@ export function Sidebar() {
             <span>{config.label}</span>
           </span>
           <span className="text-xs text-subtle">
-            {issueCountByStatus[key] || 0}
+            {recordCountByStatus[key] || 0}
           </span>
         </button>
       ))}

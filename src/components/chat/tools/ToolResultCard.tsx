@@ -199,14 +199,14 @@ function IssueToolCard({ toolCall }: { toolCall: ToolCall }) {
 
       {isLoading && (
         <div className="px-3 py-3 text-xs text-subtle">
-          Reading the server issue store...
+          Reading the database record store...
         </div>
       )}
 
       {toolCall.status === 'completed' && result && (
         <div className="divide-y divide-border">
           {result.issues.length === 0 ? (
-            <div className="px-3 py-3 text-xs text-subtle">No matching issues.</div>
+            <div className="px-3 py-3 text-xs text-subtle">No matching records.</div>
           ) : (
             result.issues.map((issue) => {
               const status = statusConfig[issue.status]
@@ -243,7 +243,7 @@ function IssueToolCard({ toolCall }: { toolCall: ToolCall }) {
 
       {(toolCall.status === 'error' || toolCall.status === 'cancelled') && (
         <div className="px-3 py-3 text-xs text-subtle">
-          {toolCall.result?.error || 'Issue tool did not complete.'}
+          {toolCall.result?.error || 'Database tool did not complete.'}
         </div>
       )}
     </div>

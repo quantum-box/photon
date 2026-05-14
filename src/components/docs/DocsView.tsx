@@ -5,7 +5,7 @@ import { BlockNoteView } from '@blocknote/shadcn'
 import '@blocknote/core/fonts/inter.css'
 import '@blocknote/shadcn/style.css'
 import { appKitConfig } from '../../app/kitConfig'
-import { useIssues } from '../../contexts/IssuesContext'
+import { useDatabaseRecords } from '../../contexts/IssuesContext'
 import { createServerIssue } from '../../lib/issuesApi'
 import type { DocumentCollaboration } from '../../lib/docs/docYjs'
 import { useDocumentCollaboration } from '../../lib/docs/useDocumentCollaboration'
@@ -51,7 +51,7 @@ const syncStatusColors = {
   offline: '#ff3b30',
 } as const
 
-function DocsList({
+export function DocsList({
   docs,
   selectedDocId,
   onCreate,
@@ -102,7 +102,7 @@ function DocsList({
   )
 }
 
-function BlockNoteDocumentEditor({
+export function BlockNoteDocumentEditor({
   collab,
   linkedIssue,
   selectedText,
@@ -133,7 +133,7 @@ function BlockNoteDocumentEditor({
     if (!linkedIssue) return
     const currentBlock = editor.getTextCursorPosition().block
     const blocks = editor.tryParseMarkdownToBlocks(
-      `Linked issue: [${linkedIssue.identifier} ${linkedIssue.title}](/issues/${linkedIssue.identifier})`
+      `Linked record: [${linkedIssue.identifier} ${linkedIssue.title}](/databases/${linkedIssue.identifier})`
     )
     editor.insertBlocks(blocks, currentBlock, 'after')
   }, [editor, linkedIssue])
@@ -157,7 +157,7 @@ function BlockNoteDocumentEditor({
   )
 }
 
-function DocumentTitleInput({
+export function DocumentTitleInput({
   doc,
   onRename,
 }: {
@@ -188,7 +188,7 @@ function DocumentTitleInput({
   )
 }
 
-function DocumentEditor({
+export function DocumentEditor({
   doc,
   issues,
   links,
@@ -264,12 +264,12 @@ function DocumentEditor({
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <select
             data-testid="doc-link-issue-select"
-            aria-label="Link issue to document"
+            aria-label="Link record to document"
             className="max-w-xs rounded border border-border bg-surface px-2 py-1.5 text-xs text-foreground"
             value={selectedIssueId}
             onChange={(event) => setSelectedIssueId(event.target.value)}
           >
-            <option value="">Link issue...</option>
+            <option value="">Link record...</option>
             {issues.slice(0, 100).map((issue) => (
               <option key={issue.id} value={issue.id}>
                 {issue.identifier} {issue.title}
@@ -290,7 +290,7 @@ function DocumentEditor({
             disabled={!selectedText}
             onClick={() => void handleCreateFromSelection()}
           >
-            Create issue from selection
+            Create record from selection
           </button>
           <label className="cursor-pointer rounded bg-surface-hover px-2.5 py-1.5 text-xs font-medium text-foreground">
             Attach
@@ -312,8 +312,8 @@ function DocumentEditor({
             {links.map((link) => (
               <Link
                 key={link.id}
-                to="/issues/$issueId"
-                params={{ issueId: link.issueIdentifier }}
+                to="/databases/$recordId"
+                params={{ recordId: link.issueIdentifier }}
                 className="rounded bg-surface-hover px-2 py-1 text-xs text-muted no-underline hover:text-foreground"
               >
                 {link.issueIdentifier}
@@ -359,7 +359,7 @@ function DocumentEditor({
 
 export function DocsView({ selectedDocId }: DocsViewProps) {
   const { docs, ready, createDocument, ensureDocument, renameDocument } = useDocs()
-  const { issues, syncIssue } = useIssues()
+  const { records, syncRecord } = useDatabaseRecords()
   const { createAttachment, attachmentsForSurface } = useWorkspaceAttachments()
   const navigate = useNavigate()
   const [linksByDocId, setLinksByDocId] = useState<Record<string, DocumentIssueLink[]>>({})
@@ -427,10 +427,10 @@ export function DocsView({ selectedDocId }: DocsViewProps) {
       priority: 'none',
       labels: ['docs'],
     })
-    syncIssue(issue)
+    syncRecord(issue)
     await handleIssueLinked(issue, selectedText)
     return issue
-  }, [handleIssueLinked, selectedDoc, syncIssue])
+  }, [handleIssueLinked, selectedDoc, syncRecord])
 
   const handleAttachFiles = useCallback((files: FileList | File[]) => {
     if (!selectedDoc) return
@@ -455,7 +455,7 @@ export function DocsView({ selectedDocId }: DocsViewProps) {
           <DocumentEditor
             key={selectedDoc.id}
             doc={selectedDoc}
-            issues={issues}
+            issues={records}
             links={linksByDocId[selectedDoc.id] ?? []}
             onIssueLinked={handleIssueLinked}
             onCreateIssueFromSelection={handleCreateIssueFromSelection}

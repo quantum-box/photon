@@ -41,7 +41,7 @@ const kanbanStatuses: Status[] = [
 ]
 
 // Compact card for kanban
-function KanbanCard({
+export function KanbanCard({
   issue,
   isSelected,
   onClick,
@@ -145,7 +145,7 @@ function KanbanCard({
   )
 }
 
-function OverlayCard({ issue }: { issue: Issue }) {
+export function OverlayCard({ issue }: { issue: Issue }) {
   const priority = priorityConfig[issue.priority]
   return (
     <div
@@ -168,7 +168,7 @@ function OverlayCard({ issue }: { issue: Issue }) {
   )
 }
 
-function KanbanColumn({
+export function KanbanColumn({
   status,
   issues,
   selectedIssueId,
@@ -222,7 +222,7 @@ function KanbanColumn({
         </SortableContext>
         {issues.length === 0 && (
           <div className="text-center py-8 text-xs text-subtle">
-            No issues
+            No records
           </div>
         )}
       </div>
@@ -324,7 +324,7 @@ export function KanbanView({
           {compact ? 'Compact' : 'Default'}
         </button>
         <span className="min-w-0 truncate text-xs text-subtle">
-          {issues.length} issues · drag to move
+          {issues.length} records · drag to move
         </span>
       </div>
 

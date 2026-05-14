@@ -631,14 +631,14 @@ export function TableView({
         <div className="relative flex-1 min-w-0 md:max-w-xs">
           <input
             type="text"
-            placeholder="Filter issues..."
+            placeholder="Filter records..."
             value={globalFilter}
             onChange={(e) => setGlobalFilter(e.target.value)}
             className="w-full px-3 py-1.5 rounded text-sm outline-none bg-surface border border-border text-foreground"
           />
         </div>
         <span className="shrink-0 text-xs text-subtle">
-          {rows.length} issues
+          {rows.length} records
         </span>
       </div>
 
@@ -673,7 +673,7 @@ export function TableView({
                     setNewIssueTitle('')
                   }
                 }}
-                placeholder="Issue title を入力して Enter..."
+                placeholder="Record title を入力して Enter..."
                 className="w-full rounded-md border border-accent bg-canvas px-3 py-2 text-sm text-foreground outline-none"
               />
             ) : (
@@ -682,7 +682,7 @@ export function TableView({
                 onClick={() => setCreatingIssue(true)}
               >
                 <span>+</span>
-                <span>New Issue</span>
+                <span>New Record</span>
               </button>
             )}
           </div>
@@ -813,7 +813,7 @@ export function TableView({
                           setNewIssueTitle('')
                         }
                       }}
-                      placeholder="Issue title を入力して Enter..."
+                      placeholder="Record title を入力して Enter..."
                       className="w-full px-2 py-1 rounded text-sm outline-none bg-canvas border border-accent text-foreground max-w-lg"
                     />
                   ) : (
@@ -822,7 +822,7 @@ export function TableView({
                       onClick={() => setCreatingIssue(true)}
                     >
                       <span>+</span>
-                      <span>New Issue</span>
+                      <span>New Record</span>
                     </button>
                   )}
                 </td>

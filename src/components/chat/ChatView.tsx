@@ -7,7 +7,7 @@ import { FilePreviewModal } from '../files/FilePreviewModal'
 import { type FileAttachment, detectFileType } from '../files/types'
 import type { ToolCall } from './tools/types'
 import { appKitConfig } from '../../app/kitConfig'
-import { useIssues } from '../../contexts/IssuesContext'
+import { useDatabaseRecords } from '../../contexts/IssuesContext'
 import { toFileAttachment } from '../../lib/attachments/presentation'
 import { useWorkspaceAttachments } from '../../lib/attachments/useWorkspaceAttachments'
 import type { AttachmentSurfaceRef } from '../../lib/attachments/types'
@@ -43,7 +43,7 @@ function createFileAttachment(file: File): FileAttachment {
 }
 
 export function ChatView() {
-  const { issues, syncIssue, syncIssues } = useIssues()
+  const { records, syncRecord, syncRecords } = useDatabaseRecords()
   const { createAttachment, attachmentsForSurface } = useWorkspaceAttachments()
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
@@ -117,7 +117,7 @@ export function ChatView() {
         prompt,
         messages: conversation.map((message) => ({ role: message.role, content: message.content })),
         context: {
-          issueTools: { issues, syncIssue, syncIssues },
+          issueTools: { issues: records, syncIssue: syncRecord, syncIssues: syncRecords },
           documentContext,
         },
       },
@@ -169,9 +169,12 @@ export function ChatView() {
     )
 
     abortRef.current = controller
-  }, [documentContext, issues, syncIssue, syncIssues])
+  }, [documentContext, records, syncRecord, syncRecords])
 
   const chatAttachments = attachmentsForSurface({ surfaceType: 'chat', surfaceId: CHAT_SURFACE_ID })
+  const recentChatAttachments = [...chatAttachments]
+    .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
+    .slice(0, 6)
 
   const handleSend = useCallback(async () => {
     const text = input.trim()
@@ -363,7 +366,7 @@ export function ChatView() {
               </p>
               {chatAttachments.length > 0 && (
                 <div className="mb-4 flex max-w-md flex-wrap justify-center gap-2" data-testid="chat-workspace-attachments">
-                  {chatAttachments.slice(0, 6).map((attachment) => (
+                  {recentChatAttachments.map((attachment) => (
                     <FileChip
                       key={attachment.id}
                       file={toFileAttachment(attachment)}
@@ -377,7 +380,7 @@ export function ChatView() {
               <div className="mx-auto flex max-w-md flex-wrap justify-center gap-2">
                 {[
                   { icon: '\u{1F50D}', label: 'Web Search', hint: 'Search for React 19 features' },
-                  { icon: '◎', label: 'Issues', hint: 'Create issue "Follow up from chat"' },
+                  { icon: '◎', label: 'Databases', hint: 'Create record "Follow up from chat"' },
                   { icon: '\u{1F50C}', label: 'API Calls', hint: 'Check API status' },
                   { icon: '\u{1F4CE}', label: 'File Upload', hint: 'PDF, XLSX, CSV, DOCX, PPTX' },
                 ].map((tool) => (
@@ -456,7 +459,7 @@ export function ChatView() {
             )}
             {documentContext.relatedIssues.length > 0 && (
               <span>
-                {documentContext.relatedIssues.length} related issues
+                {documentContext.relatedIssues.length} related records
               </span>
             )}
             <button

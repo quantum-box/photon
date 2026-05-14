@@ -3,6 +3,7 @@ dist
 .DS_Store
 playwright-report/
 test-results/
+storybook-static/
 .playwright-mcp/
 .wrangler/
 

@@ -7,12 +7,12 @@ import {
   priorityConfig,
   mockUsers,
 } from '../data/mock'
-import type { CreateIssueData } from '../contexts/IssuesContext'
+import type { CreateRecordData } from '../contexts/IssuesContext'
 
 interface CreateIssueModalProps {
   open: boolean
   onClose: () => void
-  onCreate: (data: CreateIssueData) => void
+  onCreate: (data: CreateRecordData) => void
 }
 
 export function CreateIssueModal({ open, onClose, onCreate }: CreateIssueModalProps) {
@@ -82,10 +82,10 @@ export function CreateIssueModal({ open, onClose, onCreate }: CreateIssueModalPr
           style={{ borderColor: 'var(--border-color)' }}
         >
           <h2 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>
-            New Issue
+            New Record
           </h2>
           <button
-            aria-label="Close new issue modal"
+            aria-label="Close new record modal"
             onClick={onClose}
             className="w-6 h-6 flex items-center justify-center rounded transition-colors text-sm"
             style={{ color: 'var(--text-muted)' }}
@@ -101,7 +101,7 @@ export function CreateIssueModal({ open, onClose, onCreate }: CreateIssueModalPr
           {/* Title */}
           <div>
             <label htmlFor="new-issue-title" className="block text-xs mb-1.5" style={{ color: 'var(--text-muted)' }}>
-              Title <span style={{ color: 'var(--priority-urgent)' }}>*</span>
+              Record title <span style={{ color: 'var(--priority-urgent)' }}>*</span>
             </label>
             <input
               id="new-issue-title"
@@ -113,7 +113,7 @@ export function CreateIssueModal({ open, onClose, onCreate }: CreateIssueModalPr
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey) handleSubmit()
               }}
-              placeholder="Issue title..."
+              placeholder="Record title..."
               className="w-full px-3 py-2 rounded text-sm outline-none"
               style={{
                 background: 'var(--bg-primary)',
@@ -253,7 +253,7 @@ export function CreateIssueModal({ open, onClose, onCreate }: CreateIssueModalPr
               cursor: title.trim() ? 'pointer' : 'not-allowed',
             }}
           >
-            Create Issue
+            Create Record
           </button>
         </div>
       </div>
