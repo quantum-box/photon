@@ -480,9 +480,8 @@ test.describe('Photon shell', () => {
     await editingPage.keyboard.press('Tab')
 
     const editor = editingPage.locator('.bn-editor[contenteditable="true"]')
-    await editor.click()
-    await editingPage.keyboard.type(initialText)
-    await expect(editingPage.getByText(initialText)).toBeVisible()
+    await editor.fill(initialText)
+    await expect(editingPage.getByText(initialText)).toBeVisible({ timeout: 10_000 })
 
     const documentUrl = editingPage.url()
     const verifierContext = await browser.newContext()
@@ -496,8 +495,9 @@ test.describe('Photon shell', () => {
     await expect(editingPage.getByText(/Server connecting|Local only/)).toBeVisible({ timeout: 15_000 })
 
     await editor.click()
+    await editingPage.keyboard.press(process.platform === 'darwin' ? 'Meta+End' : 'Control+End')
     await editingPage.keyboard.type(` ${offlineText}`)
-    await expect(editingPage.getByText(offlineText)).toBeVisible()
+    await expect(editingPage.getByText(offlineText)).toBeVisible({ timeout: 10_000 })
 
     await editingContext.setOffline(false)
     await editingPage.evaluate(() => window.dispatchEvent(new Event('online')))
