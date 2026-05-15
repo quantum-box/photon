@@ -33,6 +33,7 @@ import {
   subscribeWorkflowCanvases,
 } from '../lib/workflows/workflowSync'
 import { initialSyncReady } from '../lib/yjs/yjsProvider'
+import { DetailPanel } from './DetailPanel'
 
 type WorkflowTemplateId = WorkflowCanvasTemplateId
 
@@ -55,20 +56,6 @@ type WorkflowNodeData = {
 }
 
 type WorkflowRecordNode = Node<WorkflowNodeData, 'workflowRecord'>
-
-type WorkflowPreviewRecord = Pick<
-  DatabaseRecord,
-  | 'id'
-  | 'identifier'
-  | 'title'
-  | 'description'
-  | 'status'
-  | 'priority'
-  | 'assignee'
-  | 'labels'
-  | 'project'
-  | 'updatedAt'
->
 
 const workflowTemplates: WorkflowTemplate[] = [
   {
@@ -129,122 +116,6 @@ function WorkflowRecordNode({ data, selected }: NodeProps<WorkflowRecordNode>) {
         data-testid="workflow-handle-source"
       />
     </div>
-  )
-}
-
-function WorkflowItemPreviewSheet({
-  record,
-  onClose,
-}: {
-  record: WorkflowPreviewRecord | null
-  onClose: () => void
-}) {
-  if (!record) return null
-
-  const status = statusConfig[record.status]
-  const priority = priorityConfig[record.priority]
-
-  return (
-    <aside
-      className="hidden w-80 shrink-0 border-l border-border bg-panel md:flex md:flex-col"
-      data-testid="workflow-preview-sheet"
-    >
-      <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
-        <div className="min-w-0">
-          <div className="text-[10px] font-medium uppercase tracking-wider text-subtle">
-            Item preview
-          </div>
-          <div className="mt-1 truncate text-xs font-medium text-muted">
-            {record.identifier}
-          </div>
-        </div>
-        <button
-          className="flex h-7 w-7 shrink-0 items-center justify-center rounded bg-surface-hover text-sm text-muted hover:text-foreground"
-          data-testid="workflow-preview-close"
-          onClick={onClose}
-          title="Close preview"
-        >
-          x
-        </button>
-      </div>
-
-      <div className="min-h-0 flex-1 overflow-y-auto p-4">
-        <h2 className="text-base font-semibold leading-snug text-foreground">
-          {record.title}
-        </h2>
-
-        <div className="mt-4 space-y-3">
-          <div className="rounded-md border border-border bg-surface p-3">
-            <div className="text-[10px] font-medium uppercase tracking-wider text-subtle">
-              Status
-            </div>
-            <div className="mt-2 flex items-center gap-2 text-sm text-foreground">
-              <span style={{ color: status.color }}>{status.icon}</span>
-              <span>{status.label}</span>
-            </div>
-          </div>
-
-          <div className="rounded-md border border-border bg-surface p-3">
-            <div className="text-[10px] font-medium uppercase tracking-wider text-subtle">
-              Priority
-            </div>
-            <div className="mt-2 flex items-center gap-2 text-sm text-foreground">
-              <span style={{ color: priority.color }}>{priority.icon}</span>
-              <span>{priority.label}</span>
-            </div>
-          </div>
-
-          <div className="rounded-md border border-border bg-surface p-3">
-            <div className="text-[10px] font-medium uppercase tracking-wider text-subtle">
-              Database
-            </div>
-            <div className="mt-2 text-sm text-foreground">
-              {record.project || 'All databases'}
-            </div>
-          </div>
-
-          <div className="rounded-md border border-border bg-surface p-3">
-            <div className="text-[10px] font-medium uppercase tracking-wider text-subtle">
-              Owner
-            </div>
-            <div className="mt-2 text-sm text-foreground">
-              {record.assignee || 'Unassigned'}
-            </div>
-          </div>
-
-          {record.labels.length > 0 && (
-            <div className="rounded-md border border-border bg-surface p-3">
-              <div className="text-[10px] font-medium uppercase tracking-wider text-subtle">
-                Labels
-              </div>
-              <div className="mt-2 flex flex-wrap gap-1.5">
-                {record.labels.map((label) => (
-                  <span
-                    key={label}
-                    className="rounded bg-canvas px-2 py-1 text-[10px] font-medium text-muted"
-                  >
-                    {label}
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-
-        <div className="mt-4 rounded-md border border-border bg-surface p-3">
-          <div className="text-[10px] font-medium uppercase tracking-wider text-subtle">
-            Description
-          </div>
-          <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-muted">
-            {record.description || 'No description.'}
-          </p>
-        </div>
-
-        <div className="mt-4 text-[10px] text-subtle">
-          Updated {new Date(record.updatedAt).toLocaleString()}
-        </div>
-      </div>
-    </aside>
   )
 }
 
@@ -313,9 +184,13 @@ function getNodeSequenceValue(nodeId: string) {
 export function WorkflowView({
   databaseId,
   records,
+  onUpdateRecord,
+  onDeleteRecord,
 }: {
   databaseId: string
   records: DatabaseRecord[]
+  onUpdateRecord?: (recordId: string, field: keyof DatabaseRecord, value: string) => void
+  onDeleteRecord?: (recordId: string) => void
 }) {
   const wrapperRef = useRef<HTMLDivElement | null>(null)
   const [selectedTemplateId, setSelectedTemplateId] =
@@ -343,7 +218,7 @@ export function WorkflowView({
   ) ?? workflowTemplates[0]
 
   const visibleRecords = useMemo(() => records.slice(0, 40), [records])
-  const previewRecord = useMemo<WorkflowPreviewRecord | null>(() => {
+  const previewRecord = useMemo<DatabaseRecord | null>(() => {
     if (!previewRecordId) return null
 
     const liveRecord = records.find((record) => record.id === previewRecordId)
@@ -363,6 +238,7 @@ export function WorkflowView({
       labels: [],
       project: '',
       updatedAt: new Date().toISOString(),
+      createdAt: new Date().toISOString(),
     }
   }, [nodes, previewRecordId, records])
   const canvasCountSignature = useMemo(
@@ -865,9 +741,18 @@ export function WorkflowView({
           </ReactFlow>
         </div>
       </div>
-      <WorkflowItemPreviewSheet
-        record={previewRecord}
+      <DetailPanel
+        issue={previewRecord}
         onClose={() => setPreviewRecordId(null)}
+        onUpdateIssue={onUpdateRecord}
+        onDeleteIssue={
+          onDeleteRecord
+            ? (recordId) => {
+                onDeleteRecord(recordId)
+                setPreviewRecordId(null)
+              }
+            : undefined
+        }
       />
     </div>
   )

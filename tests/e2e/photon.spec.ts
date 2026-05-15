@@ -91,11 +91,13 @@ test.describe('Photon shell', () => {
     await expect(page.getByText('KPI tree item')).toBeVisible()
 
     await page.locator('.react-flow__node').first().dblclick()
-    await expect(page.getByTestId('workflow-preview-sheet')).toBeVisible()
-    await expect(page.getByText('Item preview')).toBeVisible()
-    await expect(page.getByTestId('workflow-preview-sheet').getByText(/PLT-/)).toBeVisible()
-    await page.getByTestId('workflow-preview-close').click()
-    await expect(page.getByTestId('workflow-preview-sheet')).toHaveCount(0)
+    await expect(page.getByTestId('detail-panel')).toBeVisible()
+    await expect(page.getByTestId('detail-panel').getByText(/PLT-/)).toBeVisible()
+    await page.getByTestId('detail-panel').locator('h2').click()
+    await expect(page.getByTestId('detail-panel').locator('input').first()).toBeVisible()
+    await page.keyboard.press('Escape')
+    await page.getByTestId('detail-panel-close').click()
+    await expect(page.getByTestId('detail-panel')).toHaveCount(0)
 
     const firstNode = page.locator('.react-flow__node').first()
     const beforeDrag = await firstNode.boundingBox()

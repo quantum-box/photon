@@ -620,7 +620,7 @@ const workflowRoute = createRoute({
 function WorkflowPage() {
   const { database } = workflowRoute.useSearch()
   const { databases } = useWorkspaceDatabases()
-  const { records } = useDatabaseRecords()
+  const { records, handleUpdateRecord, handleDeleteRecord } = useDatabaseRecords()
   const selectedDatabase = getDatabaseProject(databases, database)
   const databaseRecords = useMemo(
     () => filterRecordsByDatabase(records, databases, database),
@@ -637,7 +637,12 @@ function WorkflowPage() {
       />
 
       <div className="mt-1 min-h-0 flex-1">
-        <WorkflowView databaseId={database ?? 'all'} records={databaseRecords} />
+        <WorkflowView
+          databaseId={database ?? 'all'}
+          records={databaseRecords}
+          onUpdateRecord={handleUpdateRecord}
+          onDeleteRecord={handleDeleteRecord}
+        />
       </div>
     </div>
   )
