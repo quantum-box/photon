@@ -2111,7 +2111,11 @@ async fn delete_tool_call(
 }
 
 // ---------------------------------------------------------------------------
-// WebSocket — yrs CRDT sync
+// Photon Live — yrs CRDT realtime UX sync
+//
+// This WebSocket path owns collaborative feel: active room broadcast, presence,
+// awareness-friendly Yjs updates, and reconnect behavior. Durable mutation
+// truth remains in Photon Engine and the REST/RPC API write paths above.
 // ---------------------------------------------------------------------------
 
 async fn ws_handler(

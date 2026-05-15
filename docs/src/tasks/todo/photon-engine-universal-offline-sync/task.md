@@ -28,7 +28,7 @@ github: "https://github.com/quantum-box/photon"
 Photon Engine は、Photon と Tachyon 全体で使える local-first durable sync core として設計する。
 Rust core を中心に据え、API server / Tauri では Rust crate として、ブラウザでは WASM + TypeScript wrapper として利用できる形を目指す。
 
-この engine はリアルタイム通信そのものを責務にしない。責務は、ローカル DB 永続化、operation log、push/pull sync、materialized projection、競合解決、server reconciliation に限定する。WebSocket、presence、cursor、Yjs relay、Durable Object room は engine の外側に置き、必要に応じて `sync_once` を起動する transport / UX layer として扱う。
+この engine はリアルタイム通信そのものを責務にしない。責務は、ローカル DB 永続化、operation log、push/pull sync、materialized projection、競合解決、server reconciliation に限定する。WebSocket、presence、cursor、Yjs relay、Durable Object room は engine の外側に置き、**Photon Live** という realtime collaborative UX layer として扱う。Photon Live は必要に応じて `sync_once` を起動する通知路にはなれるが、durable truth は Photon Engine が持つ。
 
 ## 背景・目的
 
@@ -96,7 +96,7 @@ flowchart LR
     API --> Validation --> ServerEngine --> TiDB
   end
 
-  subgraph Transport["Realtime Transport\nengine outside"]
+  subgraph Transport["Photon Live\nrealtime UX layer\nengine outside"]
     Relay["WebSocket / Durable Object / room relay"]
     Presence["presence / awareness / online count"]
     Relay --> Presence
@@ -110,7 +110,7 @@ flowchart LR
 
 Server-side storage は TiDB を基本方針にする。SQLite は server PoC / local development / Tauri local store / tests の初期 adapter として扱い、production server の canonical store は TiDB compatible adapter に寄せる。
 
-Realtime transport component は当面 Photon repo 内で育てるが、`photon-engine` crate には入れない。`workers/sync` や将来の `packages/realtime` のような別境界に置き、WebSocket 接続、room membership、presence、Yjs awareness、`sync_once` 起動通知だけを持つ。transport は正本でも operation resolver でもなく、engine 同士の `push` / `pull` を早く起動する通知路として扱う。
+Photon Live は当面 Photon repo 内で育てるが、`photon-engine` crate には入れない。`workers/sync` や将来の `packages/live` のような別境界に置き、WebSocket 接続、room membership、presence、Yjs awareness、`sync_once` 起動通知だけを持つ。Photon Live は正本でも operation resolver でもなく、engine 同士の `push` / `pull` を早く起動する通知路として扱う。
 
 ### Engine Scope
 

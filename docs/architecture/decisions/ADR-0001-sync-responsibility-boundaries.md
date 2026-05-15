@@ -18,7 +18,9 @@ Photon Workspace v0.2 では issues だけでなく、Notion-like editor documen
 
 ## Decision
 
-Cloudflare Worker + Durable Object sync は frontend Yjs document の realtime consistency relay として扱う。canonical application server そのものにはしない。
+Cloudflare Worker + Durable Object sync は frontend Yjs document の realtime consistency relay として扱う。canonical application server そのものにはしない。この realtime collaborative UX path を **Photon Live** と呼ぶ。
+
+Durable mutation / offline sync / projection / conflict / replay の path を **Photon Engine** と呼ぶ。Photon Engine は durable truth を守り、Photon Live は shared experience を作る。
 
 Photon の責務境界は次のように分ける。
 
@@ -36,11 +38,20 @@ The target architecture has three layers:
 
 ```mermaid
 flowchart LR
-  Client["Photon client\nReact/Tauri/mobile\nYjs + IndexedDB"] <--> Relay["Sync relay\nCloudflare DO or Rust /ws\nYjs update broadcast\npresence"]
-  Client <--> AppServer["Application server\nREST/RPC/SSE\npermissions\ndomain validation"]
-  AppServer <--> Store["Canonical stores\nSQLite/Postgres/D1\nobject storage\naudit/event log\nYjs snapshots"]
-  Relay -. "bounded replay only" .-> RelayStorage["Relay storage\nshort-lived update log\noptional compact snapshot"]
+  Client["Photon client\nReact/Tauri/mobile"]
+  Engine["Photon Engine\ndurable mutations\noperation log\npush/pull sync"]
+  Live["Photon Live\nYjs + WebSocket/DO\npresence + awareness"]
+  Api["REST/RPC API\nbootstrap/auth/commands\nsync endpoint"]
+  Store["Canonical stores\nSQLite/Postgres/D1\nobject storage\naudit/event log\nYjs snapshots"]
+  Client <--> Engine
+  Client <--> Live
+  Client <--> Api
+  Engine <--> Api
+  Api <--> Store
+  Live -. "realtime UX only" .-> Store
 ```
+
+Photon Live can keep the UI responsive offline by using local Yjs/IndexedDB state, but its network responsibilities are opportunistic: presence, awareness, and broadcast pause while disconnected. Photon Engine keeps durable local mutations and reconciles them when the sync endpoint is reachable again.
 
 ### Write Path
 

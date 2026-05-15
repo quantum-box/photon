@@ -13,6 +13,10 @@ import {
 } from '../../app/kitConfig'
 import type { DocBlock, DocBlockType } from './types'
 
+// Photon Live for document bodies. Yjs/IndexedDB/WebSocket keep the editor
+// responsive and collaborative; Photon Engine stores durable metadata,
+// snapshots, and update streams through the application server.
+
 export type DocumentSyncStatus = 'connecting' | 'connected' | 'offline'
 
 export interface DocumentCollaboration {

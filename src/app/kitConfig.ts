@@ -1,5 +1,8 @@
 export type DeploymentMode = 'local' | 'cloud' | 'onprem'
 export type FrontendWorkerRuntime = 'cloudflare-workers' | 'workerd'
+// Photon Live backend: realtime collaborative UX transport for Yjs rooms,
+// presence, awareness, and reconnect behavior. Durable mutations belong to
+// Photon Engine and are synced through REST/RPC push/pull endpoints.
 export type SyncBackend = 'rust-server' | 'cloudflare-durable-object'
 export type AppServerBackend = 'rust-server' | 'external-api'
 export type ChatStreamMode = 'mock' | 'backend'
@@ -79,6 +82,13 @@ export interface AppKitConfig {
     tauriStorageProvider: 'tauri-local-file-cache'
   }
   sync: {
+    /**
+     * Photon Live configuration.
+     *
+     * This controls realtime collaborative UX only: Yjs room transport,
+     * presence, awareness, local IndexedDB hydration, and reconnect behavior.
+     * It is intentionally separate from Photon Engine durable mutation sync.
+     */
     backend: SyncBackend
     workspaceId: string
     issuesRoomId: string

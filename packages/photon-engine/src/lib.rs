@@ -1,9 +1,14 @@
-//! Private offline sync core for Photon and Tachyon runtimes.
+//! Photon Engine: private offline sync core for Photon and Tachyon runtimes.
 //!
 //! The engine owns durable local persistence, append-only operations,
 //! materialized projections, cursor checkpoints, and deterministic conflict
-//! policy. Realtime transports such as WebSocket, Durable Objects, and Yjs
-//! awareness stay outside this crate.
+//! policy.
+//!
+//! Realtime collaborative UX belongs to Photon Live, not this crate. Photon
+//! Live may use WebSocket, Durable Object rooms, Yjs awareness, presence, and
+//! optimistic local UI state to make collaboration feel immediate. Photon
+//! Engine stays focused on durable truth: accepting local mutations offline,
+//! replaying them, and reconciling them through push/pull sync.
 
 pub mod engine;
 pub mod error;

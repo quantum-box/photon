@@ -82,7 +82,11 @@ export const syncPresence = {
 }
 
 // ---------------------------------------------------------------------------
-// WebSocket sync
+// Photon Live: WebSocket realtime UX sync
+//
+// This module keeps the shared UI feeling live through Yjs updates, presence,
+// IndexedDB hydration, and reconnect behavior. It is deliberately separate
+// from Photon Engine, which owns durable mutation logs and push/pull sync.
 // ---------------------------------------------------------------------------
 
 const WS_REMOTE = 'ws-remote'
