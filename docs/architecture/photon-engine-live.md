@@ -2,6 +2,9 @@
 
 Photon separates sync into two product-facing layers.
 
+For the implementation checklist of client Engine to server Engine sync, see
+[`photon-engine-sync-plan.md`](./photon-engine-sync-plan.md).
+
 ## Photon Engine
 
 Photon Engine is the durable data mutation path.

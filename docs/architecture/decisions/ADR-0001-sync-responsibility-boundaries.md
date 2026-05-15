@@ -53,6 +53,18 @@ flowchart LR
 
 Photon Live can keep the UI responsive offline by using local Yjs/IndexedDB state, but its network responsibilities are opportunistic: presence, awareness, and broadcast pause while disconnected. Photon Engine keeps durable local mutations and reconciles them when the sync endpoint is reachable again.
 
+### Production Server Roles
+
+Production deployment treats Engine and Live as separate roles.
+
+- `photon-engine-server` owns durable operation sync and exposes `/api/engine/push` and `/api/engine/pull`.
+- `photon-live-server` owns realtime collaboration and exposes `/ws`.
+- `photon-server` may run both roles together for local compatibility, but it is not the preferred production topology.
+
+Photon Engine storage must be durable database storage. TiDB/MySQL is supported via `PHOTON_ENGINE_DATABASE_URL=mysql://...`; SQLite remains acceptable for local development and preview data only. Photon Live may share Engine storage for Yjs snapshot/update persistence, but its API surface remains realtime-only.
+
+The client-side Engine runtime stores pending operations in PGlite. When the Engine server is reachable, the client pushes those pending operations to `/api/engine/push`; accepted decisions mark local operations as accepted. Pull sync uses `/api/engine/pull` with a cursor to receive accepted operations from other clients.
+
 ### Write Path
 
 Domain writes must eventually be accepted by the application server.

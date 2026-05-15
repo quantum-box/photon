@@ -127,7 +127,7 @@ function randomIssueId() {
 function nextIdentifier(issues: Issue[]) {
   const prefix = appKitConfig.issues.identifierPrefix
   const maxNumber = issues.reduce((max, issue) => {
-    const match = issue.identifier.match(new RegExp(`^${prefix}-(\\d+)$`))
+    const match = issue.identifier?.match(new RegExp(`^${prefix}-(\\d+)$`))
     return match ? Math.max(max, Number(match[1])) : max
   }, 100)
   return `${prefix}-${maxNumber + 1}`

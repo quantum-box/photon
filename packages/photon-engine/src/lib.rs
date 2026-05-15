@@ -14,6 +14,8 @@ pub mod engine;
 pub mod error;
 #[cfg(feature = "memory")]
 pub mod memory;
+#[cfg(feature = "mysql")]
+pub mod mysql;
 pub mod projection;
 pub mod protocol;
 #[cfg(feature = "sqlite")]
@@ -27,6 +29,8 @@ pub use engine::PhotonEngine;
 pub use error::{EngineError, Result};
 #[cfg(feature = "memory")]
 pub use memory::MemoryAdapter;
+#[cfg(feature = "mysql")]
+pub use mysql::MySqlAdapter;
 pub use protocol::{
     PullRequest, PullResult, PulledOperation, PushDecision, PushRequest, PushResult, SyncEndpoint,
     SyncSummary,

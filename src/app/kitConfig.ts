@@ -75,6 +75,8 @@ export interface AppKitConfig {
   }
   engine: {
     pgliteDataDir: string
+    pushPath: string
+    pullPath: string
   }
   attachments: {
     yjsArrayName: string
@@ -326,6 +328,8 @@ export const appKitConfig: AppKitConfig = {
   },
   engine: {
     pgliteDataDir: 'idb://photon-engine',
+    pushPath: '/api/engine/push',
+    pullPath: '/api/engine/pull',
   },
   attachments: {
     yjsArrayName: 'attachments',

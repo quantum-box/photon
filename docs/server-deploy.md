@@ -1,15 +1,34 @@
 # Photon Server Deploy
 
-Photon's Rust application server lives in `packages/server`. It owns the
-canonical issue REST API (`/api/issues`) and can also serve the local Yjs
-WebSocket endpoint (`/ws`).
+Photon's Rust servers live in `packages/server`. Production should deploy the
+Engine and Live roles separately:
+
+- `photon-engine-server`: durable Engine API (`/api/*`, Swagger UI)
+- `photon-live-server`: realtime Live WebSocket (`/ws`)
+- `photon-server`: compatibility server that runs both roles in one process
 
 ## Container
 
-Build the server image locally:
+Build the compatibility server image locally:
 
 ```bash
 docker build -f packages/server/Dockerfile -t photon-server:local packages/server
+```
+
+Build role-specific images:
+
+```bash
+docker build \
+  -f packages/server/Dockerfile \
+  --build-arg PHOTON_SERVER_BIN=photon-engine-server \
+  -t photon-engine-server:local \
+  packages/server
+
+docker build \
+  -f packages/server/Dockerfile \
+  --build-arg PHOTON_SERVER_BIN=photon-live-server \
+  -t photon-live-server:local \
+  packages/server
 ```
 
 Run it locally:
@@ -19,16 +38,42 @@ docker run --rm -p 3001:8080 photon-server:local
 curl http://127.0.0.1:3001/api/health
 ```
 
+Run the roles locally without Docker:
+
+```bash
+npm run server:engine
+PHOTON_LIVE_PORT=3002 npm run server:live
+```
+
 The container reads:
 
 - `PORT`: HTTP listen port. Defaults to `8080` in the container and `3001` when
   running `cargo run` locally.
+- `PHOTON_ENGINE_PORT`: Engine-only local listen port. Defaults to `3001`.
+- `PHOTON_LIVE_PORT`: Live-only local listen port. Defaults to `3002`.
 - `DATABASE_URL`: SQLite URL. The container default is
   `sqlite:/tmp/photon.db?mode=rwc`.
+- `PHOTON_ENGINE_DATABASE_URL`: Engine storage URL override. Use
+  `mysql://user:password@host:4000/database` for TiDB/MySQL.
+- `PHOTON_LIVE_DATABASE_URL`: Live-only database URL override.
 
 The default SQLite database is suitable for preview/demo deployments only. Cloud
 Run filesystem data is ephemeral, so production issue data needs a durable
 database URL once Photon moves beyond preview.
+
+For production Engine deployments, prefer TiDB/MySQL:
+
+```bash
+PHOTON_ENGINE_DATABASE_URL=mysql://<user>:<password>@<tidb-host>:4000/photon \
+  npm run server:engine
+```
+
+Photon Engine exposes durable push/pull sync endpoints:
+
+- `POST /api/engine/push`: accept pending client operations and return decisions.
+- `POST /api/engine/pull`: return accepted operations after the client's cursor.
+
+Photon Live does not expose these Engine endpoints. It only owns `/ws`.
 
 ## GitHub Actions Cloud Run Deploy
 
@@ -61,13 +106,13 @@ workflow also runs automatically on `main` when server files change.
 For a deployed frontend, set:
 
 ```bash
-VITE_PHOTON_API_BASE_URL=https://<cloud-run-service-url>
+VITE_PHOTON_API_BASE_URL=https://<engine-service-url>
 ```
 
-If the Rust server should also provide sync, set:
+For Photon Live, set:
 
 ```bash
-VITE_PHOTON_SYNC_WS_URL=wss://<cloud-run-service-host>/ws
+VITE_PHOTON_SYNC_WS_URL=wss://<live-service-host>/ws
 ```
 
 If Cloudflare Durable Objects remain the sync relay, keep

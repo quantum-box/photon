@@ -31,9 +31,14 @@ interface PhotonEngineOperationInput {
   fields?: object
 }
 
+interface PhotonEngineOperationRow {
+  operation_id: string
+  operation_json: string
+  status: string
+}
+
 const engineScope = `workspace:${appKitConfig.workspace.id}`
 const engineActorId = `${appKitConfig.app.id}-client`
-const wasmModulePath = '../../../packages/photon-engine/pkg/photon_engine.js'
 
 const engineDataDir =
   typeof globalThis.indexedDB === 'undefined' ? undefined : appKitConfig.engine.pgliteDataDir
@@ -110,11 +115,15 @@ interface EngineRuntimeRecord {
 }
 
 interface WasmPhotonEngineModule {
-  default?: () => Promise<void>
+  default?: () => Promise<unknown>
   photon_engine_apply_operation: (
     current: EngineRuntimeRecord | null,
     operation: EngineRuntimeOperation
   ) => EngineRuntimeRecord
+  photon_engine_apply_operation_json?: (
+    currentJson: string | undefined,
+    operationJson: string
+  ) => string
 }
 
 interface EngineRuntimeOperation {
@@ -138,7 +147,7 @@ function isTauriRuntime() {
 
 async function loadWasmEngine(): Promise<WasmPhotonEngineModule> {
   if (wasmUnavailable) throw new Error('Photon Engine WASM adapter is unavailable')
-  wasmModulePromise ??= import(/* @vite-ignore */ wasmModulePath).then(
+  wasmModulePromise ??= import('../../../packages/photon-engine/pkg/photon_engine.js').then(
     async (module: WasmPhotonEngineModule) => {
       await module.default?.()
       return module
@@ -211,8 +220,13 @@ async function applyWebWasmOperation<T>(
   const operation = runtimeOperation(input)
   const current = await getRawEngineRecord(input.collection, input.recordId)
   const wasm = await loadWasmEngine()
-  const projected = wasm.photon_engine_apply_operation(current, operation)
-  const deleted = projected.deleted_at !== null
+  const projected = wasm.photon_engine_apply_operation_json
+    ? JSON.parse(wasm.photon_engine_apply_operation_json(
+        current ? JSON.stringify(current) : undefined,
+        JSON.stringify(operation)
+      )) as EngineRuntimeRecord
+    : wasm.photon_engine_apply_operation(current, operation)
+  const deleted = projected.deleted_at != null
   const updatedAt = String(projected.version.wall_time_ms)
 
   await db.query(
@@ -269,7 +283,7 @@ async function applyTauriOperation<T>(
     current,
     operation,
   })
-  const deleted = projected.deleted_at !== null
+  const deleted = projected.deleted_at != null
   const updatedAt = String(projected.version.wall_time_ms)
 
   await db.query(
@@ -484,6 +498,60 @@ export async function deleteClientEngineRecord(
     recordId,
     kind: 'delete',
   })
+}
+
+export async function syncClientEngineOperations(
+  apiBaseUrl = appKitConfig.server.apiBaseUrl ?? ''
+): Promise<{ pushed: number; accepted: number }> {
+  const db = await dbPromise
+  const pending = await db.query<PhotonEngineOperationRow>(
+    `
+      SELECT operation_id, operation_json, status
+      FROM photon_engine_operations
+      WHERE scope = $1 AND status = 'pending'
+      ORDER BY local_sequence ASC
+    `,
+    [engineScope]
+  )
+  if (pending.rows.length === 0) {
+    return { pushed: 0, accepted: 0 }
+  }
+
+  const response = await fetch(`${apiBaseUrl}${appKitConfig.engine.pushPath}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      scope: engineScope,
+      operations: pending.rows.map((row) => JSON.parse(row.operation_json)),
+      cursor: null,
+    }),
+  })
+  if (!response.ok) {
+    throw new Error(`Photon Engine push failed: ${response.status}`)
+  }
+
+  const result = await response.json() as {
+    decisions?: Array<{
+      type: string
+      operation_id: string
+      remote_sequence?: number
+    }>
+  }
+  let accepted = 0
+  for (const decision of result.decisions ?? []) {
+    if (decision.type !== 'accepted') continue
+    accepted += 1
+    await db.query(
+      `
+        UPDATE photon_engine_operations
+        SET status = 'accepted'
+        WHERE scope = $1 AND operation_id = $2
+      `,
+      [engineScope, decision.operation_id]
+    )
+  }
+
+  return { pushed: pending.rows.length, accepted }
 }
 
 export const __testOnly = {

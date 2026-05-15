@@ -7,6 +7,7 @@ use std::{
     },
 };
 
+use async_trait::async_trait;
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
@@ -19,8 +20,10 @@ use axum::{
 };
 use futures_util::{SinkExt, StreamExt};
 use photon_engine::{
-    ActorId, CollectionName, HybridTimestamp, Operation, OperationKind, PhotonEngine, RecordKey,
-    ScopeId, Snapshot, SnapshotUpdate, SqliteAdapter, StorageAdapter,
+    ActorId, CollectionName, HybridTimestamp, MySqlAdapter, Operation, OperationFilter,
+    OperationKind, OperationStatus, PhotonEngine, PullRequest, PullResult, PulledOperation,
+    PushDecision, PushRequest, PushResult, Record, RecordId, RecordKey, RemoteId, ScopeId,
+    Snapshot, SnapshotUpdate, SqliteAdapter, StorageAdapter, StoredOperation, SyncCursor,
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use sqlx::{sqlite::SqlitePoolOptions, SqlitePool};
@@ -92,7 +95,7 @@ use yrs::{updates::decoder::Decode, Doc, ReadTxn, StateVector, Transact, Update}
         CreateToolCall,
         UpdateToolCall,
         ToolCallListResponse,
-        HealthResponse
+        HealthResponse,
     )),
     info(
         title = "Photon API",
@@ -1126,20 +1129,414 @@ const YJS_COMPACTION_THRESHOLD: i64 = 100;
 
 pub struct AppState {
     pub db: SqlitePool,
-    pub engine: PhotonEngine<SqliteAdapter>,
+    pub engine: PhotonEngine<ServerEngineAdapter>,
     pub engine_next_seq: AtomicI64,
     pub rooms: RwLock<HashMap<String, Arc<RoomState>>>,
 }
 
 pub struct RoomState {
     pub db: SqlitePool,
-    pub engine: PhotonEngine<SqliteAdapter>,
+    pub engine: PhotonEngine<ServerEngineAdapter>,
     pub doc: RwLock<Doc>,
     pub broadcast_tx: broadcast::Sender<Vec<u8>>,
     pub presence_tx: broadcast::Sender<String>,
     pub active_connections: AtomicUsize,
     pub room_id: String,
     pub next_seq: AtomicI64,
+}
+
+#[derive(Clone, Debug)]
+pub enum ServerEngineAdapter {
+    Sqlite(SqliteAdapter),
+    MySql(MySqlAdapter),
+}
+
+#[async_trait]
+impl StorageAdapter for ServerEngineAdapter {
+    async fn append_operation(
+        &self,
+        operation: Operation,
+        status: OperationStatus,
+    ) -> photon_engine::Result<StoredOperation> {
+        match self {
+            Self::Sqlite(adapter) => adapter.append_operation(operation, status).await,
+            Self::MySql(adapter) => adapter.append_operation(operation, status).await,
+        }
+    }
+
+    async fn get_operation(
+        &self,
+        operation_id: &photon_engine::OperationId,
+    ) -> photon_engine::Result<Option<StoredOperation>> {
+        match self {
+            Self::Sqlite(adapter) => adapter.get_operation(operation_id).await,
+            Self::MySql(adapter) => adapter.get_operation(operation_id).await,
+        }
+    }
+
+    async fn mark_operation_status(
+        &self,
+        operation_id: &photon_engine::OperationId,
+        status: OperationStatus,
+        remote_sequence: Option<i64>,
+    ) -> photon_engine::Result<()> {
+        match self {
+            Self::Sqlite(adapter) => {
+                adapter
+                    .mark_operation_status(operation_id, status, remote_sequence)
+                    .await
+            }
+            Self::MySql(adapter) => {
+                adapter
+                    .mark_operation_status(operation_id, status, remote_sequence)
+                    .await
+            }
+        }
+    }
+
+    async fn list_operations(
+        &self,
+        filter: OperationFilter,
+    ) -> photon_engine::Result<Vec<StoredOperation>> {
+        match self {
+            Self::Sqlite(adapter) => adapter.list_operations(filter).await,
+            Self::MySql(adapter) => adapter.list_operations(filter).await,
+        }
+    }
+
+    async fn upsert_record(&self, record: Record) -> photon_engine::Result<()> {
+        match self {
+            Self::Sqlite(adapter) => adapter.upsert_record(record).await,
+            Self::MySql(adapter) => adapter.upsert_record(record).await,
+        }
+    }
+
+    async fn get_record(&self, key: &RecordKey) -> photon_engine::Result<Option<Record>> {
+        match self {
+            Self::Sqlite(adapter) => adapter.get_record(key).await,
+            Self::MySql(adapter) => adapter.get_record(key).await,
+        }
+    }
+
+    async fn list_records(
+        &self,
+        scope: &ScopeId,
+        collection: &CollectionName,
+    ) -> photon_engine::Result<Vec<Record>> {
+        match self {
+            Self::Sqlite(adapter) => adapter.list_records(scope, collection).await,
+            Self::MySql(adapter) => adapter.list_records(scope, collection).await,
+        }
+    }
+
+    async fn delete_record_projection(&self, key: &RecordKey) -> photon_engine::Result<()> {
+        match self {
+            Self::Sqlite(adapter) => adapter.delete_record_projection(key).await,
+            Self::MySql(adapter) => adapter.delete_record_projection(key).await,
+        }
+    }
+
+    async fn save_snapshot(&self, snapshot: Snapshot) -> photon_engine::Result<()> {
+        match self {
+            Self::Sqlite(adapter) => adapter.save_snapshot(snapshot).await,
+            Self::MySql(adapter) => adapter.save_snapshot(snapshot).await,
+        }
+    }
+
+    async fn get_snapshot(&self, key: &RecordKey) -> photon_engine::Result<Option<Snapshot>> {
+        match self {
+            Self::Sqlite(adapter) => adapter.get_snapshot(key).await,
+            Self::MySql(adapter) => adapter.get_snapshot(key).await,
+        }
+    }
+
+    async fn append_snapshot_update(&self, update: SnapshotUpdate) -> photon_engine::Result<()> {
+        match self {
+            Self::Sqlite(adapter) => adapter.append_snapshot_update(update).await,
+            Self::MySql(adapter) => adapter.append_snapshot_update(update).await,
+        }
+    }
+
+    async fn list_snapshot_updates(
+        &self,
+        key: &RecordKey,
+        after_sequence: i64,
+    ) -> photon_engine::Result<Vec<SnapshotUpdate>> {
+        match self {
+            Self::Sqlite(adapter) => adapter.list_snapshot_updates(key, after_sequence).await,
+            Self::MySql(adapter) => adapter.list_snapshot_updates(key, after_sequence).await,
+        }
+    }
+
+    async fn compact_snapshot_updates(
+        &self,
+        key: &RecordKey,
+        up_to_sequence: i64,
+    ) -> photon_engine::Result<()> {
+        match self {
+            Self::Sqlite(adapter) => adapter.compact_snapshot_updates(key, up_to_sequence).await,
+            Self::MySql(adapter) => adapter.compact_snapshot_updates(key, up_to_sequence).await,
+        }
+    }
+
+    async fn save_cursor(&self, cursor: SyncCursor) -> photon_engine::Result<()> {
+        match self {
+            Self::Sqlite(adapter) => adapter.save_cursor(cursor).await,
+            Self::MySql(adapter) => adapter.save_cursor(cursor).await,
+        }
+    }
+
+    async fn get_cursor(
+        &self,
+        scope: &ScopeId,
+        remote: &RemoteId,
+    ) -> photon_engine::Result<Option<SyncCursor>> {
+        match self {
+            Self::Sqlite(adapter) => adapter.get_cursor(scope, remote).await,
+            Self::MySql(adapter) => adapter.get_cursor(scope, remote).await,
+        }
+    }
+
+    async fn save_conflict(&self, conflict: photon_engine::Conflict) -> photon_engine::Result<()> {
+        match self {
+            Self::Sqlite(adapter) => adapter.save_conflict(conflict).await,
+            Self::MySql(adapter) => adapter.save_conflict(conflict).await,
+        }
+    }
+
+    async fn list_conflicts(
+        &self,
+        scope: &ScopeId,
+        collection: Option<&CollectionName>,
+        record_id: Option<&RecordId>,
+    ) -> photon_engine::Result<Vec<photon_engine::Conflict>> {
+        match self {
+            Self::Sqlite(adapter) => adapter.list_conflicts(scope, collection, record_id).await,
+            Self::MySql(adapter) => adapter.list_conflicts(scope, collection, record_id).await,
+        }
+    }
+}
+
+fn engine_api_router() -> Router<Arc<AppState>> {
+    Router::new()
+        .route("/api/health", get(health))
+        .route(
+            "/api/engine/push",
+            axum::routing::post(push_engine_operations),
+        )
+        .route(
+            "/api/engine/pull",
+            axum::routing::post(pull_engine_operations),
+        )
+        .route("/api/issues", get(list_issues).post(create_issue))
+        .route(
+            "/api/issues/:id",
+            get(get_issue).put(update_issue).delete(delete_issue),
+        )
+        .route("/api/documents", get(list_documents).post(create_document))
+        .route(
+            "/api/documents/:id",
+            get(get_document)
+                .put(update_document)
+                .delete(delete_document),
+        )
+        .route(
+            "/api/attachments",
+            get(list_attachments).post(create_attachment),
+        )
+        .route(
+            "/api/attachments/:id",
+            get(get_attachment)
+                .put(update_attachment)
+                .delete(delete_attachment),
+        )
+        .route(
+            "/api/attachments/:id/links",
+            axum::routing::post(link_attachment),
+        )
+        .route(
+            "/api/attachments/:id/links/:link_id",
+            axum::routing::delete(delete_attachment_link),
+        )
+        .route(
+            "/api/chat/messages",
+            get(list_chat_messages).post(create_chat_message),
+        )
+        .route(
+            "/api/chat/messages/:id",
+            get(get_chat_message)
+                .put(update_chat_message)
+                .delete(delete_chat_message),
+        )
+        .route(
+            "/api/chat/tool-calls",
+            get(list_tool_calls).post(create_tool_call),
+        )
+        .route(
+            "/api/chat/tool-calls/:id",
+            get(get_tool_call)
+                .put(update_tool_call)
+                .delete(delete_tool_call),
+        )
+}
+
+fn live_router() -> Router<Arc<AppState>> {
+    Router::new().route("/ws", get(ws_handler))
+}
+
+fn combined_app_router(state: Arc<AppState>, cors: CorsLayer) -> Router {
+    Router::new()
+        .merge(engine_api_router())
+        .merge(live_router())
+        .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
+        .layer(tower_http::trace::TraceLayer::new_for_http())
+        .layer(cors)
+        .with_state(state)
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum PhotonServerMode {
+    Combined,
+    Engine,
+    Live,
+}
+
+impl PhotonServerMode {
+    fn service_name(self) -> &'static str {
+        match self {
+            Self::Combined => "Photon server",
+            Self::Engine => "Photon Engine server",
+            Self::Live => "Photon Live server",
+        }
+    }
+
+    fn default_port(self) -> u16 {
+        match self {
+            Self::Combined | Self::Engine => 3001,
+            Self::Live => 3002,
+        }
+    }
+
+    fn mode_port_env(self) -> Option<&'static str> {
+        match self {
+            Self::Combined => None,
+            Self::Engine => Some("PHOTON_ENGINE_PORT"),
+            Self::Live => Some("PHOTON_LIVE_PORT"),
+        }
+    }
+}
+
+fn init_tracing() {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "photon_server=debug,tower_http=debug".into()),
+        )
+        .try_init();
+}
+
+fn resolve_app_database_url() -> String {
+    std::env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite:photon.db?mode=rwc".into())
+}
+
+fn resolve_engine_database_url(mode: PhotonServerMode) -> String {
+    match mode {
+        PhotonServerMode::Engine => std::env::var("PHOTON_ENGINE_DATABASE_URL")
+            .or_else(|_| std::env::var("DATABASE_URL"))
+            .unwrap_or_else(|_| "sqlite:photon.db?mode=rwc".into()),
+        PhotonServerMode::Live => std::env::var("PHOTON_LIVE_ENGINE_DATABASE_URL")
+            .or_else(|_| std::env::var("PHOTON_ENGINE_DATABASE_URL"))
+            .or_else(|_| std::env::var("DATABASE_URL"))
+            .unwrap_or_else(|_| "sqlite:photon.db?mode=rwc".into()),
+        PhotonServerMode::Combined => std::env::var("PHOTON_ENGINE_DATABASE_URL")
+            .or_else(|_| std::env::var("DATABASE_URL"))
+            .unwrap_or_else(|_| "sqlite:photon.db?mode=rwc".into()),
+    }
+}
+
+fn resolve_port(mode: PhotonServerMode) -> u16 {
+    mode.mode_port_env()
+        .and_then(|env| std::env::var(env).ok())
+        .or_else(|| std::env::var("PORT").ok())
+        .and_then(|port| port.parse::<u16>().ok())
+        .unwrap_or_else(|| mode.default_port())
+}
+
+async fn build_state(
+    database_url: &str,
+    engine_database_url: &str,
+) -> Result<Arc<AppState>, Box<dyn std::error::Error>> {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(5)
+        .connect(database_url)
+        .await?;
+
+    init_db(&pool).await?;
+    let engine = init_engine(&pool, engine_database_url).await?;
+    let engine_next_seq = init_engine_next_sequence(&engine).await?;
+    seed_if_empty(&pool).await?;
+
+    Ok(Arc::new(AppState {
+        db: pool,
+        engine,
+        engine_next_seq: AtomicI64::new(engine_next_seq),
+        rooms: RwLock::new(HashMap::new()),
+    }))
+}
+
+fn cors_layer() -> CorsLayer {
+    CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods(Any)
+        .allow_headers(Any)
+}
+
+fn app_router_for_mode(mode: PhotonServerMode, state: Arc<AppState>) -> Router {
+    match mode {
+        PhotonServerMode::Combined => combined_app_router(state, cors_layer()),
+        PhotonServerMode::Engine => engine_api_router()
+            .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
+            .layer(tower_http::trace::TraceLayer::new_for_http())
+            .layer(cors_layer())
+            .with_state(state),
+        PhotonServerMode::Live => live_router()
+            .layer(tower_http::trace::TraceLayer::new_for_http())
+            .layer(cors_layer())
+            .with_state(state),
+    }
+}
+
+pub async fn run_server(mode: PhotonServerMode) -> Result<(), Box<dyn std::error::Error>> {
+    init_tracing();
+
+    let database_url = resolve_app_database_url();
+    let engine_database_url = resolve_engine_database_url(mode);
+    let state = build_state(&database_url, &engine_database_url).await?;
+    let app = app_router_for_mode(mode, state);
+
+    let port = resolve_port(mode);
+    let addr = SocketAddr::from(([0, 0, 0, 0], port));
+    info!("{} listening on {addr}", mode.service_name());
+    if matches!(mode, PhotonServerMode::Combined | PhotonServerMode::Engine) {
+        info!("Swagger UI: http://{addr}/swagger-ui/");
+    }
+
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    axum::serve(listener, app).await?;
+
+    Ok(())
+}
+
+pub async fn run_combined_server() -> Result<(), Box<dyn std::error::Error>> {
+    run_server(PhotonServerMode::Combined).await
+}
+
+pub async fn run_engine_server() -> Result<(), Box<dyn std::error::Error>> {
+    run_server(PhotonServerMode::Engine).await
+}
+
+pub async fn run_live_server() -> Result<(), Box<dyn std::error::Error>> {
+    run_server(PhotonServerMode::Live).await
 }
 
 // ---------------------------------------------------------------------------
@@ -1156,6 +1553,87 @@ async fn health() -> Json<HealthResponse> {
     Json(HealthResponse {
         status: "ok".into(),
     })
+}
+
+async fn push_engine_operations(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<PushRequest>,
+) -> Result<Json<PushResult>, AppError> {
+    let mut decisions = Vec::with_capacity(payload.operations.len());
+    let mut max_remote_sequence = 0;
+
+    for operation in payload.operations {
+        let remote_sequence = state.engine_next_seq.fetch_add(1, Ordering::SeqCst) + 1;
+        state
+            .engine
+            .apply_remote_operation(operation.clone(), remote_sequence)
+            .await?;
+        decisions.push(PushDecision::Accepted {
+            operation_id: operation.id,
+            remote_sequence,
+        });
+        max_remote_sequence = max_remote_sequence.max(remote_sequence);
+    }
+
+    let cursor = if max_remote_sequence > 0 {
+        Some(SyncCursor::new(
+            payload.scope,
+            RemoteId::from(ENGINE_ACTOR_ID),
+            max_remote_sequence,
+        ))
+    } else {
+        payload.cursor
+    };
+
+    Ok(Json(PushResult {
+        decisions,
+        server_operations: Vec::new(),
+        cursor,
+    }))
+}
+
+async fn pull_engine_operations(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<PullRequest>,
+) -> Result<Json<PullResult>, AppError> {
+    let after_remote_sequence = payload.cursor.as_ref().map(|cursor| cursor.position);
+    let operations = state
+        .engine
+        .storage()
+        .list_operations(OperationFilter {
+            scope: Some(payload.scope.clone()),
+            status: Some(OperationStatus::Accepted),
+            after_remote_sequence,
+            ..OperationFilter::default()
+        })
+        .await?;
+
+    let mut max_remote_sequence = payload
+        .cursor
+        .as_ref()
+        .map(|cursor| cursor.position)
+        .unwrap_or_default();
+    let pulled = operations
+        .into_iter()
+        .filter_map(|stored| {
+            stored.remote_sequence.map(|remote_sequence| {
+                max_remote_sequence = max_remote_sequence.max(remote_sequence);
+                PulledOperation {
+                    operation: stored.operation,
+                    remote_sequence,
+                }
+            })
+        })
+        .collect();
+
+    Ok(Json(PullResult {
+        operations: pulled,
+        cursor: Some(SyncCursor::new(
+            payload.scope,
+            RemoteId::from(ENGINE_ACTOR_ID),
+            max_remote_sequence,
+        )),
+    }))
 }
 
 #[utoipa::path(
@@ -2343,16 +2821,37 @@ async fn init_db(pool: &SqlitePool) -> Result<(), sqlx::Error> {
 
 async fn init_engine(
     pool: &SqlitePool,
-) -> Result<PhotonEngine<SqliteAdapter>, photon_engine::EngineError> {
+    engine_database_url: &str,
+) -> Result<PhotonEngine<ServerEngineAdapter>, photon_engine::EngineError> {
+    if engine_database_url.starts_with("mysql://") || engine_database_url.starts_with("tidb://") {
+        let database_url = engine_database_url
+            .strip_prefix("tidb://")
+            .map(|rest| format!("mysql://{rest}"))
+            .unwrap_or_else(|| engine_database_url.to_owned());
+        let adapter = MySqlAdapter::connect(&database_url).await?;
+        return Ok(PhotonEngine::new(ServerEngineAdapter::MySql(adapter)));
+    }
+
     let adapter = SqliteAdapter::from_pool(pool.clone());
     adapter.migrate().await?;
-    Ok(PhotonEngine::new(adapter))
+    Ok(PhotonEngine::new(ServerEngineAdapter::Sqlite(adapter)))
 }
 
-async fn init_engine_next_sequence(pool: &SqlitePool) -> Result<i64, sqlx::Error> {
-    sqlx::query_scalar("SELECT COALESCE(MAX(remote_sequence), 0) FROM photon_engine_operations")
-        .fetch_one(pool)
-        .await
+async fn init_engine_next_sequence(
+    engine: &PhotonEngine<ServerEngineAdapter>,
+) -> photon_engine::Result<i64> {
+    let operations = engine
+        .storage()
+        .list_operations(OperationFilter {
+            status: Some(OperationStatus::Accepted),
+            ..OperationFilter::default()
+        })
+        .await?;
+    Ok(operations
+        .into_iter()
+        .filter_map(|operation| operation.remote_sequence)
+        .max()
+        .unwrap_or_default())
 }
 
 async fn issue_table_has_column(pool: &SqlitePool, column_name: &str) -> Result<bool, sqlx::Error> {
@@ -2785,120 +3284,6 @@ async fn seed_if_empty(pool: &SqlitePool) -> Result<(), sqlx::Error> {
 // Main
 // ---------------------------------------------------------------------------
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "photon_server=debug,tower_http=debug".into()),
-        )
-        .init();
-
-    let database_url =
-        std::env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite:photon.db?mode=rwc".into());
-
-    let pool = SqlitePoolOptions::new()
-        .max_connections(5)
-        .connect(&database_url)
-        .await?;
-
-    init_db(&pool).await?;
-    let engine = init_engine(&pool).await?;
-    let engine_next_seq = init_engine_next_sequence(&pool).await?;
-    seed_if_empty(&pool).await?;
-
-    let state = Arc::new(AppState {
-        db: pool,
-        engine,
-        engine_next_seq: AtomicI64::new(engine_next_seq),
-        rooms: RwLock::new(HashMap::new()),
-    });
-
-    let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(Any);
-
-    let app = Router::new()
-        // Health
-        .route("/api/health", get(health))
-        // Issues CRUD
-        .route("/api/issues", get(list_issues).post(create_issue))
-        .route(
-            "/api/issues/:id",
-            get(get_issue).put(update_issue).delete(delete_issue),
-        )
-        // Document metadata backed by photon-engine generic records
-        .route("/api/documents", get(list_documents).post(create_document))
-        .route(
-            "/api/documents/:id",
-            get(get_document)
-                .put(update_document)
-                .delete(delete_document),
-        )
-        // Attachment metadata + surface links
-        .route(
-            "/api/attachments",
-            get(list_attachments).post(create_attachment),
-        )
-        .route(
-            "/api/attachments/:id",
-            get(get_attachment)
-                .put(update_attachment)
-                .delete(delete_attachment),
-        )
-        .route(
-            "/api/attachments/:id/links",
-            axum::routing::post(link_attachment),
-        )
-        .route(
-            "/api/attachments/:id/links/:link_id",
-            axum::routing::delete(delete_attachment_link),
-        )
-        // Chat history + tool call metadata backed by photon-engine
-        .route(
-            "/api/chat/messages",
-            get(list_chat_messages).post(create_chat_message),
-        )
-        .route(
-            "/api/chat/messages/:id",
-            get(get_chat_message)
-                .put(update_chat_message)
-                .delete(delete_chat_message),
-        )
-        .route(
-            "/api/chat/tool-calls",
-            get(list_tool_calls).post(create_tool_call),
-        )
-        .route(
-            "/api/chat/tool-calls/:id",
-            get(get_tool_call)
-                .put(update_tool_call)
-                .delete(delete_tool_call),
-        )
-        // WebSocket
-        .route("/ws", get(ws_handler))
-        // Swagger UI
-        .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
-        // Middleware
-        .layer(tower_http::trace::TraceLayer::new_for_http())
-        .layer(cors)
-        .with_state(state);
-
-    let port = std::env::var("PORT")
-        .ok()
-        .and_then(|port| port.parse::<u16>().ok())
-        .unwrap_or(3001);
-    let addr = SocketAddr::from(([0, 0, 0, 0], port));
-    info!("Photon server listening on {addr}");
-    info!("Swagger UI: http://{addr}/swagger-ui/");
-
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
-
-    Ok(())
-}
-
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -2977,7 +3362,7 @@ mod tests {
             .unwrap()
     }
 
-    async fn test_app() -> (Router, Arc<AppState>) {
+    async fn test_state() -> Arc<AppState> {
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
             .connect("sqlite::memory:")
@@ -2985,71 +3370,29 @@ mod tests {
             .unwrap();
 
         init_db(&pool).await.unwrap();
-        let engine = init_engine(&pool).await.unwrap();
-        let engine_next_seq = init_engine_next_sequence(&pool).await.unwrap();
+        let engine = init_engine(&pool, "sqlite::memory:").await.unwrap();
+        let engine_next_seq = init_engine_next_sequence(&engine).await.unwrap();
 
-        let state = Arc::new(AppState {
+        Arc::new(AppState {
             db: pool,
             engine,
             engine_next_seq: AtomicI64::new(engine_next_seq),
             rooms: RwLock::new(HashMap::new()),
-        });
+        })
+    }
 
-        let app = Router::new()
-            .route("/api/health", get(health))
-            .route("/api/issues", get(list_issues).post(create_issue))
-            .route(
-                "/api/issues/:id",
-                get(get_issue).put(update_issue).delete(delete_issue),
-            )
-            .route("/api/documents", get(list_documents).post(create_document))
-            .route(
-                "/api/documents/:id",
-                get(get_document)
-                    .put(update_document)
-                    .delete(delete_document),
-            )
-            .route(
-                "/api/attachments",
-                get(list_attachments).post(create_attachment),
-            )
-            .route(
-                "/api/attachments/:id",
-                get(get_attachment)
-                    .put(update_attachment)
-                    .delete(delete_attachment),
-            )
-            .route(
-                "/api/attachments/:id/links",
-                axum::routing::post(link_attachment),
-            )
-            .route(
-                "/api/attachments/:id/links/:link_id",
-                axum::routing::delete(delete_attachment_link),
-            )
-            .route(
-                "/api/chat/messages",
-                get(list_chat_messages).post(create_chat_message),
-            )
-            .route(
-                "/api/chat/messages/:id",
-                get(get_chat_message)
-                    .put(update_chat_message)
-                    .delete(delete_chat_message),
-            )
-            .route(
-                "/api/chat/tool-calls",
-                get(list_tool_calls).post(create_tool_call),
-            )
-            .route(
-                "/api/chat/tool-calls/:id",
-                get(get_tool_call)
-                    .put(update_tool_call)
-                    .delete(delete_tool_call),
-            )
-            .with_state(state.clone());
+    async fn engine_test_app() -> (Router, Arc<AppState>) {
+        let state = test_state().await;
+        (engine_api_router().with_state(state.clone()), state)
+    }
 
-        (app, state)
+    async fn live_test_app() -> (Router, Arc<AppState>) {
+        let state = test_state().await;
+        (live_router().with_state(state.clone()), state)
+    }
+
+    async fn test_app() -> (Router, Arc<AppState>) {
+        engine_test_app().await
     }
 
     #[tokio::test]
@@ -3067,6 +3410,103 @@ mod tests {
             .unwrap();
 
         assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_engine_and_live_test_servers_are_separate() {
+        let (engine_app, _) = engine_test_app().await;
+        let engine_ws_resp = engine_app
+            .oneshot(Request::builder().uri("/ws").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(engine_ws_resp.status(), StatusCode::NOT_FOUND);
+
+        let (live_app, _) = live_test_app().await;
+        let live_api_resp = live_app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(live_api_resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_engine_push_and_pull_sync_endpoint() {
+        let (app, _) = engine_test_app().await;
+        let operation = Operation::new(
+            engine_record_key("issues", "issue-sync-1"),
+            ActorId::from("client-a"),
+            OperationKind::Upsert {
+                value: serde_json::json!({
+                    "id": "issue-sync-1",
+                    "identifier": "PLT-901",
+                    "title": "Sync me"
+                }),
+            },
+        );
+
+        let push_resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/engine/push")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_string(&PushRequest {
+                            scope: ScopeId::from(ENGINE_SCOPE_ID),
+                            operations: vec![operation.clone()],
+                            cursor: None,
+                        })
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(push_resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(push_resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let pushed: PushResult = serde_json::from_slice(&body).unwrap();
+        assert_eq!(pushed.decisions.len(), 1);
+        assert!(matches!(
+            pushed.decisions[0],
+            PushDecision::Accepted {
+                remote_sequence: 1,
+                ..
+            }
+        ));
+
+        let pull_resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/engine/pull")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_string(&PullRequest {
+                            scope: ScopeId::from(ENGINE_SCOPE_ID),
+                            cursor: None,
+                        })
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(pull_resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(pull_resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let pulled: PullResult = serde_json::from_slice(&body).unwrap();
+        assert_eq!(pulled.operations.len(), 1);
+        assert_eq!(pulled.operations[0].operation.id, operation.id);
+        assert_eq!(pulled.operations[0].remote_sequence, 1);
     }
 
     #[tokio::test]
@@ -3116,7 +3556,7 @@ mod tests {
             .unwrap();
         assert_eq!(operations.len(), 1);
         assert_eq!(operations[0].remote_sequence, Some(1));
-        assert_eq!(init_engine_next_sequence(&state.db).await.unwrap(), 1);
+        assert_eq!(init_engine_next_sequence(&state.engine).await.unwrap(), 1);
 
         // List
         let resp = app
@@ -3826,7 +4266,7 @@ mod tests {
         let (presence_tx, _) = broadcast::channel::<String>(256);
         Arc::new(RoomState {
             db: pool.clone(),
-            engine: PhotonEngine::new(SqliteAdapter::from_pool(pool)),
+            engine: PhotonEngine::new(ServerEngineAdapter::Sqlite(SqliteAdapter::from_pool(pool))),
             doc: RwLock::new(Doc::new()),
             broadcast_tx,
             presence_tx,
@@ -3843,7 +4283,7 @@ mod tests {
             .await
             .unwrap();
         init_db(&pool).await.unwrap();
-        init_engine(&pool).await.unwrap();
+        init_engine(&pool, "sqlite::memory:").await.unwrap();
         pool
     }
 
@@ -4130,7 +4570,7 @@ mod tests {
             .await
             .unwrap();
         init_db(&pool).await.unwrap();
-        init_engine(&pool).await.unwrap();
+        init_engine(&pool, "sqlite::memory:").await.unwrap();
         let state = make_test_state(pool.clone());
 
         let total = (YJS_COMPACTION_THRESHOLD as usize) * 2;

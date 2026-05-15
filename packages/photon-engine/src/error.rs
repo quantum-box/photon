@@ -16,7 +16,7 @@ pub enum EngineError {
     #[error("serialization failed: {0}")]
     Serialization(#[from] serde_json::Error),
 
-    #[cfg(feature = "sqlite")]
-    #[error("sqlite adapter error: {0}")]
-    Sqlite(#[from] sqlx::Error),
+    #[cfg(any(feature = "sqlite", feature = "mysql"))]
+    #[error("sql adapter error: {0}")]
+    Sql(#[from] sqlx::Error),
 }

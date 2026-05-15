@@ -37,6 +37,8 @@ describe('appKitConfig', () => {
     expect(appKitConfig.workflows.pgliteDataDir).toBe('idb://photon-workflows')
     expect(appKitConfig.docs.pgliteDataDir).toBe('idb://photon-docs')
     expect(appKitConfig.engine.pgliteDataDir).toBe('idb://photon-engine')
+    expect(appKitConfig.engine.pushPath).toBe('/api/engine/push')
+    expect(appKitConfig.engine.pullPath).toBe('/api/engine/pull')
     expect(appKitConfig.docs.yjsArrayName).toBe('blocks')
     expect(appKitConfig.attachments.yjsArrayName).toBe('attachments')
     expect(appKitConfig.attachments.endpoint).toBe('/api/attachments')
