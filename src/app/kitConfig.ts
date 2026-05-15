@@ -84,6 +84,7 @@ export interface AppKitConfig {
     issuesRoomId: string
     yjsArrayName: string
     databasesArrayName: string
+    databaseViewsArrayName: string
     workflowCanvasesMapName: string
     persistenceKey: string
     websocketPath: string
@@ -323,6 +324,7 @@ export const appKitConfig: AppKitConfig = {
     issuesRoomId,
     yjsArrayName: 'issues',
     databasesArrayName: 'databases',
+    databaseViewsArrayName: 'databaseViews',
     workflowCanvasesMapName: 'workflowCanvases',
     persistenceKey: issuesRoomId,
     websocketPath: buildSyncWebsocketPath(issuesRoomId),

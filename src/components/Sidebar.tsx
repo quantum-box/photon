@@ -8,6 +8,11 @@ import { useTheme } from '../contexts/ThemeContext'
 import type { ThemeMode } from '../contexts/ThemeContext'
 import { useConnectionStatus, useSyncPresence } from '../lib/yjs/useYjsIssues'
 import { appKitConfig } from '../app/kitConfig'
+import {
+  getDatabaseViewScopeId,
+  getDefaultDatabaseViewId,
+} from '../lib/databaseViews/databaseViews'
+import type { DatabaseViewType } from '../lib/databaseViews/types'
 
 const workspaceLinks = [
   { id: 'docs' as const, label: 'Docs', to: '/docs' as const },
@@ -101,29 +106,40 @@ export function Sidebar() {
   const search = useRouterState({ select: (s) => s.location.search }) as {
     database?: string
     status?: Status
+    view?: string
   }
   const selectedDatabaseId = search.database
 
+  const currentDatabaseViewType: DatabaseViewType = search.view?.includes(':workflow')
+    ? 'workflow'
+    : search.view?.includes(':board')
+      ? 'board'
+      : 'table'
+
   const currentView = pathname.startsWith('/databases/board')
-    ? 'kanban'
+    ? 'board'
     : pathname.startsWith('/databases/workflow')
       ? 'workflow'
     : pathname.startsWith('/docs') || pathname.startsWith('/documents')
       ? 'docs'
     : pathname.startsWith('/chat')
       ? 'chat'
-      : 'table'
+      : currentDatabaseViewType
 
   const handleDatabaseSelect = (databaseId: string | null) => {
-    const to =
-      currentView === 'kanban'
-        ? '/databases/board'
-        : currentView === 'workflow'
-          ? '/databases/workflow'
-          : '/databases'
+    const nextDatabaseId = databaseId ?? undefined
+    const databaseViewType =
+      currentView === 'board' || currentView === 'workflow' || currentView === 'table'
+        ? currentView
+        : 'table'
+    const view = getDefaultDatabaseViewId(
+      getDatabaseViewScopeId(nextDatabaseId),
+      databaseViewType
+    )
+
     void navigate({
-      to,
-      search: databaseId ? { database: databaseId } : {},
+      to: '/databases',
+      search: { database: nextDatabaseId, view },
     })
   }
 
@@ -259,10 +275,16 @@ export function Sidebar() {
           </button>
           <Link
             data-testid="nav-databases"
-            to={currentView === 'kanban' ? '/databases/board' : currentView === 'workflow' ? '/databases/workflow' : '/databases'}
-            search={{ database: selectedDatabaseId }}
+            to="/databases"
+            search={{
+              database: selectedDatabaseId,
+              view: getDefaultDatabaseViewId(
+                getDatabaseViewScopeId(selectedDatabaseId),
+                currentView === 'board' || currentView === 'workflow' ? currentView : 'table'
+              ),
+            }}
             className={`mb-1 flex h-8 w-8 items-center justify-center rounded text-sm no-underline transition-colors ${
-              currentView === 'table' || currentView === 'kanban' || currentView === 'workflow'
+              currentView === 'table' || currentView === 'board' || currentView === 'workflow'
                 ? 'bg-surface-hover text-foreground'
                 : 'text-muted hover:bg-surface-hover'
             }`}
@@ -307,10 +329,16 @@ export function Sidebar() {
       <div className="px-2 py-3">
         <Link
           data-testid="nav-databases"
-          to={currentView === 'kanban' ? '/databases/board' : currentView === 'workflow' ? '/databases/workflow' : '/databases'}
-          search={{ database: selectedDatabaseId }}
+          to="/databases"
+          search={{
+            database: selectedDatabaseId,
+            view: getDefaultDatabaseViewId(
+              getDatabaseViewScopeId(selectedDatabaseId),
+              currentView === 'board' || currentView === 'workflow' ? currentView : 'table'
+            ),
+          }}
           className={`mb-1 flex items-center gap-2 rounded px-2 py-1.5 text-sm text-left transition-colors no-underline ${
-            currentView === 'table' || currentView === 'kanban' || currentView === 'workflow'
+            currentView === 'table' || currentView === 'board' || currentView === 'workflow'
               ? 'bg-surface-hover text-foreground'
               : 'text-muted hover:bg-surface-hover'
           }`}

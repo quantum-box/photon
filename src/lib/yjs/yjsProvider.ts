@@ -9,6 +9,9 @@ import { appKitConfig } from '../../app/kitConfig.js'
 export const ydoc = new Y.Doc()
 export const issuesArray = ydoc.getArray<Y.Map<string>>(appKitConfig.sync.yjsArrayName)
 export const databasesArray = ydoc.getArray<Y.Map<string>>(appKitConfig.sync.databasesArrayName)
+export const databaseViewsArray = ydoc.getArray<Y.Map<string>>(
+  appKitConfig.sync.databaseViewsArrayName
+)
 export const workflowCanvasesMap = ydoc.getMap<string>(
   appKitConfig.sync.workflowCanvasesMapName
 )

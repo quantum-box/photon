@@ -1,6 +1,7 @@
 export {
   connectWs,
   connectionStatus,
+  databaseViewsArray,
   disconnectWs,
   idbSynced,
   initialSyncReady,

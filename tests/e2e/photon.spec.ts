@@ -6,7 +6,7 @@ test.describe('Photon shell', () => {
 
     await page.goto('/')
 
-    await expect(page).toHaveURL(/\/databases$/)
+    await expect(page).toHaveURL(/\/databases/)
     await expect(page.getByRole('heading', { name: 'Databases' })).toBeVisible()
     await expect(page.getByText(/\d+ records/)).toBeVisible()
 
@@ -26,14 +26,14 @@ test.describe('Photon shell', () => {
     await page.goto('/databases')
     await page.getByTestId('view-kanban').click()
 
-    await expect(page).toHaveURL(/\/databases\/board$/)
-    await expect(page.getByRole('heading', { name: 'Board' })).toBeVisible()
+    await expect(page).toHaveURL(/view=.*board/)
+    await expect(page.getByRole('heading', { name: 'Databases' })).toBeVisible()
     await expect(page.getByText('drag to move')).toBeVisible()
 
     await page.getByTestId('view-workflow').click()
 
-    await expect(page).toHaveURL(/\/databases\/workflow$/)
-    await expect(page.getByRole('heading', { name: 'Workflow' })).toBeVisible()
+    await expect(page).toHaveURL(/view=.*workflow/)
+    await expect(page.getByRole('heading', { name: 'Databases' })).toBeVisible()
     await expect(page.getByTestId('workflow-canvas')).toBeVisible()
     await expect(page.getByTestId('workflow-elements-panel')).toBeVisible()
     await expect(page.getByTestId('workflow-template-business-flow')).toBeVisible()
@@ -63,8 +63,9 @@ test.describe('Photon shell', () => {
     await page.getByTestId('workflow-template-kpi-tree').click()
     await page.getByTestId('workflow-add-record').nth(1).click()
 
-    await expect(page).toHaveURL(/\/databases\/workflow\?database=workflow-e2e-\d+$/)
-    await expect(page.getByRole('heading', { name: 'Workflow' })).toBeVisible()
+    await expect(page).toHaveURL(/database=workflow-e2e-\d+/)
+    await expect(page).toHaveURL(/view=.*workflow/)
+    await expect(page.getByRole('heading', { name: 'Databases' })).toBeVisible()
     await expect(page.getByTestId('workflow-node-record')).toHaveCount(2)
     await expect(page.getByText('KPI tree item')).toBeVisible()
 
@@ -177,25 +178,56 @@ test.describe('Photon shell', () => {
 
     await page.getByRole('button', { name: 'Photon Core' }).click()
 
-    await expect(page).toHaveURL(/\/databases\?database=photon-core$/)
+    await expect(page).toHaveURL(/database=photon-core/)
+    await expect(page).toHaveURL(/view=.*table/)
     await expect(page.getByTestId('selected-database-pill')).toHaveText('Photon Core')
 
     await page.getByTestId('view-kanban').click()
 
-    await expect(page).toHaveURL(/\/databases\/board\?database=photon-core$/)
-    await expect(page.getByRole('heading', { name: 'Board' })).toBeVisible()
+    await expect(page).toHaveURL(/database=photon-core/)
+    await expect(page).toHaveURL(/view=.*board/)
+    await expect(page.getByText('drag to move')).toBeVisible()
     await expect(page.getByTestId('selected-database-pill')).toHaveText('Photon Core')
 
     await page.getByTestId('view-table').click()
 
-    await expect(page).toHaveURL(/\/databases\?database=photon-core$/)
+    await expect(page).toHaveURL(/database=photon-core/)
+    await expect(page).toHaveURL(/view=.*table/)
     await expect(page.getByRole('heading', { name: 'Databases' })).toBeVisible()
 
     await page.getByTestId('view-workflow').click()
 
-    await expect(page).toHaveURL(/\/databases\/workflow\?database=photon-core$/)
-    await expect(page.getByRole('heading', { name: 'Workflow' })).toBeVisible()
+    await expect(page).toHaveURL(/database=photon-core/)
+    await expect(page).toHaveURL(/view=.*workflow/)
+    await expect(page.getByTestId('workflow-canvas')).toBeVisible()
     await expect(page.getByTestId('selected-database-pill')).toHaveText('Photon Core')
+  })
+
+  test('creates, renames, duplicates, and deletes named database views', async ({ page }) => {
+    const databaseName = `Views ${Date.now()}`
+
+    await page.goto('/databases')
+    await page.locator('aside').getByTestId('new-database-name').fill(databaseName)
+    await page.locator('aside').getByTestId('create-database').click()
+    await expect(page.getByTestId('selected-database-pill')).toHaveText(databaseName)
+
+    await page.getByTestId('new-board-view').click()
+    await expect(page).toHaveURL(/view=.*board/)
+    await expect(page.getByRole('button', { name: /New Board/ })).toBeVisible()
+
+    page.once('dialog', async (dialog) => {
+      await dialog.accept('Saved Board')
+    })
+    await page.getByTestId('view-options').click()
+    await page.getByTestId('rename-view').click()
+    await expect(page.getByRole('button', { name: /Saved Board/ })).toBeVisible()
+
+    await page.getByTestId('duplicate-view').click()
+    await expect(page.getByRole('button', { name: /Saved Board Copy/ })).toBeVisible()
+
+    await page.getByTestId('delete-view').click()
+    await expect(page.getByRole('button', { name: /Saved Board Copy/ })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: /Saved Board/ })).toBeVisible()
   })
 
   test('creates a database and uses status filters from the right panel', async ({ page }) => {
@@ -206,15 +238,18 @@ test.describe('Photon shell', () => {
     await page.locator('aside').getByTestId('new-database-name').fill(databaseName)
     await page.locator('aside').getByTestId('create-database').click()
 
-    await expect(page).toHaveURL(/\/databases\?database=ops-\d+$/)
+    await expect(page).toHaveURL(/database=ops-\d+/)
+    await expect(page).toHaveURL(/view=.*table/)
     await expect(page.getByTestId('selected-database-pill')).toHaveText(databaseName)
     await expect(page.getByRole('button', { name: new RegExp(databaseName) })).toBeVisible()
 
     await page.getByTestId('toggle-database-filters').click()
     await expect(page.getByTestId('database-filter-panel')).toBeVisible()
     await page.getByRole('button', { name: /Todo/ }).click()
-    await expect(page).toHaveURL(/status=todo/)
     await expect(page.getByTestId('status-filter-pill')).toHaveText(/Todo/)
+    await expect(page.getByTestId('save-view')).toBeVisible()
+    await page.getByTestId('save-view').click()
+    await expect(page.getByTestId('save-view')).toHaveCount(0)
   })
 
   test('syncs database creation between browser tabs', async ({ page, context }) => {
@@ -245,10 +280,16 @@ test.describe('Photon shell', () => {
     await secondPage.goto('/databases')
 
     await expect
-      .poll(async () => Number((await secondPage.getByTestId('sync-presence-status').innerText()).split(' ')[0]))
+      .poll(
+        async () => Number((await secondPage.getByTestId('sync-presence-status').innerText()).split(' ')[0]),
+        { timeout: 15_000 }
+      )
       .toBeGreaterThanOrEqual(initialOnlineCount + 1)
     await expect
-      .poll(async () => Number((await page.getByTestId('sync-presence-status').innerText()).split(' ')[0]))
+      .poll(
+        async () => Number((await page.getByTestId('sync-presence-status').innerText()).split(' ')[0]),
+        { timeout: 15_000 }
+      )
       .toBeGreaterThanOrEqual(initialOnlineCount + 1)
 
     await secondPage.close()
@@ -307,7 +348,7 @@ test.describe('Photon shell', () => {
     await expect(page.getByText(filename)).toBeVisible({ timeout: 15_000 })
 
     await page.getByTestId('nav-databases').click()
-    await expect(page).toHaveURL(/\/databases$/)
+    await expect(page).toHaveURL(/\/databases/)
     await page.getByTestId('view-chat').click()
 
     await expect(page.getByTestId('chat-workspace-attachments').getByText(filename)).toBeVisible({

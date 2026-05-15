@@ -208,10 +208,12 @@ export function WorkflowView({
   const nodeSequence = useRef(0)
   const hasLocalCanvasChanges = useRef(false)
   const skipNextSyncWrite = useRef(false)
+  const skipInitialEmptySyncWrite = useRef(false)
   const pendingSync = useRef<PendingWorkflowSync | null>(null)
   const syncThrottleTimer = useRef<number | null>(null)
   const lastSyncAt = useRef(0)
   const localNodeDragActive = useRef(false)
+  const workflowLoaded = loadedDatabaseId === databaseId
 
   const selectedTemplate = workflowTemplates.find(
     (template) => template.id === selectedTemplateId
@@ -364,6 +366,7 @@ export function WorkflowView({
 
         if (syncedCanvas) {
           if (!hasLocalCanvasChanges.current) {
+            skipNextSyncWrite.current = true
             applyWorkflowCanvas(syncedCanvas)
           }
           setLoadedDatabaseId(databaseId)
@@ -379,23 +382,36 @@ export function WorkflowView({
         setEdges([])
         nodeSequence.current = 0
         setSelectedTemplateId('business-flow')
+        skipInitialEmptySyncWrite.current = true
         setLoadedDatabaseId(databaseId)
 
         void getWorkflowCanvas(databaseId).then((persistedCanvas) => {
-          if (cancelled || hasLocalCanvasChanges.current || !persistedCanvas) return
+          if (cancelled) return
+          if (hasLocalCanvasChanges.current) {
+            setLoadedDatabaseId(databaseId)
+            return
+          }
+          if (!persistedCanvas) {
+            return
+          }
+          const latestSyncedCanvas = getSyncedWorkflowCanvas(databaseId)
+          if (latestSyncedCanvas) {
+            skipNextSyncWrite.current = true
+            applyWorkflowCanvas(latestSyncedCanvas)
+            setLoadedDatabaseId(databaseId)
+            return
+          }
+          skipNextSyncWrite.current = true
           applyWorkflowCanvas(persistedCanvas)
-          saveSyncedWorkflowCanvas({
-            databaseId,
-            selectedTemplateId: persistedCanvas.selectedTemplateId,
-            nodes: persistedCanvas.nodes,
-            edges: persistedCanvas.edges,
-          })
+          setLoadedDatabaseId(databaseId)
         }).catch(() => {
           if (cancelled) return
           setNodes([])
           setEdges([])
           nodeSequence.current = 0
           setSelectedTemplateId('business-flow')
+          skipNextSyncWrite.current = true
+          setLoadedDatabaseId(databaseId)
         })
       })
       .catch(() => {
@@ -434,9 +450,12 @@ export function WorkflowView({
     const nextSignature = canvasSignature
     const nextCountSignature = canvasCountSignature
     const shouldSkipSyncWrite = skipNextSyncWrite.current
+    const shouldSkipInitialEmptySyncWrite =
+      skipInitialEmptySyncWrite.current && !hasLocalCanvasChanges.current
     skipNextSyncWrite.current = false
+    skipInitialEmptySyncWrite.current = false
 
-    if (shouldSkipSyncWrite) {
+    if (shouldSkipSyncWrite || shouldSkipInitialEmptySyncWrite) {
       setSavedSignature(nextSignature)
       setSavedCountSignature(nextCountSignature)
       setSaveStatus('saved')
@@ -646,7 +665,8 @@ export function WorkflowView({
                 </div>
                 <button
                   data-testid="workflow-add-record"
-                  className="shrink-0 rounded bg-surface-hover px-1.5 py-0.5 text-[10px] font-medium text-muted hover:text-foreground"
+                  className="shrink-0 rounded bg-surface-hover px-1.5 py-0.5 text-[10px] font-medium text-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                  disabled={!workflowLoaded}
                   onClick={() => addRecord(record)}
                 >
                   Add

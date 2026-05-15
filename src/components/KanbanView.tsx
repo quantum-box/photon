@@ -24,12 +24,16 @@ import {
   statusConfig,
   priorityConfig,
 } from '../data/mock'
+import type { RecordPropertyKey } from '../lib/databaseViews/types'
 
 interface KanbanViewProps {
   issues: Issue[]
   selectedIssueId: string | null
   onSelectIssue: (issue: Issue) => void
   onMoveIssue: (issueId: string, newStatus: Status) => void
+  compact?: boolean
+  onCompactChange?: (compact: boolean) => void
+  visibleProperties?: RecordPropertyKey[]
 }
 
 const kanbanStatuses: Status[] = [
@@ -46,11 +50,13 @@ export function KanbanCard({
   isSelected,
   onClick,
   compact,
+  visibleProperties,
 }: {
   issue: Issue
   isSelected: boolean
   onClick: () => void
   compact?: boolean
+  visibleProperties?: RecordPropertyKey[]
 }) {
   const {
     attributes,
@@ -68,6 +74,8 @@ export function KanbanCard({
   }
 
   const priority = priorityConfig[issue.priority]
+  const isVisible = (property: RecordPropertyKey) =>
+    !visibleProperties || visibleProperties.includes(property)
 
   if (compact) {
     return (
@@ -84,11 +92,15 @@ export function KanbanCard({
         onClick={onClick}
       >
         <div className="flex items-center gap-1.5">
-          <span style={{ color: priority.color }} className="text-xs shrink-0">
-            {priority.icon}
-          </span>
-          <span className="text-xs truncate flex-1">{issue.title}</span>
-          {issue.assignee && (
+          {isVisible('priority') && (
+            <span style={{ color: priority.color }} className="text-xs shrink-0">
+              {priority.icon}
+            </span>
+          )}
+          {isVisible('title') && (
+            <span className="text-xs truncate flex-1">{issue.title}</span>
+          )}
+          {isVisible('assignee') && issue.assignee && (
             <span
               className="w-4 h-4 rounded-full flex items-center justify-center shrink-0 bg-accent text-white"
               style={{ fontSize: '9px' }}
@@ -115,17 +127,23 @@ export function KanbanCard({
       onClick={onClick}
     >
       <div className="flex items-center justify-between mb-1">
-        <span className="font-mono text-subtle" style={{ fontSize: '10px' }}>
-          {issue.identifier}
-        </span>
-        <span style={{ color: priority.color }} className="text-xs">
-          {priority.icon}
-        </span>
+        {isVisible('identifier') ? (
+          <span className="font-mono text-subtle" style={{ fontSize: '10px' }}>
+            {issue.identifier}
+          </span>
+        ) : (
+          <span />
+        )}
+        {isVisible('priority') && (
+          <span style={{ color: priority.color }} className="text-xs">
+            {priority.icon}
+          </span>
+        )}
       </div>
-      <p className="text-sm mb-2 leading-snug">{issue.title}</p>
+      {isVisible('title') && <p className="text-sm mb-2 leading-snug">{issue.title}</p>}
       <div className="flex items-center justify-between">
         <div className="flex gap-1">
-          {issue.labels.slice(0, 2).map((label) => (
+          {isVisible('labels') && issue.labels.slice(0, 2).map((label) => (
             <span
               key={label}
               className="px-1 py-0.5 rounded bg-canvas text-subtle"
@@ -135,7 +153,7 @@ export function KanbanCard({
             </span>
           ))}
         </div>
-        {issue.assignee && (
+        {isVisible('assignee') && issue.assignee && (
           <span className="w-5 h-5 rounded-full flex items-center justify-center text-xs shrink-0 bg-accent text-white">
             {issue.assignee[0]}
           </span>
@@ -174,12 +192,14 @@ export function KanbanColumn({
   selectedIssueId,
   onSelectIssue,
   compact,
+  visibleProperties,
 }: {
   status: Status
   issues: Issue[]
   selectedIssueId: string | null
   onSelectIssue: (issue: Issue) => void
   compact: boolean
+  visibleProperties?: RecordPropertyKey[]
 }) {
   const config = statusConfig[status]
   const { setNodeRef, isOver } = useDroppable({
@@ -217,6 +237,7 @@ export function KanbanColumn({
               isSelected={issue.id === selectedIssueId}
               onClick={() => onSelectIssue(issue)}
               compact={compact}
+              visibleProperties={visibleProperties}
             />
           ))}
         </SortableContext>
@@ -235,9 +256,14 @@ export function KanbanView({
   selectedIssueId,
   onSelectIssue,
   onMoveIssue,
+  compact: controlledCompact,
+  onCompactChange,
+  visibleProperties,
 }: KanbanViewProps) {
   const [activeId, setActiveId] = useState<string | null>(null)
-  const [compact, setCompact] = useState(false)
+  const [internalCompact, setInternalCompact] = useState(false)
+  const compact = controlledCompact ?? internalCompact
+  const setCompact = onCompactChange ?? setInternalCompact
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
@@ -344,6 +370,7 @@ export function KanbanView({
               selectedIssueId={selectedIssueId}
               onSelectIssue={onSelectIssue}
               compact={compact}
+              visibleProperties={visibleProperties}
             />
           ))}
           <DragOverlay>

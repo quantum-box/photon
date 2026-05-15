@@ -7,27 +7,45 @@ import {
   redirect,
   useNavigate,
   useMatch,
-  Link,
 } from '@tanstack/react-router'
-import { useMemo, useCallback, useState, createContext, useContext } from 'react'
+import { useMemo, useCallback, useState, createContext, useContext, useEffect } from 'react'
 import { Sidebar } from './components/Sidebar'
 import { TableView } from './components/TableView'
 import { KanbanView } from './components/KanbanView'
 import { WorkflowView } from './components/WorkflowView'
+import { DatabaseViewTabs } from './components/DatabaseViewTabs'
+import { DatabaseViewSettingsPanel } from './components/DatabaseViewSettingsPanel'
 import { DetailPanel } from './components/DetailPanel'
 import { CreateIssueModal } from './components/CreateIssueModal'
 import { ChatView } from './components/chat/ChatView'
 import { DocsView } from './components/docs/DocsView'
 import { DatabaseRecordsProvider, useDatabaseRecords } from './contexts/IssuesContext'
 import { DatabasesProvider, type WorkspaceDatabase, useWorkspaceDatabases } from './contexts/DatabasesContext'
+import { DatabaseViewsProvider, useDatabaseViews } from './contexts/DatabaseViewsContext'
 import { AttachmentsProvider } from './lib/attachments/useWorkspaceAttachments'
 import { statusConfig, type Status, type DatabaseRecord } from './data/mock'
 import type { SortingState } from '@tanstack/react-table'
+import {
+  createViewFromLegacySearch,
+  filterRecordsForDatabaseView,
+  getDatabaseViewScopeId,
+  getDefaultDatabaseViews,
+  getDefaultDatabaseViewId,
+  isRecordPropertyKey,
+  sortRecordsForDatabaseView,
+} from './lib/databaseViews/databaseViews'
+import {
+  clearDatabaseViewDraft,
+  loadDatabaseViewDraft,
+  saveDatabaseViewDraft,
+} from './lib/databaseViews/drafts'
+import type { DatabaseViewDefinition, DatabaseViewType } from './lib/databaseViews/types'
 
 // ── Search params ──────────────────────────────────────────────
 
 interface IssueSearchParams {
   database?: string
+  view?: string
   status?: Status
   sort?: string
   desc?: boolean
@@ -36,6 +54,7 @@ interface IssueSearchParams {
 function validateIssueSearch(search: Record<string, unknown>): IssueSearchParams {
   return {
     database: typeof search.database === 'string' ? search.database : undefined,
+    view: typeof search.view === 'string' ? search.view : undefined,
     status: typeof search.status === 'string' ? (search.status as Status) : undefined,
     sort: typeof search.sort === 'string' ? search.sort : undefined,
     desc: search.desc === true || search.desc === 'true' ? true : undefined,
@@ -69,30 +88,40 @@ function useCreateModal() {
 function DatabaseHeader({
   title,
   databaseLabel,
-  currentView,
-  database,
+  views,
+  selectedView,
+  dirty,
   status,
   onClearStatus,
   onCreate,
   onToggleFilters,
   filtersOpen,
+  onSelectView,
+  onCreateView,
+  onRenameView,
+  onDuplicateView,
+  onDeleteView,
+  onSaveView,
+  onDiscardChanges,
 }: {
   title: string
   databaseLabel: string
-  currentView: 'table' | 'kanban' | 'workflow'
-  database?: string
+  views: DatabaseViewDefinition[]
+  selectedView: DatabaseViewDefinition
+  dirty: boolean
   status?: Status
   onClearStatus?: () => void
   onCreate?: () => void
   onToggleFilters?: () => void
   filtersOpen?: boolean
+  onSelectView: (view: DatabaseViewDefinition) => void
+  onCreateView: (type: DatabaseViewType) => void
+  onRenameView: (view: DatabaseViewDefinition) => void
+  onDuplicateView: (view: DatabaseViewDefinition) => void
+  onDeleteView: (view: DatabaseViewDefinition) => void
+  onSaveView: () => void
+  onDiscardChanges: () => void
 }) {
-  const viewLinks = [
-    { id: 'table' as const, label: 'Table', to: '/databases' as const },
-    { id: 'kanban' as const, label: 'Board', to: '/databases/board' as const },
-    { id: 'workflow' as const, label: 'Workflow', to: '/databases/workflow' as const },
-  ]
-
   return (
     <div
       className="flex flex-col gap-2 border-b px-3 py-2.5 md:px-4 md:py-3"
@@ -147,99 +176,19 @@ function DatabaseHeader({
           )}
         </div>
       </div>
-      <nav className="flex w-full gap-1 overflow-x-auto" aria-label="Database views">
-        {viewLinks.map((view) => (
-          <Link
-            key={view.id}
-            data-testid={`view-${view.id}`}
-            to={view.to}
-            search={
-              view.id === 'workflow'
-                ? { database }
-                : { database, ...(status ? { status } : {}) }
-            }
-            className={`min-w-20 rounded px-3 py-1.5 text-center text-xs font-medium no-underline transition-colors ${
-              currentView === view.id
-                ? 'bg-accent text-white'
-                : 'bg-surface-hover text-muted hover:text-foreground'
-            }`}
-          >
-            {view.label}
-          </Link>
-        ))}
-      </nav>
+      <DatabaseViewTabs
+        views={views}
+        selectedView={selectedView}
+        dirty={dirty}
+        onSelectView={onSelectView}
+        onCreateView={onCreateView}
+        onRenameView={onRenameView}
+        onDuplicateView={onDuplicateView}
+        onDeleteView={onDeleteView}
+        onSaveView={onSaveView}
+        onDiscardChanges={onDiscardChanges}
+      />
     </div>
-  )
-}
-
-function DatabaseStatusPanel({
-  open,
-  records,
-  status,
-  onStatusChange,
-}: {
-  open: boolean
-  records: DatabaseRecord[]
-  status?: Status
-  onStatusChange: (status: Status | undefined) => void
-}) {
-  const recordCountByStatus = useMemo(
-    () =>
-      records.reduce(
-        (acc, record) => {
-          acc[record.status] = (acc[record.status] || 0) + 1
-          return acc
-        },
-        {} as Record<Status, number>
-      ),
-    [records]
-  )
-
-  if (!open) return null
-
-  return (
-    <aside
-      data-testid="database-filter-panel"
-      className="hidden w-64 shrink-0 border-l border-border bg-panel p-3 md:flex md:flex-col"
-    >
-      <div className="mb-3 flex items-center justify-between">
-        <span className="text-xs font-medium uppercase tracking-wider text-subtle">
-          Database Filters
-        </span>
-      </div>
-      <div className="flex flex-col gap-1">
-        <button
-          className={`flex items-center justify-between rounded px-2 py-1.5 text-sm transition-colors ${
-            !status
-              ? 'bg-surface-hover text-foreground'
-              : 'text-muted hover:bg-surface-hover'
-          }`}
-          onClick={() => onStatusChange(undefined)}
-        >
-          <span>All records</span>
-          <span className="text-xs text-subtle">{records.length}</span>
-        </button>
-        {(Object.entries(statusConfig) as [Status, (typeof statusConfig)[Status]][]).map(
-          ([key, config]) => (
-            <button
-              key={key}
-              className={`flex items-center justify-between rounded px-2 py-1.5 text-sm transition-colors ${
-                status === key
-                  ? 'bg-surface-hover text-foreground'
-                  : 'text-muted hover:bg-surface-hover'
-              }`}
-              onClick={() => onStatusChange(status === key ? undefined : key)}
-            >
-              <span className="flex min-w-0 items-center gap-2">
-                <span style={{ color: config.color }}>{config.icon}</span>
-                <span className="truncate">{config.label}</span>
-              </span>
-              <span className="text-xs text-subtle">{recordCountByStatus[key] || 0}</span>
-            </button>
-          )
-        )}
-      </div>
-    </aside>
   )
 }
 
@@ -251,14 +200,16 @@ const rootRoute = createRootRoute({
     return (
       <DatabaseRecordsProvider>
         <DatabasesProvider>
-          <AttachmentsProvider>
-            <CreateModalContext.Provider value={{ open: createModalOpen, setOpen: setCreateModalOpen }}>
-              <div className="flex h-full min-w-0 flex-col overflow-hidden md:flex-row">
-                <Sidebar />
-                <Outlet />
-              </div>
-            </CreateModalContext.Provider>
-          </AttachmentsProvider>
+          <DatabaseViewsProvider>
+            <AttachmentsProvider>
+              <CreateModalContext.Provider value={{ open: createModalOpen, setOpen: setCreateModalOpen }}>
+                <div className="flex h-full min-w-0 flex-col overflow-hidden md:flex-row">
+                  <Sidebar />
+                  <Outlet />
+                </div>
+              </CreateModalContext.Provider>
+            </AttachmentsProvider>
+          </DatabaseViewsProvider>
         </DatabasesProvider>
       </DatabaseRecordsProvider>
     )
@@ -285,13 +236,40 @@ const databasesRoute = createRoute({
 })
 
 function DatabasesLayout() {
-  const { database, status, sort, desc } = databasesRoute.useSearch()
-  const { records, handleUpdateRecord, handleCreateRecord } = useDatabaseRecords()
+  const { database, view: viewId, status, sort, desc } = databasesRoute.useSearch()
+  const {
+    records,
+    handleMoveRecord,
+    handleUpdateRecord,
+    handleCreateRecord,
+    handleDeleteRecord,
+  } = useDatabaseRecords()
   const { databases } = useWorkspaceDatabases()
+  const {
+    getViewsForDatabase,
+    createDatabaseView,
+    updateDatabaseView,
+    renameDatabaseView,
+    duplicateDatabaseView,
+    deleteDatabaseView,
+  } = useDatabaseViews()
   const navigate = useNavigate()
   const { open: createModalOpen, setOpen: setCreateModalOpen } = useCreateModal()
   const [filtersOpen, setFiltersOpen] = useState(false)
+  const [draftView, setDraftView] = useState<DatabaseViewDefinition | null>(null)
   const selectedDatabase = getDatabaseProject(databases, database)
+  const databaseScopeId = getDatabaseViewScopeId(database)
+  const scopedViews = useMemo(
+    () => getViewsForDatabase(database),
+    [database, getViewsForDatabase]
+  )
+  const savedSelectedView = useMemo(
+    () =>
+      scopedViews.find((candidate) => candidate.id === viewId) ??
+      scopedViews[0] ??
+      getDefaultDatabaseViews(databaseScopeId)[0],
+    [databaseScopeId, scopedViews, viewId]
+  )
 
   // Get selected issue ID from child detail route
   const detailMatch = useMatch({
@@ -300,14 +278,71 @@ function DatabasesLayout() {
   })
   const selectedIdentifier = (detailMatch?.params as { recordId?: string })?.recordId ?? null
 
+  const navigateWithinDatabase = useCallback(
+    (search: IssueSearchParams, replace = false) => {
+      if (selectedIdentifier) {
+        void navigate({
+          to: '/databases/$recordId',
+          params: { recordId: selectedIdentifier },
+          search,
+          replace,
+        })
+        return
+      }
+
+      void navigate({ to: '/databases', search, replace })
+    },
+    [navigate, selectedIdentifier]
+  )
+
+  useEffect(() => {
+    if (!savedSelectedView || viewId === savedSelectedView.id) return
+    navigateWithinDatabase(
+      { database, view: savedSelectedView.id, status, sort, desc },
+      true
+    )
+  }, [database, desc, navigateWithinDatabase, savedSelectedView, sort, status, viewId])
+
+  useEffect(() => {
+    if (!savedSelectedView) return
+    let cancelled = false
+    queueMicrotask(() => {
+      if (!cancelled) setDraftView(loadDatabaseViewDraft(savedSelectedView))
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [savedSelectedView])
+
   const databaseRecords = useMemo(
     () => filterRecordsByDatabase(records, databases, database),
     [records, databases, database]
   )
 
+  const selectedDraftView =
+    draftView?.id === savedSelectedView?.id ? draftView : null
+  const hasLegacySearch = Boolean(status || sort)
+  const effectiveView = useMemo(
+    () =>
+      createViewFromLegacySearch(selectedDraftView ?? savedSelectedView, {
+        status,
+        sort,
+        desc,
+      }),
+    [desc, savedSelectedView, selectedDraftView, sort, status]
+  )
+  const dirty = Boolean(selectedDraftView) || hasLegacySearch
+
   const filteredRecords = useMemo(
-    () => (status ? databaseRecords.filter((record) => record.status === status) : databaseRecords),
-    [databaseRecords, status]
+    () =>
+      effectiveView.type === 'workflow'
+        ? databaseRecords
+        : filterRecordsForDatabaseView(databaseRecords, effectiveView),
+    [databaseRecords, effectiveView]
+  )
+  const sortedRecords = useMemo(
+    () => sortRecordsForDatabaseView(filteredRecords, effectiveView),
+    [effectiveView, filteredRecords]
   )
 
   const selectedRecord = useMemo(
@@ -318,10 +353,31 @@ function DatabasesLayout() {
     [databaseRecords, selectedIdentifier]
   )
 
-  // Controlled sorting from URL params
   const sorting: SortingState = useMemo(
-    () => (sort ? [{ id: sort, desc: desc ?? false }] : []),
-    [sort, desc]
+    () =>
+      effectiveView.sorting
+        ? [{ id: effectiveView.sorting.id, desc: effectiveView.sorting.desc }]
+        : [],
+    [effectiveView.sorting]
+  )
+
+  const updateDraftView = useCallback(
+    (
+      updater:
+        | DatabaseViewDefinition
+        | ((current: DatabaseViewDefinition) => DatabaseViewDefinition)
+    ) => {
+      setDraftView((current) => {
+        const base = current?.id === savedSelectedView.id
+          ? current
+          : createViewFromLegacySearch(savedSelectedView, { status, sort, desc })
+        const next = typeof updater === 'function' ? updater(base) : updater
+        const draft = { ...next, id: savedSelectedView.id, databaseId: savedSelectedView.databaseId }
+        saveDatabaseViewDraft(draft)
+        return draft
+      })
+    },
+    [desc, savedSelectedView, sort, status]
   )
 
   const handleSortingChange = useCallback(
@@ -329,28 +385,14 @@ function DatabasesLayout() {
       const newSorting =
         typeof updater === 'function' ? updater(sorting) : updater
       const first = newSorting[0]
-      const newSearch: IssueSearchParams = {
-        database,
-        status,
-        sort: first?.id,
-        desc: first?.desc || undefined,
-      }
-      if (selectedIdentifier) {
-        void navigate({
-          to: '/databases/$recordId',
-          params: { recordId: selectedIdentifier },
-          search: newSearch,
-          replace: true,
-        })
-      } else {
-        void navigate({
-          to: '/databases',
-          search: newSearch,
-          replace: true,
-        })
-      }
+      updateDraftView((current) => ({
+        ...current,
+        sorting: first && isRecordPropertyKey(first.id)
+          ? { id: first.id, desc: first.desc ?? false }
+          : null,
+      }))
     },
-    [sorting, navigate, database, status, selectedIdentifier]
+    [sorting, updateDraftView]
   )
 
   const handleSelectRecord = useCallback(
@@ -358,17 +400,17 @@ function DatabasesLayout() {
       if (selectedRecord?.id === record.id) {
         void navigate({
           to: '/databases',
-          search: { database, status, sort, desc },
+          search: { database, view: savedSelectedView.id },
         })
       } else {
         void navigate({
           to: '/databases/$recordId',
           params: { recordId: record.identifier },
-          search: { database, status, sort, desc },
+          search: { database, view: savedSelectedView.id },
         })
       }
     },
-    [navigate, database, status, sort, desc, selectedRecord]
+    [database, navigate, savedSelectedView.id, selectedRecord]
   )
 
   const handleCreateRecordInDatabase = useCallback(
@@ -381,14 +423,77 @@ function DatabasesLayout() {
     [handleCreateRecord, selectedDatabase]
   )
 
-  const handleStatusChange = useCallback(
-    (nextStatus: Status | undefined) => {
+  const handleSaveView = useCallback(() => {
+    updateDatabaseView(effectiveView)
+    clearDatabaseViewDraft(savedSelectedView)
+    setDraftView(null)
+    navigateWithinDatabase({ database, view: savedSelectedView.id }, true)
+  }, [
+    database,
+    effectiveView,
+    navigateWithinDatabase,
+    savedSelectedView,
+    updateDatabaseView,
+  ])
+
+  const handleDiscardChanges = useCallback(() => {
+    clearDatabaseViewDraft(savedSelectedView)
+    setDraftView(null)
+    navigateWithinDatabase({ database, view: savedSelectedView.id }, true)
+  }, [database, navigateWithinDatabase, savedSelectedView])
+
+  const handleSelectView = useCallback(
+    (nextView: DatabaseViewDefinition) => {
       void navigate({
         to: '/databases',
-        search: { database, ...(nextStatus ? { status: nextStatus } : {}), sort, desc },
+        search: { database, view: nextView.id },
       })
     },
-    [navigate, database, sort, desc]
+    [database, navigate]
+  )
+
+  const handleCreateView = useCallback(
+    (type: DatabaseViewType) => {
+      const nextView = createDatabaseView(database, type)
+      void navigate({
+        to: '/databases',
+        search: { database, view: nextView.id },
+      })
+    },
+    [createDatabaseView, database, navigate]
+  )
+
+  const handleRenameView = useCallback(
+    (view: DatabaseViewDefinition) => {
+      const name = window.prompt('View name', view.name)
+      if (name) renameDatabaseView(view.id, name)
+    },
+    [renameDatabaseView]
+  )
+
+  const handleDuplicateView = useCallback(
+    (view: DatabaseViewDefinition) => {
+      const nextView = duplicateDatabaseView(view)
+      void navigate({
+        to: '/databases',
+        search: { database, view: nextView.id },
+      })
+    },
+    [database, duplicateDatabaseView, navigate]
+  )
+
+  const handleDeleteView = useCallback(
+    (view: DatabaseViewDefinition) => {
+      deleteDatabaseView(view)
+      const nextView = scopedViews.find((candidate) => candidate.id !== view.id)
+      if (nextView) {
+        void navigate({
+          to: '/databases',
+          search: { database, view: nextView.id },
+        })
+      }
+    },
+    [database, deleteDatabaseView, navigate, scopedViews]
   )
 
   return (
@@ -399,38 +504,83 @@ function DatabasesLayout() {
         <DatabaseHeader
           title="Databases"
           databaseLabel={selectedDatabase?.label ?? 'All databases'}
-          currentView="table"
-          database={database}
-          status={status}
+          views={scopedViews}
+          selectedView={savedSelectedView}
+          dirty={dirty}
+          status={effectiveView.filters.status}
           onClearStatus={() =>
-            void navigate({
-              to: '/databases',
-              search: { database, sort, desc },
-            })
+            updateDraftView((current) => ({
+              ...current,
+              filters: { ...current.filters, status: undefined },
+            }))
           }
           onCreate={() => setCreateModalOpen(true)}
-          onToggleFilters={() => setFiltersOpen((current) => !current)}
+          onToggleFilters={
+            effectiveView.type === 'workflow'
+              ? undefined
+              : () => setFiltersOpen((current) => !current)
+          }
           filtersOpen={filtersOpen}
+          onSelectView={handleSelectView}
+          onCreateView={handleCreateView}
+          onRenameView={handleRenameView}
+          onDuplicateView={handleDuplicateView}
+          onDeleteView={handleDeleteView}
+          onSaveView={handleSaveView}
+          onDiscardChanges={handleDiscardChanges}
         />
 
-        {/* Table View */}
         <div className="flex-1 min-h-0 mt-1">
-          <TableView
-            issues={filteredRecords}
-            selectedIssueId={selectedRecord?.id ?? null}
-            onSelectIssue={handleSelectRecord}
-            onUpdateIssue={handleUpdateRecord}
-            onCreateIssue={handleCreateRecordInDatabase}
-            sorting={sorting}
-            onSortingChange={handleSortingChange}
-          />
+          {effectiveView.type === 'table' && (
+            <TableView
+              issues={filteredRecords}
+              selectedIssueId={selectedRecord?.id ?? null}
+              onSelectIssue={handleSelectRecord}
+              onUpdateIssue={handleUpdateRecord}
+              onCreateIssue={handleCreateRecordInDatabase}
+              sorting={sorting}
+              onSortingChange={handleSortingChange}
+              globalFilter={effectiveView.filters.search}
+              onGlobalFilterChange={(searchValue) =>
+                updateDraftView((current) => ({
+                  ...current,
+                  filters: { ...current.filters, search: searchValue },
+                }))
+              }
+              visibleProperties={effectiveView.visibleProperties}
+            />
+          )}
+          {effectiveView.type === 'board' && (
+            <KanbanView
+              issues={sortedRecords}
+              selectedIssueId={selectedRecord?.id ?? null}
+              onSelectIssue={handleSelectRecord}
+              onMoveIssue={handleMoveRecord}
+              compact={effectiveView.board.compact}
+              onCompactChange={(compact) =>
+                updateDraftView((current) => ({
+                  ...current,
+                  board: { ...current.board, compact },
+                }))
+              }
+              visibleProperties={effectiveView.visibleProperties}
+            />
+          )}
+          {effectiveView.type === 'workflow' && (
+            <WorkflowView
+              databaseId={effectiveView.workflowCanvasKey}
+              records={databaseRecords}
+              onUpdateRecord={handleUpdateRecord}
+              onDeleteRecord={handleDeleteRecord}
+            />
+          )}
         </div>
       </div>
-      <DatabaseStatusPanel
+      <DatabaseViewSettingsPanel
         open={filtersOpen}
         records={databaseRecords}
-        status={status}
-        onStatusChange={handleStatusChange}
+        view={effectiveView}
+        onChangeView={updateDraftView}
       />
       </div>
       <Outlet />
@@ -461,7 +611,7 @@ const issueDetailRoute = createRoute({
 
 function RecordDetailPanel() {
   const { recordId } = issueDetailRoute.useParams()
-  const { database, status, sort, desc } = databasesRoute.useSearch()
+  const { database, view } = databasesRoute.useSearch()
   const { records, handleUpdateRecord, handleDeleteRecord } = useDatabaseRecords()
   const { databases } = useWorkspaceDatabases()
   const navigate = useNavigate()
@@ -479,7 +629,7 @@ function RecordDetailPanel() {
     <DetailPanel
       issue={record}
       onClose={() =>
-        void navigate({ to: '/databases', search: { database, status, sort, desc } })
+        void navigate({ to: '/databases', search: { database, view } })
       }
       onUpdateIssue={handleUpdateRecord}
       onDeleteIssue={handleDeleteRecord}
@@ -496,115 +646,18 @@ const kanbanRoute = createRoute({
     database: typeof search.database === 'string' ? search.database : undefined,
     status: typeof search.status === 'string' ? (search.status as Status) : undefined,
   }),
-  component: KanbanPage,
+  beforeLoad: ({ search }) => {
+    const databaseId = getDatabaseViewScopeId(search.database)
+    throw redirect({
+      to: '/databases',
+      search: {
+        database: search.database,
+        view: getDefaultDatabaseViewId(databaseId, 'board'),
+        ...(search.status ? { status: search.status } : {}),
+      },
+    })
+  },
 })
-
-function KanbanPage() {
-  const { database, status } = kanbanRoute.useSearch()
-  const { records, handleMoveRecord, handleUpdateRecord, handleDeleteRecord, handleCreateRecord } = useDatabaseRecords()
-  const { databases } = useWorkspaceDatabases()
-  const [selectedRecord, setSelectedRecord] = useState<DatabaseRecord | null>(null)
-  const [filtersOpen, setFiltersOpen] = useState(false)
-  const navigate = useNavigate()
-  const { open: createModalOpen, setOpen: setCreateModalOpen } = useCreateModal()
-  const selectedDatabase = getDatabaseProject(databases, database)
-
-  const databaseRecords = useMemo(
-    () => filterRecordsByDatabase(records, databases, database),
-    [records, databases, database]
-  )
-
-  const filteredRecords = useMemo(
-    () => (status ? databaseRecords.filter((record) => record.status === status) : databaseRecords),
-    [databaseRecords, status]
-  )
-
-  // Keep the selected record in sync with live data (handles edits & deletes)
-  const liveSelectedRecord = useMemo(
-    () => (selectedRecord ? databaseRecords.find((record) => record.id === selectedRecord.id) ?? null : null),
-    [databaseRecords, selectedRecord]
-  )
-
-  const handleSelectRecord = useCallback(
-    (record: DatabaseRecord) => {
-      setSelectedRecord((prev) => (prev?.id === record.id ? null : record))
-    },
-    []
-  )
-
-  const handleCreateRecordInDatabase = useCallback(
-    (data: Parameters<typeof handleCreateRecord>[0]) => {
-      handleCreateRecord({
-        ...data,
-        project: selectedDatabase?.label ?? data.project,
-      })
-    },
-    [handleCreateRecord, selectedDatabase]
-  )
-
-  const handleStatusChange = useCallback(
-    (nextStatus: Status | undefined) => {
-      void navigate({
-        to: '/databases/board',
-        search: { database, ...(nextStatus ? { status: nextStatus } : {}) },
-      })
-    },
-    [navigate, database]
-  )
-
-  return (
-    <>
-      <div className="flex min-h-0 min-w-0 flex-1">
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col p-1 md:p-2">
-        {/* Header */}
-        <DatabaseHeader
-          title="Board"
-          databaseLabel={selectedDatabase?.label ?? 'All databases'}
-          currentView="kanban"
-          database={database}
-          status={status}
-          onClearStatus={() => void navigate({ to: '/databases/board', search: { database } })}
-          onCreate={() => setCreateModalOpen(true)}
-          onToggleFilters={() => setFiltersOpen((current) => !current)}
-          filtersOpen={filtersOpen}
-        />
-
-        {/* Kanban View */}
-        <div className="flex-1 min-h-0 mt-1">
-          <KanbanView
-            issues={filteredRecords}
-            selectedIssueId={selectedRecord?.id ?? null}
-            onSelectIssue={handleSelectRecord}
-            onMoveIssue={handleMoveRecord}
-          />
-        </div>
-      </div>
-      <DatabaseStatusPanel
-        open={filtersOpen}
-        records={databaseRecords}
-        status={status}
-        onStatusChange={handleStatusChange}
-      />
-      </div>
-      {liveSelectedRecord && (
-        <DetailPanel
-          issue={liveSelectedRecord}
-          onClose={() => setSelectedRecord(null)}
-          onUpdateIssue={handleUpdateRecord}
-          onDeleteIssue={(id) => {
-            handleDeleteRecord(id)
-            setSelectedRecord(null)
-          }}
-        />
-      )}
-      <CreateIssueModal
-        open={createModalOpen}
-        onClose={() => setCreateModalOpen(false)}
-        onCreate={handleCreateRecordInDatabase}
-      />
-    </>
-  )
-}
 
 // ── Workflow Route (/databases/workflow) ───────────────────────
 
@@ -614,39 +667,17 @@ const workflowRoute = createRoute({
   validateSearch: (search: Record<string, unknown>): { database?: string } => ({
     database: typeof search.database === 'string' ? search.database : undefined,
   }),
-  component: WorkflowPage,
+  beforeLoad: ({ search }) => {
+    const databaseId = getDatabaseViewScopeId(search.database)
+    throw redirect({
+      to: '/databases',
+      search: {
+        database: search.database,
+        view: getDefaultDatabaseViewId(databaseId, 'workflow'),
+      },
+    })
+  },
 })
-
-function WorkflowPage() {
-  const { database } = workflowRoute.useSearch()
-  const { databases } = useWorkspaceDatabases()
-  const { records, handleUpdateRecord, handleDeleteRecord } = useDatabaseRecords()
-  const selectedDatabase = getDatabaseProject(databases, database)
-  const databaseRecords = useMemo(
-    () => filterRecordsByDatabase(records, databases, database),
-    [records, databases, database]
-  )
-
-  return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col p-1 md:p-2">
-      <DatabaseHeader
-        title="Workflow"
-        databaseLabel={selectedDatabase?.label ?? 'All databases'}
-        currentView="workflow"
-        database={database}
-      />
-
-      <div className="mt-1 min-h-0 flex-1">
-        <WorkflowView
-          databaseId={database ?? 'all'}
-          records={databaseRecords}
-          onUpdateRecord={handleUpdateRecord}
-          onDeleteRecord={handleDeleteRecord}
-        />
-      </div>
-    </div>
-  )
-}
 
 // ── Chat Route (/chat) ────────────────────────────────────────
 
@@ -716,7 +747,12 @@ const legacyKanbanRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: 'kanban',
   beforeLoad: () => {
-    throw redirect({ to: '/databases/board' })
+    throw redirect({
+      to: '/databases',
+      search: {
+        view: getDefaultDatabaseViewId(getDatabaseViewScopeId(undefined), 'board'),
+      },
+    })
   },
 })
 

@@ -20,7 +20,7 @@ Object.defineProperty(window, 'matchMedia', {
   }),
 })
 
-const storage = (() => {
+function createMemoryStorage() {
   const values = new Map<string, string>()
   return {
     getItem: (key: string) => values.get(key) ?? null,
@@ -28,7 +28,10 @@ const storage = (() => {
     removeItem: (key: string) => values.delete(key),
     clear: () => values.clear(),
   }
-})()
+}
+
+const storage = createMemoryStorage()
+const sessionStorage = createMemoryStorage()
 
 Object.defineProperty(window, 'localStorage', {
   configurable: true,
@@ -38,4 +41,14 @@ Object.defineProperty(window, 'localStorage', {
 Object.defineProperty(globalThis, 'localStorage', {
   configurable: true,
   value: storage,
+})
+
+Object.defineProperty(window, 'sessionStorage', {
+  configurable: true,
+  value: sessionStorage,
+})
+
+Object.defineProperty(globalThis, 'sessionStorage', {
+  configurable: true,
+  value: sessionStorage,
 })
