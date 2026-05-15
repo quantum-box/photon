@@ -127,10 +127,10 @@ WebSocket や Durable Object は、この protocol を素早く起動する通�
 
 ### Phase 1: Issues を engine-backed record に移す 🔄
 
-- [ ] `photon-engine` Rust crate の package boundary を作る
-- [ ] generic operation / record / cursor / conflict 型を定義する
-- [ ] local storage adapter contract を定義する
-- [ ] PGlite / SQLite のどちらかで最初の adapter を作る
+- [x] `photon-engine` Rust crate の package boundary を作る
+- [x] generic operation / record / cursor / conflict 型を定義する
+- [x] local storage adapter contract を定義する
+- [x] PGlite / SQLite のどちらかで最初の adapter を作る
 - [ ] issue CRUD を operation log に載せる
 - [ ] 既存 Yjs issues projection との split-brain を解消する
 - [ ] `packages/server` の REST issue API と engine projection を一致させる
@@ -158,23 +158,23 @@ WebSocket や Durable Object は、この protocol を素早く起動する通�
 
 ## テスト計画
 
-- [ ] storage adapter contract test
-  - operation append
-  - cursor update
-  - idempotent replay
-  - projection rebuild
-  - transaction rollback
-- [ ] offline two-client convergence test
-  - client A / B が offline 編集
-  - 順不同 push
-  - retry / duplicate push
-  - final projection の一致
+- [x] storage adapter contract test
+  - [x] operation append
+  - [x] cursor update
+  - [x] idempotent replay
+  - [x] projection rebuild
+  - [ ] transaction rollback
+- [x] offline two-client convergence test
+  - [x] client A / B が offline 編集
+  - [x] 順不同 push
+  - [x] retry / duplicate push
+  - [x] final projection の一致
 - [ ] conflict policy test
-  - scalar 同時更新
-  - set add/remove
-  - delete/update
-  - status transition rejection
-  - unique key collision
+  - [x] scalar 同時更新
+  - [x] set add/remove
+  - [x] delete/update
+  - [x] status transition rejection
+  - [ ] unique key collision
 - [ ] WASM/browser test
   - PGlite `idb://` persistence
   - reload 復元
@@ -209,13 +209,15 @@ WebSocket や Durable Object は、この protocol を素早く起動する通�
 
 ## 完了条件
 
-- [ ] Photon Engine の Rust core が最低 1 adapter で動作する
+- [x] Photon Engine の Rust core が最低 1 adapter で動作する
 - [ ] browser から WASM / TS wrapper 経由で local mutation を保存できる
 - [ ] issue data が engine projection と server API で一致する
-- [ ] offline two-client convergence test が通る
+- [x] offline two-client convergence test が通る
 - [ ] conflict policy の初期セットが test で固定されている
-- [ ] private package / repo 運用方針が README または ADR に記録されている
+- [x] private package / repo 運用方針が README または ADR に記録されている
 
 ## 実装メモ
 
 - 2026-05-15: 初期 taskdoc を作成。現時点では実装前の設計・追跡ドキュメントとして扱う。
+- 2026-05-15: `packages/photon-engine` を private Rust crate として追加。generic operation / record / cursor / conflict、storage adapter contract、memory adapter、feature-gated SQLite adapter、projection / sync skeleton、adapter contract test を実装開始。
+- 2026-05-15: integration test を追加。`sync_once` の push/pull、offline two-client convergence、duplicate push dedupe、server conflict / rejection、SQLite reopen persistence を検証。set add-wins の競合解決バグも test で検出して修正。
