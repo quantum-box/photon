@@ -1,0 +1,34 @@
+[tools]
+node = "20"
+
+[tasks.install]
+description = "Install dependencies"
+run = "npm install"
+
+[tasks.dev]
+description = "Start web dev server"
+run = "npm run dev"
+
+[tasks.tauri-dev]
+description = "Start Tauri desktop app in dev mode"
+run = "npm run tauri:dev"
+
+[tasks.build]
+description = "Build web app"
+run = "npm run build"
+
+[tasks.tauri-build]
+description = "Build Tauri desktop app"
+run = "npm run tauri:build"
+
+[tasks.test]
+description = "Run tests"
+run = "npm run test"
+
+[tasks.type-check]
+description = "TypeScript type check"
+run = "npm run type-check"
+
+[tasks.lint]
+description = "Run ESLint"
+run = "npm run lint"
