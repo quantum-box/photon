@@ -4,6 +4,31 @@ export type SyncBackend = 'rust-server' | 'cloudflare-durable-object'
 export type AppServerBackend = 'rust-server' | 'external-api'
 export type ChatStreamMode = 'mock' | 'backend'
 export type ChatStreamTransport = 'sse' | 'websocket'
+export type WorkflowStageKind = 'start' | 'work' | 'review' | 'end' | 'terminal'
+export type WorkflowTransitionKind = 'primary' | 'exception'
+
+export interface WorkflowStageDefinition {
+  id: string
+  label: string
+  description: string
+  kind: WorkflowStageKind
+}
+
+export interface WorkflowTransitionDefinition {
+  id: string
+  source: string
+  target: string
+  label?: string
+  kind: WorkflowTransitionKind
+}
+
+export interface WorkflowDefinition {
+  id: string
+  name: string
+  description: string
+  stages: WorkflowStageDefinition[]
+  transitions: WorkflowTransitionDefinition[]
+}
 
 export interface AppKitConfig {
   app: {
@@ -22,6 +47,11 @@ export interface AppKitConfig {
   issues: {
     identifierPrefix: string
     defaultProject: string
+  }
+  workflows: {
+    defaultWorkflowId: string
+    pgliteDataDir: string
+    definitions: WorkflowDefinition[]
   }
   chat: {
     productName: string
@@ -53,6 +83,9 @@ export interface AppKitConfig {
     workspaceId: string
     issuesRoomId: string
     yjsArrayName: string
+    databasesArrayName: string
+    databaseViewsArrayName: string
+    workflowCanvasesMapName: string
     persistenceKey: string
     websocketPath: string
     websocketUrl?: string
@@ -202,6 +235,64 @@ export const appKitConfig: AppKitConfig = {
     identifierPrefix: 'PLT',
     defaultProject: 'Client App Kit',
   },
+  workflows: {
+    defaultWorkflowId: 'default-record-workflow',
+    pgliteDataDir: 'idb://photon-workflows',
+    definitions: [
+      {
+        id: 'default-record-workflow',
+        name: 'Default Record Workflow',
+        description: 'Default business flow for Photon records.',
+        stages: [
+          {
+            id: 'intake',
+            label: 'Intake',
+            description: 'Capture and triage incoming work.',
+            kind: 'start',
+          },
+          {
+            id: 'ready',
+            label: 'Ready',
+            description: 'Work that is ready to start.',
+            kind: 'work',
+          },
+          {
+            id: 'execution',
+            label: 'Execution',
+            description: 'Active implementation or investigation.',
+            kind: 'work',
+          },
+          {
+            id: 'validation',
+            label: 'Validation',
+            description: 'Review, QA, and acceptance checks.',
+            kind: 'review',
+          },
+          {
+            id: 'completed',
+            label: 'Completed',
+            description: 'Work that has shipped or been accepted.',
+            kind: 'end',
+          },
+          {
+            id: 'cancelled',
+            label: 'Cancelled',
+            description: 'Work intentionally stopped or superseded.',
+            kind: 'terminal',
+          },
+        ],
+        transitions: [
+          { id: 'intake-ready', source: 'intake', target: 'ready', kind: 'primary' },
+          { id: 'ready-execution', source: 'ready', target: 'execution', kind: 'primary' },
+          { id: 'execution-validation', source: 'execution', target: 'validation', kind: 'primary' },
+          { id: 'validation-completed', source: 'validation', target: 'completed', kind: 'primary' },
+          { id: 'ready-cancelled', source: 'ready', target: 'cancelled', label: 'Stop', kind: 'exception' },
+          { id: 'execution-cancelled', source: 'execution', target: 'cancelled', label: 'Stop', kind: 'exception' },
+          { id: 'validation-cancelled', source: 'validation', target: 'cancelled', label: 'Stop', kind: 'exception' },
+        ],
+      },
+    ],
+  },
   chat: {
     productName: 'Photon Chat',
     disclaimer: 'Photon AI can make mistakes. Verify important information.',
@@ -232,6 +323,9 @@ export const appKitConfig: AppKitConfig = {
     workspaceId: DEFAULT_WORKSPACE_ID,
     issuesRoomId,
     yjsArrayName: 'issues',
+    databasesArrayName: 'databases',
+    databaseViewsArrayName: 'databaseViews',
+    workflowCanvasesMapName: 'workflowCanvases',
     persistenceKey: issuesRoomId,
     websocketPath: buildSyncWebsocketPath(issuesRoomId),
     websocketUrl: buildConfiguredSyncWebsocketUrl(issuesRoomId),

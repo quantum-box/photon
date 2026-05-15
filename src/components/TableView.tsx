@@ -10,6 +10,7 @@ import {
   type SortingState,
   type ColumnFiltersState,
   type OnChangeFn,
+  type VisibilityState,
 } from '@tanstack/react-table'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import {
@@ -20,6 +21,7 @@ import {
   priorityConfig,
   mockUsers,
 } from '../data/mock'
+import type { RecordPropertyKey } from '../lib/databaseViews/types'
 
 interface TableViewProps {
   issues: Issue[]
@@ -29,6 +31,9 @@ interface TableViewProps {
   onCreateIssue: (data: { title: string }) => void
   sorting?: SortingState
   onSortingChange?: OnChangeFn<SortingState>
+  globalFilter?: string
+  onGlobalFilterChange?: (value: string) => void
+  visibleProperties?: RecordPropertyKey[]
 }
 
 const columnHelper = createColumnHelper<Issue>()
@@ -391,12 +396,17 @@ function MobileIssueCard({
   isSelected,
   onSelectIssue,
   onUpdateIssue,
+  visibleProperties,
 }: {
   issue: Issue
   isSelected: boolean
   onSelectIssue: (issue: Issue) => void
   onUpdateIssue: (issueId: string, field: keyof Issue, value: string) => void
+  visibleProperties?: RecordPropertyKey[]
 }) {
+  const isVisible = (property: RecordPropertyKey) =>
+    !visibleProperties || visibleProperties.includes(property)
+
   return (
     <div
       role="button"
@@ -415,24 +425,36 @@ function MobileIssueCard({
       }}
     >
       <div className="mb-2 flex min-w-0 items-center justify-between gap-2">
-        <span className="font-mono text-xs text-subtle">{issue.identifier}</span>
-        <PriorityDropdownCell
-          value={issue.priority}
-          issueId={issue.id}
-          onUpdate={onUpdateIssue}
-        />
+        {isVisible('identifier') ? (
+          <span className="font-mono text-xs text-subtle">{issue.identifier}</span>
+        ) : (
+          <span />
+        )}
+        {isVisible('priority') && (
+          <PriorityDropdownCell
+            value={issue.priority}
+            issueId={issue.id}
+            onUpdate={onUpdateIssue}
+          />
+        )}
       </div>
-      <div className="mb-3 line-clamp-2 text-sm font-medium leading-snug text-foreground">
-        {issue.title}
-      </div>
+      {isVisible('title') && (
+        <div className="mb-3 line-clamp-2 text-sm font-medium leading-snug text-foreground">
+          {issue.title}
+        </div>
+      )}
       <div className="flex min-w-0 items-center justify-between gap-2">
-        <StatusDropdownCell
-          value={issue.status}
-          issueId={issue.id}
-          onUpdate={onUpdateIssue}
-        />
+        {isVisible('status') ? (
+          <StatusDropdownCell
+            value={issue.status}
+            issueId={issue.id}
+            onUpdate={onUpdateIssue}
+          />
+        ) : (
+          <span />
+        )}
         <div className="flex min-w-0 items-center gap-2">
-          {issue.assignee && (
+          {isVisible('assignee') && issue.assignee && (
             <span className="flex min-w-0 items-center gap-1.5 text-xs text-muted">
               <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent text-xs text-white">
                 {issue.assignee[0]}
@@ -440,15 +462,17 @@ function MobileIssueCard({
               <span className="truncate">{issue.assignee}</span>
             </span>
           )}
-          <span className="shrink-0 text-xs text-subtle">
-            {new Date(issue.updatedAt).toLocaleDateString('ja-JP', {
-              month: 'short',
-              day: 'numeric',
-            })}
-          </span>
+          {isVisible('updatedAt') && (
+            <span className="shrink-0 text-xs text-subtle">
+              {new Date(issue.updatedAt).toLocaleDateString('ja-JP', {
+                month: 'short',
+                day: 'numeric',
+              })}
+            </span>
+          )}
         </div>
       </div>
-      {issue.labels.length > 0 && (
+      {isVisible('labels') && issue.labels.length > 0 && (
         <div className="mt-3 flex flex-wrap gap-1">
           {issue.labels.slice(0, 3).map((label) => (
             <span
@@ -472,12 +496,17 @@ export function TableView({
   onCreateIssue,
   sorting: controlledSorting,
   onSortingChange: controlledOnSortingChange,
+  globalFilter: controlledGlobalFilter,
+  onGlobalFilterChange: controlledOnGlobalFilterChange,
+  visibleProperties,
 }: TableViewProps) {
   const [internalSorting, setInternalSorting] = useState<SortingState>([])
   const sorting = controlledSorting ?? internalSorting
   const onSortingChange = controlledOnSortingChange ?? setInternalSorting
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([])
-  const [globalFilter, setGlobalFilter] = useState('')
+  const [internalGlobalFilter, setInternalGlobalFilter] = useState('')
+  const globalFilter = controlledGlobalFilter ?? internalGlobalFilter
+  const setGlobalFilter = controlledOnGlobalFilterChange ?? setInternalGlobalFilter
   const [creatingIssue, setCreatingIssue] = useState(false)
   const [newIssueTitle, setNewIssueTitle] = useState('')
   const parentRef = useRef<HTMLDivElement>(null)
@@ -593,10 +622,24 @@ export function TableView({
     [onUpdateIssue]
   )
 
+  const columnVisibility: VisibilityState | undefined = useMemo(() => {
+    if (!visibleProperties) return undefined
+    return {
+      identifier: visibleProperties.includes('identifier'),
+      status: visibleProperties.includes('status'),
+      priority: visibleProperties.includes('priority'),
+      title: visibleProperties.includes('title'),
+      assignee: visibleProperties.includes('assignee'),
+      labels: visibleProperties.includes('labels'),
+      project: visibleProperties.includes('project'),
+      updatedAt: visibleProperties.includes('updatedAt'),
+    }
+  }, [visibleProperties])
+
   const table = useReactTable({
     data: issues,
     columns,
-    state: { sorting, columnFilters, globalFilter },
+    state: { sorting, columnFilters, globalFilter, ...(columnVisibility ? { columnVisibility } : {}) },
     onSortingChange,
     onColumnFiltersChange: setColumnFilters,
     onGlobalFilterChange: setGlobalFilter,
@@ -652,6 +695,7 @@ export function TableView({
                 isSelected={row.original.id === selectedIssueId}
                 onSelectIssue={onSelectIssue}
                 onUpdateIssue={onUpdateIssue}
+                visibleProperties={visibleProperties}
               />
             ))}
             {creatingIssue ? (
@@ -793,7 +837,7 @@ export function TableView({
               )}
               {/* New Issue row */}
               <tr className="border-b border-border" style={{ height: ROW_HEIGHT }}>
-                <td colSpan={columns.length} className="px-3 py-1.5">
+                <td colSpan={table.getVisibleLeafColumns().length} className="px-3 py-1.5">
                   {creatingIssue ? (
                     <input
                       ref={newIssueInputRef}

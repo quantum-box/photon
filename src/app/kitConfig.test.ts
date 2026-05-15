@@ -31,7 +31,10 @@ describe('appKitConfig', () => {
     expect(appKitConfig.sync.issuesRoomId).toBe('workspace:photon-default:issues')
     expect(appKitConfig.sync.persistenceKey).toBe('workspace:photon-default:issues')
     expect(appKitConfig.sync.yjsArrayName).toBe('issues')
+    expect(appKitConfig.sync.databasesArrayName).toBe('databases')
+    expect(appKitConfig.sync.workflowCanvasesMapName).toBe('workflowCanvases')
     expect(appKitConfig.sync.websocketPath).toBe('/ws?room=workspace:photon-default:issues')
+    expect(appKitConfig.workflows.pgliteDataDir).toBe('idb://photon-workflows')
     expect(appKitConfig.docs.pgliteDataDir).toBe('idb://photon-docs')
     expect(appKitConfig.docs.yjsArrayName).toBe('blocks')
     expect(appKitConfig.attachments.yjsArrayName).toBe('attachments')
@@ -91,6 +94,23 @@ describe('appKitConfig', () => {
   it('configures issue defaults without hardcoding them in UI components', () => {
     expect(appKitConfig.issues.identifierPrefix).toMatch(/^[A-Z]+$/)
     expect(appKitConfig.issues.defaultProject).toBeTruthy()
+  })
+
+  it('defines a configurable business workflow for records', () => {
+    const workflow = appKitConfig.workflows.definitions.find(
+      (definition) => definition.id === appKitConfig.workflows.defaultWorkflowId
+    )
+
+    expect(workflow?.name).toBe('Default Record Workflow')
+    expect(workflow?.stages.map((stage) => stage.id)).toEqual([
+      'intake',
+      'ready',
+      'execution',
+      'validation',
+      'completed',
+      'cancelled',
+    ])
+    expect(workflow?.transitions.some((transition) => transition.kind === 'exception')).toBe(true)
   })
 })
 

@@ -79,6 +79,7 @@ export function DetailPanel({ issue, onClose, onUpdateIssue, onDeleteIssue }: De
   return (
     <div
       className="detail-panel flex flex-col h-full border-l"
+      data-testid="detail-panel"
       style={{
         width: 'var(--detail-width)',
         minWidth: 'var(--detail-width)',
@@ -116,6 +117,7 @@ export function DetailPanel({ issue, onClose, onUpdateIssue, onDeleteIssue }: De
           <button
             onClick={onClose}
             className="w-6 h-6 flex items-center justify-center rounded transition-colors text-sm"
+            data-testid="detail-panel-close"
             style={{ color: 'var(--text-muted)' }}
             onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--bg-hover)')}
             onMouseLeave={(e) => (e.currentTarget.style.background = '')}

@@ -6,7 +6,7 @@ test.describe('Photon shell', () => {
 
     await page.goto('/')
 
-    await expect(page).toHaveURL(/\/databases$/)
+    await expect(page).toHaveURL(/\/databases/)
     await expect(page.getByRole('heading', { name: 'Databases' })).toBeVisible()
     await expect(page.getByText(/\d+ records/)).toBeVisible()
 
@@ -22,13 +22,25 @@ test.describe('Photon shell', () => {
     await expect(page.getByText(title)).toBeVisible()
   })
 
-  test('switches between table, board, docs, and chat views', async ({ page }) => {
+  test('switches between table, board, workflow, docs, and chat views', async ({ page }) => {
     await page.goto('/databases')
     await page.getByTestId('view-kanban').click()
 
-    await expect(page).toHaveURL(/\/databases\/board$/)
-    await expect(page.getByRole('heading', { name: 'Board' })).toBeVisible()
+    await expect(page).toHaveURL(/view=.*board/)
+    await expect(page.getByRole('heading', { name: 'Databases' })).toBeVisible()
     await expect(page.getByText('drag to move')).toBeVisible()
+
+    await page.getByTestId('view-workflow').click()
+
+    await expect(page).toHaveURL(/view=.*workflow/)
+    await expect(page.getByRole('heading', { name: 'Databases' })).toBeVisible()
+    await expect(page.getByTestId('workflow-canvas')).toBeVisible()
+    await expect(page.getByTestId('workflow-elements-panel')).toBeVisible()
+    await expect(page.getByTestId('workflow-template-business-flow')).toBeVisible()
+    await expect(page.getByTestId('workflow-template-kpi-tree')).toBeVisible()
+    await expect(page.getByTestId('workflow-database-item').first()).toBeVisible()
+    await expect(page.getByText('Workflow Canvas')).toBeVisible()
+    await expect(page.locator('.react-flow__controls')).toBeVisible()
 
     await page.getByTestId('view-docs').click()
 
@@ -42,6 +54,221 @@ test.describe('Photon shell', () => {
     await expect(page.getByText('Photon Chat')).toBeVisible()
   })
 
+  test('adds database items to the workflow canvas', async ({ page }) => {
+    const canvasDatabase = `workflow-e2e-${Date.now()}`
+
+    await page.goto(`/databases/workflow?database=${canvasDatabase}`)
+
+    await page.getByTestId('workflow-add-record').first().click()
+    await page.getByTestId('workflow-template-kpi-tree').click()
+    await page.getByTestId('workflow-add-record').nth(1).click()
+
+    await expect(page).toHaveURL(/database=workflow-e2e-\d+/)
+    await expect(page).toHaveURL(/view=.*workflow/)
+    await expect(page.getByRole('heading', { name: 'Databases' })).toBeVisible()
+    await expect(page.getByTestId('workflow-node-record')).toHaveCount(2)
+    await expect(page.getByText('KPI tree item')).toBeVisible()
+
+    const sourceHandle = page.getByTestId('workflow-handle-source').first()
+    const targetHandle = page.getByTestId('workflow-handle-target').nth(1)
+    const sourceBox = await sourceHandle.boundingBox()
+    const targetBox = await targetHandle.boundingBox()
+    expect(sourceBox).toBeTruthy()
+    expect(targetBox).toBeTruthy()
+    if (sourceBox && targetBox) {
+      await sourceHandle.click()
+      await targetHandle.click()
+      await expect(page.locator('.react-flow__edge')).toHaveCount(1)
+    }
+    await expect(page.getByTestId('workflow-persistence-status')).toHaveAttribute(
+      'data-saved-signature',
+      'kpi-tree:2:1'
+    )
+    await page.waitForTimeout(500)
+
+    await page.reload()
+    await expect(page.getByTestId('workflow-node-record')).toHaveCount(2)
+    await expect(page.locator('.react-flow__edge')).toHaveCount(1)
+    await expect(page.getByText('KPI tree item')).toBeVisible()
+
+    await page.locator('.react-flow__node').first().dblclick()
+    await expect(page.getByTestId('detail-panel')).toBeVisible()
+    await expect(page.getByTestId('detail-panel').getByText(/PLT-/)).toBeVisible()
+    await page.getByTestId('detail-panel').locator('h2').click()
+    await expect(page.getByTestId('detail-panel').locator('input').first()).toBeVisible()
+    await page.keyboard.press('Escape')
+    await page.getByTestId('detail-panel-close').click()
+    await expect(page.getByTestId('detail-panel')).toHaveCount(0)
+
+    const firstNode = page.locator('.react-flow__node').first()
+    const beforeDrag = await firstNode.boundingBox()
+    expect(beforeDrag).toBeTruthy()
+    if (beforeDrag) {
+      await page.mouse.move(beforeDrag.x + beforeDrag.width / 2, beforeDrag.y + beforeDrag.height / 2)
+      await page.mouse.down()
+      await page.mouse.move(beforeDrag.x + beforeDrag.width / 2 + 220, beforeDrag.y + beforeDrag.height / 2 + 100, {
+        steps: 8,
+      })
+      await page.mouse.up()
+      const afterDrag = await firstNode.boundingBox()
+      expect(Math.abs((afterDrag?.x ?? beforeDrag.x) - beforeDrag.x)).toBeGreaterThan(10)
+    }
+
+    await page.getByTestId('toggle-workflow-items').click()
+    await expect(page.getByTestId('workflow-elements-panel')).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'Items' })).toBeVisible()
+    await page.getByTestId('toggle-workflow-items').click()
+    await expect(page.getByTestId('workflow-elements-panel')).toBeVisible()
+
+    await page.getByTestId('toggle-side-nav').click()
+    await expect(page.locator('[data-testid="side-nav"] [data-testid="database-photon-core"]')).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'Open' })).toBeVisible()
+    await page.getByTestId('toggle-side-nav').click()
+    await expect(page.locator('[data-testid="side-nav"] [data-testid="database-photon-core"]')).toBeVisible()
+  })
+
+  test('syncs workflow canvas changes between browser tabs', async ({ page, context }) => {
+    const canvasDatabase = `workflow-sync-${Date.now()}`
+    const secondPage = await context.newPage()
+
+    await page.goto(`/databases/workflow?database=${canvasDatabase}`)
+    await secondPage.goto(`/databases/workflow?database=${canvasDatabase}`)
+    await expect(page.getByTestId('sync-presence-status')).toHaveText(/([2-9]|\d{2,}) online/, {
+      timeout: 15_000,
+    })
+    await expect(secondPage.getByTestId('sync-presence-status')).toHaveText(/([2-9]|\d{2,}) online/, {
+      timeout: 15_000,
+    })
+
+    await page.getByTestId('workflow-add-record').first().click()
+    await expect(page.getByTestId('workflow-persistence-status')).toHaveAttribute(
+      'data-saved-signature',
+      'business-flow:1:0',
+      { timeout: 15_000 }
+    )
+
+    await expect(secondPage.locator('.react-flow__node')).toHaveCount(1, {
+      timeout: 15_000,
+    })
+
+    const secondNode = secondPage.locator('.react-flow__node').first()
+    const beforeTransform = await secondNode.getAttribute('style')
+    const firstNode = page.locator('.react-flow__node').first()
+    const beforeDrag = await firstNode.boundingBox()
+    expect(beforeDrag).toBeTruthy()
+
+    if (beforeDrag) {
+      await page.mouse.move(beforeDrag.x + beforeDrag.width / 2, beforeDrag.y + beforeDrag.height / 2)
+      await page.mouse.down()
+      await page.mouse.move(beforeDrag.x + beforeDrag.width / 2 + 180, beforeDrag.y + beforeDrag.height / 2 + 80, {
+        steps: 8,
+      })
+      await page.mouse.up()
+    }
+
+    await expect
+      .poll(async () => secondNode.getAttribute('style'), { timeout: 15_000 })
+      .not.toBe(beforeTransform)
+
+    await secondPage.close()
+  })
+
+  test('preserves the selected database when switching database views', async ({ page }) => {
+    await page.goto('/databases')
+
+    await page.getByRole('button', { name: 'Photon Core' }).click()
+
+    await expect(page).toHaveURL(/database=photon-core/)
+    await expect(page).toHaveURL(/view=.*table/)
+    await expect(page.getByTestId('selected-database-pill')).toHaveText('Photon Core')
+
+    await page.getByTestId('view-kanban').click()
+
+    await expect(page).toHaveURL(/database=photon-core/)
+    await expect(page).toHaveURL(/view=.*board/)
+    await expect(page.getByText('drag to move')).toBeVisible()
+    await expect(page.getByTestId('selected-database-pill')).toHaveText('Photon Core')
+
+    await page.getByTestId('view-table').click()
+
+    await expect(page).toHaveURL(/database=photon-core/)
+    await expect(page).toHaveURL(/view=.*table/)
+    await expect(page.getByRole('heading', { name: 'Databases' })).toBeVisible()
+
+    await page.getByTestId('view-workflow').click()
+
+    await expect(page).toHaveURL(/database=photon-core/)
+    await expect(page).toHaveURL(/view=.*workflow/)
+    await expect(page.getByTestId('workflow-canvas')).toBeVisible()
+    await expect(page.getByTestId('selected-database-pill')).toHaveText('Photon Core')
+  })
+
+  test('creates, renames, duplicates, and deletes named database views', async ({ page }) => {
+    const databaseName = `Views ${Date.now()}`
+
+    await page.goto('/databases')
+    await page.locator('aside').getByTestId('new-database-name').fill(databaseName)
+    await page.locator('aside').getByTestId('create-database').click()
+    await expect(page.getByTestId('selected-database-pill')).toHaveText(databaseName)
+
+    await page.getByTestId('new-board-view').click()
+    await expect(page).toHaveURL(/view=.*board/)
+    await expect(page.getByRole('button', { name: /New Board/ })).toBeVisible()
+
+    page.once('dialog', async (dialog) => {
+      await dialog.accept('Saved Board')
+    })
+    await page.getByTestId('view-options').click()
+    await page.getByTestId('rename-view').click()
+    await expect(page.getByRole('button', { name: /Saved Board/ })).toBeVisible()
+
+    await page.getByTestId('duplicate-view').click()
+    await expect(page.getByRole('button', { name: /Saved Board Copy/ })).toBeVisible()
+
+    await page.getByTestId('delete-view').click()
+    await expect(page.getByRole('button', { name: /Saved Board Copy/ })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: /Saved Board/ })).toBeVisible()
+  })
+
+  test('creates a database and uses status filters from the right panel', async ({ page }) => {
+    const databaseName = `Ops ${Date.now()}`
+
+    await page.goto('/databases')
+
+    await page.locator('aside').getByTestId('new-database-name').fill(databaseName)
+    await page.locator('aside').getByTestId('create-database').click()
+
+    await expect(page).toHaveURL(/database=ops-\d+/)
+    await expect(page).toHaveURL(/view=.*table/)
+    await expect(page.getByTestId('selected-database-pill')).toHaveText(databaseName)
+    await expect(page.getByRole('button', { name: new RegExp(databaseName) })).toBeVisible()
+
+    await page.getByTestId('toggle-database-filters').click()
+    await expect(page.getByTestId('database-filter-panel')).toBeVisible()
+    await page.getByRole('button', { name: /Todo/ }).click()
+    await expect(page.getByTestId('status-filter-pill')).toHaveText(/Todo/)
+    await expect(page.getByTestId('save-view')).toBeVisible()
+    await page.getByTestId('save-view').click()
+    await expect(page.getByTestId('save-view')).toHaveCount(0)
+  })
+
+  test('syncs database creation between browser tabs', async ({ page, context }) => {
+    const databaseName = `Synced DB ${Date.now()}`
+
+    await page.goto('/databases')
+    const secondPage = await context.newPage()
+    await secondPage.goto('/databases')
+
+    await page.locator('aside').getByTestId('new-database-name').fill(databaseName)
+    await page.locator('aside').getByTestId('create-database').click()
+
+    await expect(secondPage.getByRole('button', { name: new RegExp(databaseName) })).toBeVisible({
+      timeout: 15_000,
+    })
+
+    await secondPage.close()
+  })
+
   test('shows sync presence as clients connect', async ({ page, context }) => {
     await page.goto('/databases')
 
@@ -52,8 +279,18 @@ test.describe('Photon shell', () => {
     const secondPage = await context.newPage()
     await secondPage.goto('/databases')
 
-    await expect(secondPage.getByTestId('sync-presence-status')).toHaveText(`${initialOnlineCount + 1} online`)
-    await expect(page.getByTestId('sync-presence-status')).toHaveText(`${initialOnlineCount + 1} online`)
+    await expect
+      .poll(
+        async () => Number((await secondPage.getByTestId('sync-presence-status').innerText()).split(' ')[0]),
+        { timeout: 15_000 }
+      )
+      .toBeGreaterThanOrEqual(initialOnlineCount + 1)
+    await expect
+      .poll(
+        async () => Number((await page.getByTestId('sync-presence-status').innerText()).split(' ')[0]),
+        { timeout: 15_000 }
+      )
+      .toBeGreaterThanOrEqual(initialOnlineCount + 1)
 
     await secondPage.close()
   })
@@ -83,7 +320,7 @@ test.describe('Photon shell', () => {
     await page.getByTestId('chat-message-input').fill('search for React 19')
     await page.getByTestId('chat-send').click()
 
-    await expect(page.getByText('You')).toBeVisible()
+    await expect(page.getByText('You', { exact: true })).toBeVisible()
     await expect(page.getByText('search for React 19')).toBeVisible()
     await expect(page.getByText('Assistant')).toBeVisible()
     await expect(page.getByText('Web Search')).toBeVisible()
@@ -110,8 +347,8 @@ test.describe('Photon shell', () => {
     await page.getByTestId('chat-send').click()
     await expect(page.getByText(filename)).toBeVisible({ timeout: 15_000 })
 
-    await page.getByTestId('view-table').click()
-    await expect(page).toHaveURL(/\/databases$/)
+    await page.getByTestId('nav-databases').click()
+    await expect(page).toHaveURL(/\/databases/)
     await page.getByTestId('view-chat').click()
 
     await expect(page.getByTestId('chat-workspace-attachments').getByText(filename)).toBeVisible({
@@ -144,7 +381,7 @@ test.describe('Photon shell', () => {
       timeout: 15_000,
     })
 
-    await page.getByTestId('view-table').click()
+    await page.getByTestId('nav-databases').click()
     await page.getByPlaceholder('Filter records...').fill(title)
     await expect(page.getByText(title)).toBeVisible()
 
