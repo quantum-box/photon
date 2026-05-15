@@ -57,6 +57,16 @@ use yrs::{updates::decoder::Decode, Doc, ReadTxn, StateVector, Transact, Update}
         delete_attachment,
         link_attachment,
         delete_attachment_link,
+        list_chat_messages,
+        get_chat_message,
+        create_chat_message,
+        update_chat_message,
+        delete_chat_message,
+        list_tool_calls,
+        get_tool_call,
+        create_tool_call,
+        update_tool_call,
+        delete_tool_call,
     ),
     components(schemas(
         Issue,
@@ -73,6 +83,14 @@ use yrs::{updates::decoder::Decode, Doc, ReadTxn, StateVector, Transact, Update}
         UpdateAttachment,
         CreateAttachmentLink,
         AttachmentListResponse,
+        ChatMessageRecord,
+        CreateChatMessage,
+        UpdateChatMessage,
+        ChatMessageListResponse,
+        ToolCallRecord,
+        CreateToolCall,
+        UpdateToolCall,
+        ToolCallListResponse,
         HealthResponse
     )),
     info(
@@ -303,6 +321,83 @@ pub struct AttachmentListResponse {
     pub total: i64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ChatMessageRecord {
+    pub id: String,
+    pub workspace_id: String,
+    pub thread_id: String,
+    pub role: String,
+    pub content: String,
+    pub attachment_ids: Vec<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct CreateChatMessage {
+    pub id: Option<String>,
+    pub workspace_id: Option<String>,
+    pub thread_id: Option<String>,
+    pub role: String,
+    #[serde(default)]
+    pub content: String,
+    #[serde(default)]
+    pub attachment_ids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct UpdateChatMessage {
+    pub content: Option<String>,
+    pub attachment_ids: Option<Vec<String>>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct ChatMessageListResponse {
+    pub messages: Vec<ChatMessageRecord>,
+    pub total: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ToolCallRecord {
+    pub id: String,
+    pub workspace_id: String,
+    pub thread_id: String,
+    pub message_id: String,
+    pub tool_type: String,
+    pub name: String,
+    pub args: serde_json::Value,
+    pub status: String,
+    pub result: Option<serde_json::Value>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct CreateToolCall {
+    pub id: Option<String>,
+    pub workspace_id: Option<String>,
+    pub thread_id: Option<String>,
+    pub message_id: String,
+    pub tool_type: String,
+    pub name: String,
+    #[serde(default)]
+    pub args: serde_json::Value,
+    pub status: Option<String>,
+    pub result: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct UpdateToolCall {
+    pub status: Option<String>,
+    pub result: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct ToolCallListResponse {
+    pub tool_calls: Vec<ToolCallRecord>,
+    pub total: i64,
+}
+
 #[derive(Debug, Serialize, ToSchema)]
 pub struct HealthResponse {
     pub status: String,
@@ -315,6 +410,8 @@ pub struct ListParams {
     pub workspace_id: Option<String>,
     pub surface_type: Option<String>,
     pub surface_id: Option<String>,
+    pub thread_id: Option<String>,
+    pub message_id: Option<String>,
 }
 
 fn now_timestamp() -> String {
@@ -352,6 +449,7 @@ fn parse_preview_metadata(raw: &str) -> serde_json::Value {
 }
 
 const DEFAULT_WORKSPACE_ID: &str = "photon-default";
+const DEFAULT_CHAT_THREAD_ID: &str = "general";
 const ENGINE_SCOPE_ID: &str = "workspace:photon-default";
 const ENGINE_ACTOR_ID: &str = "photon-server";
 
@@ -721,6 +819,222 @@ async fn delete_attachment_engine_projection(
     }
 
     Ok(())
+}
+
+fn normalize_thread_id(value: Option<String>) -> String {
+    normalize_optional_text(value).unwrap_or_else(|| DEFAULT_CHAT_THREAD_ID.into())
+}
+
+fn normalize_chat_role(value: String) -> String {
+    match value.as_str() {
+        "user" | "assistant" | "system" | "tool" => value,
+        _ => "user".into(),
+    }
+}
+
+fn normalize_tool_status(value: Option<String>) -> String {
+    match value.as_deref() {
+        Some("pending" | "running" | "completed" | "error" | "cancelled") => value.unwrap(),
+        _ => "pending".into(),
+    }
+}
+
+fn chat_message_to_engine_value(
+    message: &ChatMessageRecord,
+) -> Result<serde_json::Value, AppError> {
+    Ok(serde_json::to_value(message)?)
+}
+
+fn chat_message_from_engine_record(
+    record: photon_engine::Record,
+) -> Result<Option<ChatMessageRecord>, AppError> {
+    if record.is_deleted() {
+        return Ok(None);
+    }
+
+    Ok(Some(serde_json::from_value(record.value)?))
+}
+
+async fn fetch_chat_message_from_engine(
+    state: &AppState,
+    message_id: &str,
+) -> Result<Option<ChatMessageRecord>, AppError> {
+    let record = state
+        .engine
+        .record(&engine_record_key("chat_messages", message_id))
+        .await?;
+    match record {
+        Some(record) => chat_message_from_engine_record(record),
+        None => Ok(None),
+    }
+}
+
+async fn list_chat_messages_from_engine(
+    state: &AppState,
+    workspace_id: &str,
+    thread_id: &str,
+) -> Result<Vec<ChatMessageRecord>, AppError> {
+    let mut messages = state
+        .engine
+        .storage()
+        .list_records(
+            &ScopeId::from(ENGINE_SCOPE_ID),
+            &CollectionName::from("chat_messages"),
+        )
+        .await?
+        .into_iter()
+        .filter_map(|record| chat_message_from_engine_record(record).transpose())
+        .collect::<Result<Vec<_>, _>>()?;
+
+    messages
+        .retain(|message| message.workspace_id == workspace_id && message.thread_id == thread_id);
+    messages.sort_by(|left, right| {
+        left.created_at
+            .cmp(&right.created_at)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    Ok(messages)
+}
+
+async fn upsert_chat_message_engine_projection(
+    state: &AppState,
+    message: &ChatMessageRecord,
+) -> Result<(), AppError> {
+    apply_engine_record_operation(
+        state,
+        "chat_messages",
+        &message.id,
+        EngineRecordMutation::Upsert(chat_message_to_engine_value(message)?),
+    )
+    .await
+}
+
+async fn patch_chat_message_engine_projection(
+    state: &AppState,
+    message: &ChatMessageRecord,
+) -> Result<(), AppError> {
+    apply_engine_record_operation(
+        state,
+        "chat_messages",
+        &message.id,
+        EngineRecordMutation::Patch(chat_message_to_engine_value(message)?),
+    )
+    .await
+}
+
+async fn delete_chat_message_engine_projection(
+    state: &AppState,
+    message_id: &str,
+) -> Result<(), AppError> {
+    apply_engine_record_operation(
+        state,
+        "chat_messages",
+        message_id,
+        EngineRecordMutation::Delete,
+    )
+    .await
+}
+
+fn tool_call_to_engine_value(tool_call: &ToolCallRecord) -> Result<serde_json::Value, AppError> {
+    Ok(serde_json::to_value(tool_call)?)
+}
+
+fn tool_call_from_engine_record(
+    record: photon_engine::Record,
+) -> Result<Option<ToolCallRecord>, AppError> {
+    if record.is_deleted() {
+        return Ok(None);
+    }
+
+    Ok(Some(serde_json::from_value(record.value)?))
+}
+
+async fn fetch_tool_call_from_engine(
+    state: &AppState,
+    tool_call_id: &str,
+) -> Result<Option<ToolCallRecord>, AppError> {
+    let record = state
+        .engine
+        .record(&engine_record_key("tool_calls", tool_call_id))
+        .await?;
+    match record {
+        Some(record) => tool_call_from_engine_record(record),
+        None => Ok(None),
+    }
+}
+
+async fn list_tool_calls_from_engine(
+    state: &AppState,
+    workspace_id: &str,
+    thread_id: Option<&str>,
+    message_id: Option<&str>,
+) -> Result<Vec<ToolCallRecord>, AppError> {
+    let mut tool_calls = state
+        .engine
+        .storage()
+        .list_records(
+            &ScopeId::from(ENGINE_SCOPE_ID),
+            &CollectionName::from("tool_calls"),
+        )
+        .await?
+        .into_iter()
+        .filter_map(|record| tool_call_from_engine_record(record).transpose())
+        .collect::<Result<Vec<_>, _>>()?;
+
+    tool_calls.retain(|tool_call| {
+        tool_call.workspace_id == workspace_id
+            && thread_id
+                .map(|thread_id| tool_call.thread_id == thread_id)
+                .unwrap_or(true)
+            && message_id
+                .map(|message_id| tool_call.message_id == message_id)
+                .unwrap_or(true)
+    });
+    tool_calls.sort_by(|left, right| {
+        left.created_at
+            .cmp(&right.created_at)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    Ok(tool_calls)
+}
+
+async fn upsert_tool_call_engine_projection(
+    state: &AppState,
+    tool_call: &ToolCallRecord,
+) -> Result<(), AppError> {
+    apply_engine_record_operation(
+        state,
+        "tool_calls",
+        &tool_call.id,
+        EngineRecordMutation::Upsert(tool_call_to_engine_value(tool_call)?),
+    )
+    .await
+}
+
+async fn patch_tool_call_engine_projection(
+    state: &AppState,
+    tool_call: &ToolCallRecord,
+) -> Result<(), AppError> {
+    apply_engine_record_operation(
+        state,
+        "tool_calls",
+        &tool_call.id,
+        EngineRecordMutation::Patch(tool_call_to_engine_value(tool_call)?),
+    )
+    .await
+}
+
+async fn delete_tool_call_engine_projection(
+    state: &AppState,
+    tool_call_id: &str,
+) -> Result<(), AppError> {
+    apply_engine_record_operation(
+        state,
+        "tool_calls",
+        tool_call_id,
+        EngineRecordMutation::Delete,
+    )
+    .await
 }
 
 // ---------------------------------------------------------------------------
@@ -1443,6 +1757,279 @@ async fn delete_attachment_link(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/chat/messages",
+    params(
+        ("limit" = Option<i64>, Query, description = "Max items to return"),
+        ("offset" = Option<i64>, Query, description = "Items to skip"),
+        ("workspace_id" = Option<String>, Query, description = "Workspace scope"),
+        ("thread_id" = Option<String>, Query, description = "Chat thread identifier"),
+    ),
+    responses((status = 200, description = "List of chat messages", body = ChatMessageListResponse)),
+    tag = "chat"
+)]
+async fn list_chat_messages(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<ListParams>,
+) -> Result<Json<ChatMessageListResponse>, AppError> {
+    let limit = params.limit.unwrap_or(100).max(0) as usize;
+    let offset = params.offset.unwrap_or(0).max(0) as usize;
+    let workspace_id = params
+        .workspace_id
+        .unwrap_or_else(|| DEFAULT_WORKSPACE_ID.into());
+    let thread_id = normalize_thread_id(params.thread_id);
+    let messages = list_chat_messages_from_engine(&state, &workspace_id, &thread_id).await?;
+    let total = messages.len() as i64;
+    let messages = messages.into_iter().skip(offset).take(limit).collect();
+    Ok(Json(ChatMessageListResponse { messages, total }))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/chat/messages/:id",
+    params(("id" = String, Path, description = "Chat message ID")),
+    responses(
+        (status = 200, description = "Chat message found", body = ChatMessageRecord),
+        (status = 404, description = "Chat message not found"),
+    ),
+    tag = "chat"
+)]
+async fn get_chat_message(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<ChatMessageRecord>, AppError> {
+    let message = fetch_chat_message_from_engine(&state, &id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    Ok(Json(message))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/chat/messages",
+    request_body = CreateChatMessage,
+    responses((status = 201, description = "Chat message accepted", body = ChatMessageRecord)),
+    tag = "chat"
+)]
+async fn create_chat_message(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<CreateChatMessage>,
+) -> Result<(StatusCode, Json<ChatMessageRecord>), AppError> {
+    let now = now_timestamp();
+    let message = ChatMessageRecord {
+        id: normalize_optional_text(payload.id).unwrap_or_else(|| Uuid::new_v4().to_string()),
+        workspace_id: normalize_optional_text(payload.workspace_id)
+            .unwrap_or_else(|| DEFAULT_WORKSPACE_ID.into()),
+        thread_id: normalize_thread_id(payload.thread_id),
+        role: normalize_chat_role(payload.role),
+        content: payload.content,
+        attachment_ids: payload.attachment_ids,
+        created_at: now.clone(),
+        updated_at: now,
+    };
+
+    upsert_chat_message_engine_projection(&state, &message).await?;
+    Ok((StatusCode::CREATED, Json(message)))
+}
+
+#[utoipa::path(
+    put,
+    path = "/api/chat/messages/:id",
+    params(("id" = String, Path, description = "Chat message ID")),
+    request_body = UpdateChatMessage,
+    responses(
+        (status = 200, description = "Chat message updated", body = ChatMessageRecord),
+        (status = 404, description = "Chat message not found"),
+    ),
+    tag = "chat"
+)]
+async fn update_chat_message(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(payload): Json<UpdateChatMessage>,
+) -> Result<Json<ChatMessageRecord>, AppError> {
+    let mut message = fetch_chat_message_from_engine(&state, &id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    if let Some(content) = payload.content {
+        message.content = content;
+    }
+    if let Some(attachment_ids) = payload.attachment_ids {
+        message.attachment_ids = attachment_ids;
+    }
+    message.updated_at = now_timestamp();
+
+    patch_chat_message_engine_projection(&state, &message).await?;
+    Ok(Json(message))
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/chat/messages/:id",
+    params(("id" = String, Path, description = "Chat message ID")),
+    responses(
+        (status = 204, description = "Chat message deleted"),
+        (status = 404, description = "Chat message not found"),
+    ),
+    tag = "chat"
+)]
+async fn delete_chat_message(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, AppError> {
+    let message = fetch_chat_message_from_engine(&state, &id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let tool_calls = list_tool_calls_from_engine(
+        &state,
+        &message.workspace_id,
+        Some(&message.thread_id),
+        Some(&message.id),
+    )
+    .await?;
+
+    delete_chat_message_engine_projection(&state, &id).await?;
+    for tool_call in tool_calls {
+        delete_tool_call_engine_projection(&state, &tool_call.id).await?;
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/chat/tool-calls",
+    params(
+        ("limit" = Option<i64>, Query, description = "Max items to return"),
+        ("offset" = Option<i64>, Query, description = "Items to skip"),
+        ("workspace_id" = Option<String>, Query, description = "Workspace scope"),
+        ("thread_id" = Option<String>, Query, description = "Chat thread identifier"),
+        ("message_id" = Option<String>, Query, description = "Message identifier"),
+    ),
+    responses((status = 200, description = "List of tool calls", body = ToolCallListResponse)),
+    tag = "chat"
+)]
+async fn list_tool_calls(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<ListParams>,
+) -> Result<Json<ToolCallListResponse>, AppError> {
+    let limit = params.limit.unwrap_or(100).max(0) as usize;
+    let offset = params.offset.unwrap_or(0).max(0) as usize;
+    let workspace_id = params
+        .workspace_id
+        .unwrap_or_else(|| DEFAULT_WORKSPACE_ID.into());
+    let thread_id = params.thread_id.as_deref();
+    let message_id = params.message_id.as_deref();
+    let tool_calls =
+        list_tool_calls_from_engine(&state, &workspace_id, thread_id, message_id).await?;
+    let total = tool_calls.len() as i64;
+    let tool_calls = tool_calls.into_iter().skip(offset).take(limit).collect();
+    Ok(Json(ToolCallListResponse { tool_calls, total }))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/chat/tool-calls/:id",
+    params(("id" = String, Path, description = "Tool call ID")),
+    responses(
+        (status = 200, description = "Tool call found", body = ToolCallRecord),
+        (status = 404, description = "Tool call not found"),
+    ),
+    tag = "chat"
+)]
+async fn get_tool_call(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<ToolCallRecord>, AppError> {
+    let tool_call = fetch_tool_call_from_engine(&state, &id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    Ok(Json(tool_call))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/chat/tool-calls",
+    request_body = CreateToolCall,
+    responses((status = 201, description = "Tool call accepted", body = ToolCallRecord)),
+    tag = "chat"
+)]
+async fn create_tool_call(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<CreateToolCall>,
+) -> Result<(StatusCode, Json<ToolCallRecord>), AppError> {
+    let now = now_timestamp();
+    let tool_call = ToolCallRecord {
+        id: normalize_optional_text(payload.id).unwrap_or_else(|| Uuid::new_v4().to_string()),
+        workspace_id: normalize_optional_text(payload.workspace_id)
+            .unwrap_or_else(|| DEFAULT_WORKSPACE_ID.into()),
+        thread_id: normalize_thread_id(payload.thread_id),
+        message_id: payload.message_id,
+        tool_type: payload.tool_type,
+        name: payload.name,
+        args: payload.args,
+        status: normalize_tool_status(payload.status),
+        result: payload.result,
+        created_at: now.clone(),
+        updated_at: now,
+    };
+
+    upsert_tool_call_engine_projection(&state, &tool_call).await?;
+    Ok((StatusCode::CREATED, Json(tool_call)))
+}
+
+#[utoipa::path(
+    put,
+    path = "/api/chat/tool-calls/:id",
+    params(("id" = String, Path, description = "Tool call ID")),
+    request_body = UpdateToolCall,
+    responses(
+        (status = 200, description = "Tool call updated", body = ToolCallRecord),
+        (status = 404, description = "Tool call not found"),
+    ),
+    tag = "chat"
+)]
+async fn update_tool_call(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(payload): Json<UpdateToolCall>,
+) -> Result<Json<ToolCallRecord>, AppError> {
+    let mut tool_call = fetch_tool_call_from_engine(&state, &id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    if payload.status.is_some() {
+        tool_call.status = normalize_tool_status(payload.status);
+    }
+    if let Some(result) = payload.result {
+        tool_call.result = Some(result);
+    }
+    tool_call.updated_at = now_timestamp();
+
+    patch_tool_call_engine_projection(&state, &tool_call).await?;
+    Ok(Json(tool_call))
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/chat/tool-calls/:id",
+    params(("id" = String, Path, description = "Tool call ID")),
+    responses(
+        (status = 204, description = "Tool call deleted"),
+        (status = 404, description = "Tool call not found"),
+    ),
+    tag = "chat"
+)]
+async fn delete_tool_call(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, AppError> {
+    fetch_tool_call_from_engine(&state, &id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    delete_tool_call_engine_projection(&state, &id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 // ---------------------------------------------------------------------------
 // WebSocket — yrs CRDT sync
 // ---------------------------------------------------------------------------
@@ -2141,6 +2728,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "/api/attachments/:id/links/:link_id",
             axum::routing::delete(delete_attachment_link),
         )
+        // Chat history + tool call metadata backed by photon-engine
+        .route(
+            "/api/chat/messages",
+            get(list_chat_messages).post(create_chat_message),
+        )
+        .route(
+            "/api/chat/messages/:id",
+            get(get_chat_message)
+                .put(update_chat_message)
+                .delete(delete_chat_message),
+        )
+        .route(
+            "/api/chat/tool-calls",
+            get(list_tool_calls).post(create_tool_call),
+        )
+        .route(
+            "/api/chat/tool-calls/:id",
+            get(get_tool_call)
+                .put(update_tool_call)
+                .delete(delete_tool_call),
+        )
         // WebSocket
         .route("/ws", get(ws_handler))
         // Swagger UI
@@ -2218,6 +2826,30 @@ mod tests {
             .unwrap()
     }
 
+    async fn engine_chat_message_record(
+        state: &AppState,
+        message_id: &str,
+    ) -> photon_engine::Record {
+        state
+            .engine
+            .record(&engine_record_key("chat_messages", message_id))
+            .await
+            .unwrap()
+            .unwrap()
+    }
+
+    async fn engine_tool_call_record(
+        state: &AppState,
+        tool_call_id: &str,
+    ) -> photon_engine::Record {
+        state
+            .engine
+            .record(&engine_record_key("tool_calls", tool_call_id))
+            .await
+            .unwrap()
+            .unwrap()
+    }
+
     async fn test_app() -> (Router, Arc<AppState>) {
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
@@ -2267,6 +2899,26 @@ mod tests {
             .route(
                 "/api/attachments/:id/links/:link_id",
                 axum::routing::delete(delete_attachment_link),
+            )
+            .route(
+                "/api/chat/messages",
+                get(list_chat_messages).post(create_chat_message),
+            )
+            .route(
+                "/api/chat/messages/:id",
+                get(get_chat_message)
+                    .put(update_chat_message)
+                    .delete(delete_chat_message),
+            )
+            .route(
+                "/api/chat/tool-calls",
+                get(list_tool_calls).post(create_tool_call),
+            )
+            .route(
+                "/api/chat/tool-calls/:id",
+                get(get_tool_call)
+                    .put(update_tool_call)
+                    .delete(delete_tool_call),
             )
             .with_state(state.clone());
 
@@ -2835,6 +3487,205 @@ mod tests {
                 .await
                 .is_deleted());
         }
+    }
+
+    #[tokio::test]
+    async fn test_chat_messages_and_tool_calls_are_engine_collections() {
+        let (app, state) = test_app().await;
+
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/chat/messages")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "id": "msg-user-1",
+                            "thread_id": "general",
+                            "role": "user",
+                            "content": "Search for blocker issues",
+                            "attachment_ids": ["att-1"]
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let message: ChatMessageRecord = serde_json::from_slice(&body).unwrap();
+        assert_eq!(message.thread_id, DEFAULT_CHAT_THREAD_ID);
+        assert_eq!(message.role, "user");
+        assert_eq!(message.attachment_ids, vec!["att-1"]);
+        assert_eq!(
+            engine_chat_message_record(&state, &message.id).await.value,
+            serde_json::to_value(&message).unwrap()
+        );
+
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/chat/messages/msg-user-1")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "content": "Search for blocker issues in Photon",
+                            "attachment_ids": ["att-1", "att-2"]
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let updated_message: ChatMessageRecord = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            updated_message.content,
+            "Search for blocker issues in Photon"
+        );
+        assert_eq!(updated_message.attachment_ids, vec!["att-1", "att-2"]);
+        assert_eq!(
+            engine_chat_message_record(&state, &updated_message.id)
+                .await
+                .value,
+            serde_json::to_value(&updated_message).unwrap()
+        );
+
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/chat/tool-calls")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "id": "call-1",
+                            "thread_id": "general",
+                            "message_id": "msg-user-1",
+                            "tool_type": "issue_search",
+                            "name": "Issue Search",
+                            "args": { "query": "blocker" },
+                            "status": "running"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let tool_call: ToolCallRecord = serde_json::from_slice(&body).unwrap();
+        assert_eq!(tool_call.status, "running");
+        assert_eq!(
+            engine_tool_call_record(&state, &tool_call.id).await.value,
+            serde_json::to_value(&tool_call).unwrap()
+        );
+
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/chat/tool-calls/call-1")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "status": "completed",
+                            "result": { "data": { "total": 2 }, "duration": 18 }
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let completed_call: ToolCallRecord = serde_json::from_slice(&body).unwrap();
+        assert_eq!(completed_call.status, "completed");
+        assert_eq!(completed_call.result.as_ref().unwrap()["data"]["total"], 2);
+        assert_eq!(
+            engine_tool_call_record(&state, &completed_call.id)
+                .await
+                .value,
+            serde_json::to_value(&completed_call).unwrap()
+        );
+
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/chat/messages?thread_id=general")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let messages: ChatMessageListResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(messages.total, 1);
+        assert_eq!(messages.messages[0].id, "msg-user-1");
+
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/chat/tool-calls?message_id=msg-user-1")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let tool_calls: ToolCallListResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(tool_calls.total, 1);
+        assert_eq!(tool_calls.tool_calls[0].id, "call-1");
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/api/chat/messages/msg-user-1")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+        assert!(engine_chat_message_record(&state, "msg-user-1")
+            .await
+            .is_deleted());
+        assert!(engine_tool_call_record(&state, "call-1").await.is_deleted());
     }
 
     // -----------------------------------------------------------------------

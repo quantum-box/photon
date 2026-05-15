@@ -228,7 +228,7 @@ WebSocket や Durable Object は、この protocol を素早く起動する通�
 
 - [x] attachment metadata と surface link を generic record にする
 - [x] file bytes は storage provider に残し、engine には reference のみ保存する
-- [ ] chat messages / tool calls / tool results を collection 化する
+- [x] chat messages / tool calls / tool results を collection 化する
 - [ ] offline draft と server accepted history の reconciliation を定義する
 
 ### Phase 4: Tachyon integration 📝
@@ -308,3 +308,4 @@ WebSocket や Durable Object は、この protocol を素早く起動する通�
 - 2026-05-15: document metadata API を `collection = documents` の generic record projection で実装。issue 専用テーブルに寄せず、create / update / delete / list が `photon_engine_records` と operation log を通ることを server integration test で固定。
 - 2026-05-15: frontend docs metadata は `/api/documents` の server accepted projection を先に使い、PGlite は local cache / offline fallback として扱う形へ変更。document body の Yjs storage は引き続き別境界に残した。
 - 2026-05-15: attachment metadata と surface link を `attachments` / `attachment_links` collections の generic record として mirror。file bytes は保存せず、storage provider / key / preview metadata の reference のみ engine projection に載せることを integration test で固定。
+- 2026-05-15: chat history API を追加し、`chat_messages` / `tool_calls` collections に accepted message・tool call・tool result payload を保存できるようにした。message delete 時は紐づく tool calls も tombstone にすることを server integration test で固定。
