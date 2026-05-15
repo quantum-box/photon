@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     net::SocketAddr,
     sync::{
         atomic::{AtomicI64, AtomicUsize, Ordering},
@@ -18,6 +18,10 @@ use axum::{
     Json, Router,
 };
 use futures_util::{SinkExt, StreamExt};
+use photon_engine::{
+    ActorId, CollectionName, HybridTimestamp, Operation, OperationKind, PhotonEngine, RecordKey,
+    ScopeId, SqliteAdapter,
+};
 use serde::{Deserialize, Deserializer, Serialize};
 use sqlx::{sqlite::SqlitePoolOptions, SqlitePool};
 use tokio::sync::{broadcast, RwLock};
@@ -311,6 +315,91 @@ fn parse_preview_metadata(raw: &str) -> serde_json::Value {
     serde_json::from_str(raw).unwrap_or_else(|_| serde_json::json!({}))
 }
 
+const ENGINE_SCOPE_ID: &str = "workspace:photon-default";
+const ENGINE_ACTOR_ID: &str = "photon-server";
+
+enum EngineRecordMutation {
+    Upsert(serde_json::Value),
+    Patch(serde_json::Value),
+    Delete,
+}
+
+fn engine_record_key(collection: &str, record_id: &str) -> RecordKey {
+    RecordKey::new(
+        ScopeId::from(ENGINE_SCOPE_ID),
+        CollectionName::from(collection),
+        record_id,
+    )
+}
+
+fn value_to_patch_fields(
+    value: serde_json::Value,
+) -> Result<BTreeMap<String, serde_json::Value>, AppError> {
+    match value {
+        serde_json::Value::Object(fields) => Ok(fields.into_iter().collect()),
+        _ => Err(AppError::InvalidEngineRecord),
+    }
+}
+
+async fn apply_engine_record_operation(
+    state: &AppState,
+    collection: &str,
+    record_id: &str,
+    mutation: EngineRecordMutation,
+) -> Result<(), AppError> {
+    let kind = match mutation {
+        EngineRecordMutation::Upsert(value) => OperationKind::Upsert { value },
+        EngineRecordMutation::Patch(value) => OperationKind::Patch {
+            fields: value_to_patch_fields(value)?,
+        },
+        EngineRecordMutation::Delete => OperationKind::Delete,
+    };
+    let actor_id = ActorId::from(ENGINE_ACTOR_ID);
+    let operation = Operation::new(
+        engine_record_key(collection, record_id),
+        actor_id.clone(),
+        kind,
+    )
+    .with_timestamp(HybridTimestamp::now(actor_id))
+    .with_metadata(serde_json::json!({ "source": "photon-server-rest" }));
+    let remote_sequence = state.engine_next_seq.fetch_add(1, Ordering::SeqCst) + 1;
+
+    state
+        .engine
+        .apply_remote_operation(operation, remote_sequence)
+        .await?;
+
+    Ok(())
+}
+
+fn issue_to_engine_value(issue: &Issue) -> Result<serde_json::Value, AppError> {
+    Ok(serde_json::to_value(issue)?)
+}
+
+async fn upsert_issue_engine_projection(state: &AppState, issue: &Issue) -> Result<(), AppError> {
+    apply_engine_record_operation(
+        state,
+        "issues",
+        &issue.id,
+        EngineRecordMutation::Upsert(issue_to_engine_value(issue)?),
+    )
+    .await
+}
+
+async fn patch_issue_engine_projection(state: &AppState, issue: &Issue) -> Result<(), AppError> {
+    apply_engine_record_operation(
+        state,
+        "issues",
+        &issue.id,
+        EngineRecordMutation::Patch(issue_to_engine_value(issue)?),
+    )
+    .await
+}
+
+async fn delete_issue_engine_projection(state: &AppState, issue_id: &str) -> Result<(), AppError> {
+    apply_engine_record_operation(state, "issues", issue_id, EngineRecordMutation::Delete).await
+}
+
 async fn next_issue_identifier(pool: &SqlitePool) -> Result<String, sqlx::Error> {
     let max_number: Option<i64> = sqlx::query_scalar(
         "SELECT MAX(CAST(SUBSTR(identifier, 5) AS INTEGER))
@@ -413,6 +502,8 @@ const YJS_COMPACTION_THRESHOLD: i64 = 100;
 
 pub struct AppState {
     pub db: SqlitePool,
+    pub engine: PhotonEngine<SqliteAdapter>,
+    pub engine_next_seq: AtomicI64,
     pub rooms: RwLock<HashMap<String, Arc<RoomState>>>,
 }
 
@@ -547,6 +638,8 @@ async fn create_issue(
         .await?
         .ok_or(AppError::NotFound)?;
 
+    upsert_issue_engine_projection(&state, &issue).await?;
+
     Ok((StatusCode::CREATED, Json(issue)))
 }
 
@@ -613,6 +706,8 @@ async fn update_issue(
         .await?
         .ok_or(AppError::NotFound)?;
 
+    patch_issue_engine_projection(&state, &issue).await?;
+
     Ok(Json(issue))
 }
 
@@ -638,6 +733,8 @@ async fn delete_issue(
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound);
     }
+
+    delete_issue_engine_projection(&state, &id).await?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -1124,7 +1221,10 @@ async fn handle_ws(socket: WebSocket, state: Arc<RoomState>) {
 #[derive(Debug)]
 enum AppError {
     NotFound,
+    InvalidEngineRecord,
     Sqlx(sqlx::Error),
+    Engine(photon_engine::EngineError),
+    Serde(serde_json::Error),
 }
 
 impl From<sqlx::Error> for AppError {
@@ -1133,12 +1233,36 @@ impl From<sqlx::Error> for AppError {
     }
 }
 
+impl From<photon_engine::EngineError> for AppError {
+    fn from(e: photon_engine::EngineError) -> Self {
+        AppError::Engine(e)
+    }
+}
+
+impl From<serde_json::Error> for AppError {
+    fn from(e: serde_json::Error) -> Self {
+        AppError::Serde(e)
+    }
+}
+
 impl IntoResponse for AppError {
     fn into_response(self) -> axum::response::Response {
         let (status, message) = match self {
             AppError::NotFound => (StatusCode::NOT_FOUND, "Not found"),
+            AppError::InvalidEngineRecord => {
+                tracing::error!("Invalid photon engine record mutation");
+                (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error")
+            }
             AppError::Sqlx(e) => {
                 tracing::error!("Database error: {e}");
+                (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error")
+            }
+            AppError::Engine(e) => {
+                tracing::error!("Photon engine error: {e}");
+                (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error")
+            }
+            AppError::Serde(e) => {
+                tracing::error!("Serialization error: {e}");
                 (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error")
             }
         };
@@ -1162,6 +1286,20 @@ async fn init_db(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         .await?;
     ensure_issue_projection_columns(pool).await?;
     Ok(())
+}
+
+async fn init_engine(
+    pool: &SqlitePool,
+) -> Result<PhotonEngine<SqliteAdapter>, photon_engine::EngineError> {
+    let adapter = SqliteAdapter::from_pool(pool.clone());
+    adapter.migrate().await?;
+    Ok(PhotonEngine::new(adapter))
+}
+
+async fn init_engine_next_sequence(pool: &SqlitePool) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar("SELECT COALESCE(MAX(remote_sequence), 0) FROM photon_engine_operations")
+        .fetch_one(pool)
+        .await
 }
 
 async fn issue_table_has_column(pool: &SqlitePool, column_name: &str) -> Result<bool, sqlx::Error> {
@@ -1570,10 +1708,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
 
     init_db(&pool).await?;
+    let engine = init_engine(&pool).await?;
+    let engine_next_seq = init_engine_next_sequence(&pool).await?;
     seed_if_empty(&pool).await?;
 
     let state = Arc::new(AppState {
         db: pool,
+        engine,
+        engine_next_seq: AtomicI64::new(engine_next_seq),
         rooms: RwLock::new(HashMap::new()),
     });
 
@@ -1642,7 +1784,18 @@ mod tests {
     use super::*;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
+    use photon_engine::StorageAdapter;
     use tower::ServiceExt;
+
+    async fn engine_issue_value(state: &AppState, issue_id: &str) -> serde_json::Value {
+        state
+            .engine
+            .record(&engine_record_key("issues", issue_id))
+            .await
+            .unwrap()
+            .unwrap()
+            .value
+    }
 
     async fn test_app() -> (Router, Arc<AppState>) {
         let pool = SqlitePoolOptions::new()
@@ -1652,9 +1805,13 @@ mod tests {
             .unwrap();
 
         init_db(&pool).await.unwrap();
+        let engine = init_engine(&pool).await.unwrap();
+        let engine_next_seq = init_engine_next_sequence(&pool).await.unwrap();
 
         let state = Arc::new(AppState {
             db: pool,
+            engine,
+            engine_next_seq: AtomicI64::new(engine_next_seq),
             rooms: RwLock::new(HashMap::new()),
         });
 
@@ -1707,7 +1864,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_and_list_issues() {
-        let (app, _state) = test_app().await;
+        let (app, state) = test_app().await;
 
         // Create
         let resp = app
@@ -1732,6 +1889,27 @@ mod tests {
             .unwrap();
 
         assert_eq!(resp.status(), StatusCode::CREATED);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let created: Issue = serde_json::from_slice(&body).unwrap();
+        let engine_value = engine_issue_value(&state, &created.id).await;
+        assert_eq!(engine_value, serde_json::to_value(&created).unwrap());
+
+        let operations = state
+            .engine
+            .storage()
+            .list_operations(photon_engine::OperationFilter {
+                scope: Some(ScopeId::from(ENGINE_SCOPE_ID)),
+                collection: Some(CollectionName::from("issues")),
+                status: Some(photon_engine::OperationStatus::Accepted),
+                ..photon_engine::OperationFilter::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(operations.len(), 1);
+        assert_eq!(operations[0].remote_sequence, Some(1));
+        assert_eq!(init_engine_next_sequence(&state.db).await.unwrap(), 1);
 
         // List
         let resp = app
@@ -1757,6 +1935,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_engine_record_helper_accepts_arbitrary_collections() {
+        let (_app, state) = test_app().await;
+
+        apply_engine_record_operation(
+            &state,
+            "documents",
+            "doc-1",
+            EngineRecordMutation::Upsert(serde_json::json!({
+                "title": "Offline sync spec",
+                "status": "draft"
+            })),
+        )
+        .await
+        .unwrap();
+        apply_engine_record_operation(
+            &state,
+            "documents",
+            "doc-1",
+            EngineRecordMutation::Patch(serde_json::json!({
+                "status": "ready"
+            })),
+        )
+        .await
+        .unwrap();
+
+        let record = state
+            .engine
+            .record(&engine_record_key("documents", "doc-1"))
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(record.value["title"], "Offline sync spec");
+        assert_eq!(record.value["status"], "ready");
+    }
+
+    #[tokio::test]
     async fn test_get_not_found() {
         let (app, _) = test_app().await;
 
@@ -1775,7 +1990,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_issue() {
-        let (app, _) = test_app().await;
+        let (app, state) = test_app().await;
 
         // Create
         let resp = app
@@ -1834,11 +2049,14 @@ mod tests {
         assert_eq!(updated.assignee, None);
         assert_eq!(updated.labels, vec!["backend"]);
         assert_eq!(updated.project, "API Gateway");
+
+        let engine_value = engine_issue_value(&state, &updated.id).await;
+        assert_eq!(engine_value, serde_json::to_value(&updated).unwrap());
     }
 
     #[tokio::test]
     async fn test_delete_issue() {
-        let (app, _) = test_app().await;
+        let (app, state) = test_app().await;
 
         // Create
         let resp = app
@@ -1875,6 +2093,13 @@ mod tests {
             .unwrap();
 
         assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+        let engine_record = state
+            .engine
+            .record(&engine_record_key("issues", &created.id))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(engine_record.is_deleted());
 
         // Verify gone
         let resp = app

@@ -131,9 +131,9 @@ WebSocket や Durable Object は、この protocol を素早く起動する通�
 - [x] generic operation / record / cursor / conflict 型を定義する
 - [x] local storage adapter contract を定義する
 - [x] PGlite / SQLite のどちらかで最初の adapter を作る
-- [ ] issue CRUD を operation log に載せる
+- [x] issue CRUD を operation log に載せる
 - [ ] 既存 Yjs issues projection との split-brain を解消する
-- [ ] `packages/server` の REST issue API と engine projection を一致させる
+- [x] `packages/server` の REST issue API と engine projection を一致させる
 
 ### Phase 2: Docs / Yjs snapshot を engine 管理に寄せる 📝
 
@@ -211,7 +211,7 @@ WebSocket や Durable Object は、この protocol を素早く起動する通�
 
 - [x] Photon Engine の Rust core が最低 1 adapter で動作する
 - [ ] browser から WASM / TS wrapper 経由で local mutation を保存できる
-- [ ] issue data が engine projection と server API で一致する
+- [x] issue data が engine projection と server API で一致する
 - [x] offline two-client convergence test が通る
 - [ ] conflict policy の初期セットが test で固定されている
 - [x] private package / repo 運用方針が README または ADR に記録されている
@@ -221,3 +221,4 @@ WebSocket や Durable Object は、この protocol を素早く起動する通�
 - 2026-05-15: 初期 taskdoc を作成。現時点では実装前の設計・追跡ドキュメントとして扱う。
 - 2026-05-15: `packages/photon-engine` を private Rust crate として追加。generic operation / record / cursor / conflict、storage adapter contract、memory adapter、feature-gated SQLite adapter、projection / sync skeleton、adapter contract test を実装開始。
 - 2026-05-15: integration test を追加。`sync_once` の push/pull、offline two-client convergence、duplicate push dedupe、server conflict / rejection、SQLite reopen persistence を検証。set add-wins の競合解決バグも test で検出して修正。
+- 2026-05-15: `packages/server` に `photon-engine` を接続。generic `scope + collection + record_id` helper 経由で issue create / update / delete を accepted operation として記録し、REST issue response と engine projection の一致を server tests で検証。
