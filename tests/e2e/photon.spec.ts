@@ -83,11 +83,19 @@ test.describe('Photon shell', () => {
       'data-saved-signature',
       'kpi-tree:2:1'
     )
+    await page.waitForTimeout(500)
 
     await page.reload()
     await expect(page.getByTestId('workflow-node-record')).toHaveCount(2)
     await expect(page.locator('.react-flow__edge')).toHaveCount(1)
     await expect(page.getByText('KPI tree item')).toBeVisible()
+
+    await page.locator('.react-flow__node').first().dblclick()
+    await expect(page.getByTestId('workflow-preview-sheet')).toBeVisible()
+    await expect(page.getByText('Item preview')).toBeVisible()
+    await expect(page.getByTestId('workflow-preview-sheet').getByText(/PLT-/)).toBeVisible()
+    await page.getByTestId('workflow-preview-close').click()
+    await expect(page.getByTestId('workflow-preview-sheet')).toHaveCount(0)
 
     const firstNode = page.locator('.react-flow__node').first()
     const beforeDrag = await firstNode.boundingBox()

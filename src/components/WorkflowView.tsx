@@ -1,6 +1,6 @@
 /* eslint-disable react-hooks/set-state-in-effect */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { DragEvent } from 'react'
+import type { DragEvent, MouseEvent } from 'react'
 import {
   Background,
   BackgroundVariant,
@@ -55,6 +55,20 @@ type WorkflowNodeData = {
 }
 
 type WorkflowRecordNode = Node<WorkflowNodeData, 'workflowRecord'>
+
+type WorkflowPreviewRecord = Pick<
+  DatabaseRecord,
+  | 'id'
+  | 'identifier'
+  | 'title'
+  | 'description'
+  | 'status'
+  | 'priority'
+  | 'assignee'
+  | 'labels'
+  | 'project'
+  | 'updatedAt'
+>
 
 const workflowTemplates: WorkflowTemplate[] = [
   {
@@ -115,6 +129,122 @@ function WorkflowRecordNode({ data, selected }: NodeProps<WorkflowRecordNode>) {
         data-testid="workflow-handle-source"
       />
     </div>
+  )
+}
+
+function WorkflowItemPreviewSheet({
+  record,
+  onClose,
+}: {
+  record: WorkflowPreviewRecord | null
+  onClose: () => void
+}) {
+  if (!record) return null
+
+  const status = statusConfig[record.status]
+  const priority = priorityConfig[record.priority]
+
+  return (
+    <aside
+      className="hidden w-80 shrink-0 border-l border-border bg-panel md:flex md:flex-col"
+      data-testid="workflow-preview-sheet"
+    >
+      <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
+        <div className="min-w-0">
+          <div className="text-[10px] font-medium uppercase tracking-wider text-subtle">
+            Item preview
+          </div>
+          <div className="mt-1 truncate text-xs font-medium text-muted">
+            {record.identifier}
+          </div>
+        </div>
+        <button
+          className="flex h-7 w-7 shrink-0 items-center justify-center rounded bg-surface-hover text-sm text-muted hover:text-foreground"
+          data-testid="workflow-preview-close"
+          onClick={onClose}
+          title="Close preview"
+        >
+          x
+        </button>
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-y-auto p-4">
+        <h2 className="text-base font-semibold leading-snug text-foreground">
+          {record.title}
+        </h2>
+
+        <div className="mt-4 space-y-3">
+          <div className="rounded-md border border-border bg-surface p-3">
+            <div className="text-[10px] font-medium uppercase tracking-wider text-subtle">
+              Status
+            </div>
+            <div className="mt-2 flex items-center gap-2 text-sm text-foreground">
+              <span style={{ color: status.color }}>{status.icon}</span>
+              <span>{status.label}</span>
+            </div>
+          </div>
+
+          <div className="rounded-md border border-border bg-surface p-3">
+            <div className="text-[10px] font-medium uppercase tracking-wider text-subtle">
+              Priority
+            </div>
+            <div className="mt-2 flex items-center gap-2 text-sm text-foreground">
+              <span style={{ color: priority.color }}>{priority.icon}</span>
+              <span>{priority.label}</span>
+            </div>
+          </div>
+
+          <div className="rounded-md border border-border bg-surface p-3">
+            <div className="text-[10px] font-medium uppercase tracking-wider text-subtle">
+              Database
+            </div>
+            <div className="mt-2 text-sm text-foreground">
+              {record.project || 'All databases'}
+            </div>
+          </div>
+
+          <div className="rounded-md border border-border bg-surface p-3">
+            <div className="text-[10px] font-medium uppercase tracking-wider text-subtle">
+              Owner
+            </div>
+            <div className="mt-2 text-sm text-foreground">
+              {record.assignee || 'Unassigned'}
+            </div>
+          </div>
+
+          {record.labels.length > 0 && (
+            <div className="rounded-md border border-border bg-surface p-3">
+              <div className="text-[10px] font-medium uppercase tracking-wider text-subtle">
+                Labels
+              </div>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {record.labels.map((label) => (
+                  <span
+                    key={label}
+                    className="rounded bg-canvas px-2 py-1 text-[10px] font-medium text-muted"
+                  >
+                    {label}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="mt-4 rounded-md border border-border bg-surface p-3">
+          <div className="text-[10px] font-medium uppercase tracking-wider text-subtle">
+            Description
+          </div>
+          <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-muted">
+            {record.description || 'No description.'}
+          </p>
+        </div>
+
+        <div className="mt-4 text-[10px] text-subtle">
+          Updated {new Date(record.updatedAt).toLocaleString()}
+        </div>
+      </div>
+    </aside>
   )
 }
 
@@ -199,18 +329,42 @@ export function WorkflowView({
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle')
   const [savedSignature, setSavedSignature] = useState('')
   const [savedCountSignature, setSavedCountSignature] = useState('')
+  const [previewRecordId, setPreviewRecordId] = useState<string | null>(null)
   const nodeSequence = useRef(0)
   const hasLocalCanvasChanges = useRef(false)
   const skipNextSyncWrite = useRef(false)
   const pendingSync = useRef<PendingWorkflowSync | null>(null)
   const syncThrottleTimer = useRef<number | null>(null)
   const lastSyncAt = useRef(0)
+  const localNodeDragActive = useRef(false)
 
   const selectedTemplate = workflowTemplates.find(
     (template) => template.id === selectedTemplateId
   ) ?? workflowTemplates[0]
 
   const visibleRecords = useMemo(() => records.slice(0, 40), [records])
+  const previewRecord = useMemo<WorkflowPreviewRecord | null>(() => {
+    if (!previewRecordId) return null
+
+    const liveRecord = records.find((record) => record.id === previewRecordId)
+    if (liveRecord) return liveRecord
+
+    const node = nodes.find((candidate) => candidate.data.recordId === previewRecordId)
+    if (!node) return null
+
+    return {
+      id: node.data.recordId,
+      identifier: node.data.identifier,
+      title: node.data.title,
+      description: node.data.description,
+      status: node.data.status,
+      priority: node.data.priority,
+      assignee: null,
+      labels: [],
+      project: '',
+      updatedAt: new Date().toISOString(),
+    }
+  }, [nodes, previewRecordId, records])
   const canvasCountSignature = useMemo(
     () => `${selectedTemplateId}:${nodes.length}:${edges.length}`,
     [edges.length, nodes.length, selectedTemplateId]
@@ -298,7 +452,20 @@ export function WorkflowView({
         ]
       })
 
-      setNodes(nextNodes)
+      setNodes((current) => {
+        const currentById = new Map(current.map((node) => [node.id, node]))
+        return nextNodes.map((nextNode) => {
+          const existing = currentById.get(nextNode.id)
+          if (!existing) return nextNode
+
+          return {
+            ...existing,
+            type: nextNode.type,
+            position: nextNode.position,
+            data: nextNode.data,
+          }
+        })
+      })
       setEdges(canvas.edges)
       setSelectedTemplateId(canvas.selectedTemplateId)
       nodeSequence.current = nextNodes.reduce(
@@ -373,6 +540,7 @@ export function WorkflowView({
     function applyCurrentSyncedCanvas() {
       const syncedCanvas = getSyncedWorkflowCanvas(databaseId)
       if (!syncedCanvas) return
+      if (localNodeDragActive.current) return
 
       skipNextSyncWrite.current = true
       applyWorkflowCanvas(syncedCanvas)
@@ -418,14 +586,14 @@ export function WorkflowView({
     }
 
     const cacheTimer = window.setTimeout(() => {
-    void saveWorkflowCanvas({
-      databaseId,
-      selectedTemplateId,
-      nodes: persistedNodes,
-      edges,
-    }).catch(() => {
-      // PGlite is a local cache for fast reload; Yjs remains the sync source.
-    })
+      void saveWorkflowCanvas({
+        databaseId,
+        selectedTemplateId,
+        nodes: persistedNodes,
+        edges,
+      }).catch(() => {
+        // PGlite is a local cache for fast reload; Yjs remains the sync source.
+      })
     }, WORKFLOW_CACHE_WRITE_DELAY_MS)
 
     return () => {
@@ -499,6 +667,12 @@ export function WorkflowView({
   const handleNodesChange = useCallback(
     (changes: NodeChange<WorkflowRecordNode>[]) => {
       hasLocalCanvasChanges.current = true
+      localNodeDragActive.current = changes.some(
+        (change) =>
+          change.type === 'position' &&
+          'dragging' in change &&
+          change.dragging === true
+      )
       setNodes((current) => applyNodeChanges(changes, current))
     },
     []
@@ -518,6 +692,13 @@ export function WorkflowView({
       )
     )
   }, [])
+
+  const handleNodeDoubleClick = useCallback(
+    (_event: MouseEvent, node: WorkflowRecordNode) => {
+      setPreviewRecordId(node.data.recordId)
+    },
+    []
+  )
 
   return (
     <div className="flex h-full min-h-0 bg-canvas">
@@ -661,6 +842,7 @@ export function WorkflowView({
             edgesFocusable={false}
             onNodesChange={handleNodesChange}
             onConnect={handleConnect}
+            onNodeDoubleClick={handleNodeDoubleClick}
             onInit={setReactFlowInstance}
             fitView
             fitViewOptions={{ padding: 0.25 }}
@@ -683,6 +865,10 @@ export function WorkflowView({
           </ReactFlow>
         </div>
       </div>
+      <WorkflowItemPreviewSheet
+        record={previewRecord}
+        onClose={() => setPreviewRecordId(null)}
+      />
     </div>
   )
 }
