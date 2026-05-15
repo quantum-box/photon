@@ -16,9 +16,9 @@ use axum::{
     Json, Router,
 };
 use photon_engine::{
-    CollectionName, Conflict, Operation, OperationFilter, OperationStatus, PhotonEngine,
-    PullRequest, PullResult, PulledOperation, PushDecision, PushRequest, PushResult, Record,
-    RecordKey, ScopeId, SqliteAdapter, StorageAdapter, SyncCursor,
+    ActorId, CollectionName, Conflict, HybridTimestamp, Operation, OperationFilter, OperationKind,
+    OperationStatus, PhotonEngine, PullRequest, PullResult, PulledOperation, PushDecision,
+    PushRequest, PushResult, Record, RecordKey, ScopeId, SqliteAdapter, StorageAdapter, SyncCursor,
 };
 use serde::Serialize;
 use tokio::net::TcpListener;
@@ -39,6 +39,7 @@ struct MockTachyonState {
 #[derive(Debug)]
 enum MockApiError {
     Engine(photon_engine::EngineError),
+    BadRequest(String),
 }
 
 impl From<photon_engine::EngineError> for MockApiError {
@@ -62,6 +63,11 @@ impl From<sqlx::Error> for MockApiError {
 impl IntoResponse for MockApiError {
     fn into_response(self) -> axum::response::Response {
         match self {
+            Self::BadRequest(message) => (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": message })),
+            )
+                .into_response(),
             Self::Engine(error) => {
                 tracing::error!(%error, "mock Tachyon API engine error");
                 (
@@ -95,9 +101,24 @@ struct AdminEvent {
 struct AdminStateResponse {
     remote: &'static str,
     position: i64,
+    scenarios: Vec<AdminScenario>,
     scopes: Vec<AdminScope>,
     operations: Vec<AdminOperation>,
     events: Vec<AdminEvent>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct AdminScenario {
+    id: &'static str,
+    label: &'static str,
+    description: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+struct AdminScenarioResponse {
+    scenario: AdminScenario,
+    position: i64,
+    operations_added: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -196,6 +217,7 @@ fn build_app(state: MockTachyonState) -> Router {
         .route("/", get(admin_dashboard))
         .route("/__admin", get(admin_dashboard))
         .route("/__admin/state", get(admin_state))
+        .route("/__admin/scenarios/:scenario", post(apply_admin_scenario))
         .route("/favicon.ico", get(favicon))
         .route("/health", get(health))
         .route("/v1/sync/push", post(push_sync))
@@ -299,9 +321,110 @@ async fn admin_state(
     Ok(Json(AdminStateResponse {
         remote: DEFAULT_REMOTE_ID,
         position: current_position(&state),
+        scenarios: admin_scenarios(),
         scopes,
         operations,
         events,
+    }))
+}
+
+async fn apply_admin_scenario(
+    State(state): State<MockTachyonState>,
+    Path(scenario_id): Path<String>,
+) -> Result<Json<AdminScenarioResponse>, MockApiError> {
+    let scenario = admin_scenarios()
+        .into_iter()
+        .find(|scenario| scenario.id == scenario_id)
+        .ok_or_else(|| MockApiError::BadRequest(format!("unknown scenario: {scenario_id}")))?;
+
+    reset_state_inner(&state).await?;
+    record_event(
+        &state,
+        "scenario_started",
+        None,
+        Some(&ScopeId::from("workspace:scenario")),
+        serde_json::json!({
+            "scenario": scenario.id,
+            "description": scenario.description
+        }),
+    )
+    .await;
+
+    let mut operations_added = 0;
+    for operation in scenario_operations(scenario.id)? {
+        let remote_sequence = state.next_sequence.fetch_add(1, Ordering::SeqCst) + 1;
+        state
+            .engine
+            .apply_remote_operation(operation.clone(), remote_sequence)
+            .await?;
+        operations_added += 1;
+        record_event(
+            &state,
+            "scenario_push_accepted",
+            Some(&operation),
+            Some(&operation.key.scope),
+            serde_json::json!({
+                "scenario": scenario.id,
+                "remote_sequence": remote_sequence
+            }),
+        )
+        .await;
+    }
+
+    if scenario.id == "conflict" {
+        let operation = patch_operation(
+            "op-scenario-conflict",
+            "workspace:scenario",
+            "issues",
+            "issue-conflict",
+            "scenario-client",
+            30,
+            serde_json::json!({ "status": "done" }),
+        )
+        .with_metadata(serde_json::json!({
+            "mock_conflict_reason": "scenario conflict"
+        }));
+        record_event(
+            &state,
+            "push_conflict",
+            Some(&operation),
+            Some(&operation.key.scope),
+            serde_json::json!({
+                "scenario": scenario.id,
+                "reason": "scenario conflict"
+            }),
+        )
+        .await;
+    }
+
+    if scenario.id == "rejection" {
+        let operation = patch_operation(
+            "op-scenario-rejected",
+            "workspace:scenario",
+            "issues",
+            "issue-rejected",
+            "scenario-client",
+            40,
+            serde_json::json!({ "status": "invalid" }),
+        )
+        .with_metadata(serde_json::json!({ "mock_reject": true }));
+        record_event(
+            &state,
+            "push_rejected",
+            Some(&operation),
+            Some(&operation.key.scope),
+            serde_json::json!({
+                "scenario": scenario.id,
+                "reason": "mock Tachyon validation rejected operation"
+            }),
+        )
+        .await;
+    }
+
+    Ok(Json(AdminScenarioResponse {
+        scenario,
+        position: current_position(&state),
+        operations_added,
     }))
 }
 
@@ -488,6 +611,11 @@ async fn get_record(
 }
 
 async fn reset_state(State(state): State<MockTachyonState>) -> Result<StatusCode, MockApiError> {
+    reset_state_inner(&state).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn reset_state_inner(state: &MockTachyonState) -> Result<(), MockApiError> {
     let pool = state.engine.storage().pool();
     for table in [
         "photon_engine_operations",
@@ -514,11 +642,123 @@ async fn reset_state(State(state): State<MockTachyonState>) -> Result<StatusCode
             detail: serde_json::json!({ "status": "cleared" }),
         });
     }
-    Ok(StatusCode::NO_CONTENT)
+    Ok(())
 }
 
 fn current_position(state: &MockTachyonState) -> i64 {
     state.next_sequence.load(Ordering::SeqCst)
+}
+
+fn admin_scenarios() -> Vec<AdminScenario> {
+    vec![
+        AdminScenario {
+            id: "arbitrary-collections",
+            label: "Arbitrary collections",
+            description: "Seeds issues and widgets records, matching the generic collection integration test.",
+        },
+        AdminScenario {
+            id: "conflict",
+            label: "Conflict response",
+            description: "Seeds a baseline issue and records a mock conflict event for the next issue update.",
+        },
+        AdminScenario {
+            id: "rejection",
+            label: "Rejected operation",
+            description: "Seeds a valid issue and records a mock validation rejection event.",
+        },
+    ]
+}
+
+fn scenario_operations(scenario: &str) -> Result<Vec<Operation>, MockApiError> {
+    match scenario {
+        "arbitrary-collections" => Ok(vec![
+            patch_operation(
+                "op-scenario-issue",
+                "workspace:scenario",
+                "issues",
+                "issue-1",
+                "scenario-client",
+                10,
+                serde_json::json!({ "title": "from scenario", "status": "todo" }),
+            ),
+            upsert_operation(
+                "op-scenario-widget",
+                "workspace:scenario",
+                "widgets",
+                "widget-1",
+                "scenario-client",
+                11,
+                serde_json::json!({
+                    "name": "portable sync payload",
+                    "dimensions": { "width": 12, "height": 8 },
+                    "tags": ["custom", "non-issue"]
+                }),
+            ),
+        ]),
+        "conflict" => Ok(vec![patch_operation(
+            "op-scenario-conflict-baseline",
+            "workspace:scenario",
+            "issues",
+            "issue-conflict",
+            "server-seed",
+            20,
+            serde_json::json!({ "status": "todo", "title": "conflict baseline" }),
+        )]),
+        "rejection" => Ok(vec![patch_operation(
+            "op-scenario-rejection-baseline",
+            "workspace:scenario",
+            "issues",
+            "issue-rejected",
+            "server-seed",
+            20,
+            serde_json::json!({ "status": "todo", "title": "validation baseline" }),
+        )]),
+        other => Err(MockApiError::BadRequest(format!(
+            "unknown scenario: {other}"
+        ))),
+    }
+}
+
+fn patch_operation(
+    id: &str,
+    scope: &str,
+    collection: &str,
+    record_id: &str,
+    actor: &str,
+    wall_time_ms: i64,
+    fields: serde_json::Value,
+) -> Operation {
+    let fields = fields
+        .as_object()
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .collect::<BTreeMap<_, _>>();
+    Operation::new(
+        RecordKey::new(scope, collection, record_id),
+        ActorId::from(actor),
+        OperationKind::Patch { fields },
+    )
+    .with_id(id)
+    .with_timestamp(HybridTimestamp::new(wall_time_ms, 0, actor))
+}
+
+fn upsert_operation(
+    id: &str,
+    scope: &str,
+    collection: &str,
+    record_id: &str,
+    actor: &str,
+    wall_time_ms: i64,
+    value: serde_json::Value,
+) -> Operation {
+    Operation::new(
+        RecordKey::new(scope, collection, record_id),
+        ActorId::from(actor),
+        OperationKind::Upsert { value },
+    )
+    .with_id(id)
+    .with_timestamp(HybridTimestamp::new(wall_time_ms, 0, actor))
 }
 
 fn now_ms() -> i64 {
@@ -620,6 +860,18 @@ const ADMIN_DASHBOARD_HTML: &str = r#"<!doctype html>
     .section-head { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; margin-bottom: 12px; }
     .muted { color: var(--muted); }
     .collections { display: grid; gap: 14px; }
+    .scenarios { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
+    .scenario {
+      align-items: flex-start;
+      display: grid;
+      gap: 4px;
+      justify-items: start;
+      min-height: 86px;
+      padding: 12px;
+      text-align: left;
+    }
+    .scenario strong { display: block; }
+    .scenario span { color: var(--muted); display: block; font-size: 12px; line-height: 1.35; }
     .records { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; margin-top: 8px; }
     .record { padding: 12px; }
     .record.deleted { border-color: #fecaca; background: #fff5f5; }
@@ -668,6 +920,13 @@ const ADMIN_DASHBOARD_HTML: &str = r#"<!doctype html>
     </div>
     <section>
       <div class="section-head">
+        <h2>Integration scenarios</h2>
+        <span class="muted">reset and seed deterministic mock state</span>
+      </div>
+      <div id="scenarios" class="scenarios"></div>
+    </section>
+    <section>
+      <div class="section-head">
         <h2>Records by scope and collection</h2>
         <span class="muted">current materialized state</span>
       </div>
@@ -710,8 +969,26 @@ const ADMIN_DASHBOARD_HTML: &str = r#"<!doctype html>
       $('ops-count').textContent = data.operations.length;
       $('last-updated').textContent = `Updated ${new Date().toLocaleTimeString()}`;
       renderScopes(data.scopes);
+      renderScenarios(data.scenarios);
       renderEvents(data.events);
       renderOperations(data.operations);
+    }
+
+    function renderScenarios(scenarios) {
+      $('scenarios').innerHTML = scenarios.map((scenario) => `
+        <button class="scenario" data-scenario="${esc(scenario.id)}">
+          <strong>${esc(scenario.label)}</strong>
+          <span>${esc(scenario.description)}</span>
+        </button>
+      `).join('');
+      document.querySelectorAll('[data-scenario]').forEach((button) => {
+        button.addEventListener('click', async () => {
+          button.disabled = true;
+          await fetch(`/__admin/scenarios/${encodeURIComponent(button.dataset.scenario)}`, { method: 'POST' });
+          button.disabled = false;
+          await load();
+        });
+      });
     }
 
     function renderScopes(scopes) {
@@ -864,6 +1141,24 @@ mod tests {
         (status, String::from_utf8(bytes.to_vec()).unwrap())
     }
 
+    async fn post_text(app: Router, path: &str) -> (StatusCode, String) {
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(path)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        (status, String::from_utf8(bytes.to_vec()).unwrap())
+    }
+
     fn test_operation(record_id: &str, title: &str, wall_time_ms: i64) -> Operation {
         let mut fields = BTreeMap::new();
         fields.insert("title".into(), serde_json::json!(title));
@@ -970,6 +1265,40 @@ mod tests {
             .unwrap()
             .iter()
             .any(|event| event["event"] == "push_accepted"));
+    }
+
+    #[tokio::test]
+    async fn admin_scenarios_seed_named_integration_states() {
+        let state = test_state().await;
+        let app = build_app(state);
+
+        let (status, body) =
+            post_text(app.clone(), "/__admin/scenarios/arbitrary-collections").await;
+        assert_eq!(status, StatusCode::OK);
+        let result: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(result["scenario"]["id"], "arbitrary-collections");
+        assert_eq!(result["position"], 2);
+
+        let (status, body) = get_text(app.clone(), "/__admin/state").await;
+        assert_eq!(status, StatusCode::OK);
+        let state: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(state["scenarios"].as_array().unwrap().len(), 3);
+        assert_eq!(state["position"], 2);
+        assert_eq!(state["scopes"][0]["collections"][0]["collection"], "issues");
+        assert_eq!(
+            state["scopes"][0]["collections"][1]["collection"],
+            "widgets"
+        );
+        assert_eq!(
+            state["scopes"][0]["collections"][1]["records"][0]["value"]["name"],
+            "portable sync payload"
+        );
+
+        let (status, body) = post_text(app, "/__admin/scenarios/conflict").await;
+        assert_eq!(status, StatusCode::OK);
+        let result: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(result["scenario"]["id"], "conflict");
+        assert_eq!(result["operations_added"], 1);
     }
 
     #[tokio::test]
