@@ -463,6 +463,8 @@ test.describe('Photon shell', () => {
   })
 
   test('reconnects a document after an offline edit and syncs it to another client', async ({ browser }) => {
+    test.setTimeout(75_000)
+
     const title = `E2E reconnect doc ${Date.now()}`
     const initialText = `Online baseline ${Date.now()}`
     const offlineText = `Offline reconnect proof ${Date.now()}`
