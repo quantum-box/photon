@@ -24,6 +24,7 @@ use photon_engine::{
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use sqlx::{sqlite::SqlitePoolOptions, SqlitePool};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{broadcast, RwLock};
 use tower_http::cors::{Any, CorsLayer};
 use tracing::info;
@@ -512,9 +513,76 @@ async fn apply_engine_record_operation(
 
     state
         .engine
-        .apply_remote_operation(operation, remote_sequence)
+        .apply_remote_operation(operation.clone(), remote_sequence)
         .await?;
+    mirror_operation_to_mock_tachyon(operation);
 
+    Ok(())
+}
+
+fn mock_tachyon_sync_url() -> Option<String> {
+    match std::env::var("PHOTON_MOCK_TACHYON_SYNC_URL") {
+        Ok(value) if value.trim().is_empty() => None,
+        Ok(value) => Some(value),
+        Err(_) => {
+            #[cfg(all(debug_assertions, not(test)))]
+            {
+                Some("http://127.0.0.1:3101".to_owned())
+            }
+            #[cfg(any(not(debug_assertions), test))]
+            {
+                None
+            }
+        }
+    }
+}
+
+fn mirror_operation_to_mock_tachyon(operation: Operation) {
+    let Some(base_url) = mock_tachyon_sync_url() else {
+        return;
+    };
+
+    tokio::spawn(async move {
+        if let Err(error) = post_mock_tachyon_push(&base_url, operation).await {
+            tracing::debug!(%error, %base_url, "mock Tachyon mirror sync skipped");
+        }
+    });
+}
+
+async fn post_mock_tachyon_push(
+    base_url: &str,
+    operation: Operation,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let host = base_url
+        .trim()
+        .trim_end_matches('/')
+        .strip_prefix("http://")
+        .ok_or("PHOTON_MOCK_TACHYON_SYNC_URL must be an http:// URL")?;
+    let host = host.split('/').next().unwrap_or(host);
+    let body = serde_json::to_vec(&serde_json::json!({
+        "scope": ENGINE_SCOPE_ID,
+        "operations": [operation],
+        "cursor": null
+    }))?;
+    let mut stream = tokio::net::TcpStream::connect(host).await?;
+    let request = format!(
+        "POST /v1/sync/push HTTP/1.1\r\n\
+         Host: {host}\r\n\
+         Accept: application/json\r\n\
+         Content-Type: application/json\r\n\
+         Content-Length: {}\r\n\
+         Connection: close\r\n\
+         \r\n",
+        body.len()
+    );
+    stream.write_all(request.as_bytes()).await?;
+    stream.write_all(&body).await?;
+
+    let mut response = Vec::new();
+    stream.read_to_end(&mut response).await?;
+    if !response.starts_with(b"HTTP/1.1 200") && !response.starts_with(b"HTTP/1.0 200") {
+        return Err("mock Tachyon sync push was not accepted".into());
+    }
     Ok(())
 }
 
