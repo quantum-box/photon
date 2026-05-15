@@ -519,11 +519,28 @@ test.describe('Photon shell', () => {
     const editor = page.locator('.bn-editor[contenteditable="true"]')
     await editor.click()
     await page.keyboard.type(selectedText)
-    await page.keyboard.down('Shift')
-    for (let i = 0; i < selectedText.length; i += 1) {
-      await page.keyboard.press('ArrowLeft')
-    }
-    await page.keyboard.up('Shift')
+    await editor.evaluate((element, text) => {
+      const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT)
+      let target: Text | null = null
+      let startOffset = 0
+      while (walker.nextNode()) {
+        const node = walker.currentNode as Text
+        const index = node.data.indexOf(text)
+        if (index >= 0) {
+          target = node
+          startOffset = index
+          break
+        }
+      }
+      if (!target) throw new Error(`Unable to find editor text: ${text}`)
+      const range = document.createRange()
+      range.setStart(target, startOffset)
+      range.setEnd(target, startOffset + text.length)
+      const selection = window.getSelection()
+      selection?.removeAllRanges()
+      selection?.addRange(range)
+      document.dispatchEvent(new Event('selectionchange', { bubbles: true }))
+    }, selectedText)
 
     await expect(page.getByTestId('doc-selected-text').getByText(selectedText)).toBeVisible()
     await page.getByTestId('doc-create-issue-from-selection').click()

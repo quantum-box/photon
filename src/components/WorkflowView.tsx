@@ -301,9 +301,6 @@ export function WorkflowView({
         nodes: payload.nodes,
         edges: payload.edges,
       })
-      setSavedSignature(payload.signature)
-      setSavedCountSignature(payload.countSignature)
-      setSaveStatus('saved')
     } catch (error) {
       console.warn('Failed to sync workflow canvas', error)
     }
@@ -480,18 +477,27 @@ export function WorkflowView({
       }
     }
 
+    let active = true
     const cacheTimer = window.setTimeout(() => {
       void saveWorkflowCanvas({
         databaseId,
         selectedTemplateId,
         nodes: persistedNodes,
         edges,
-      }).catch(() => {
-        // PGlite is a local cache for fast reload; Yjs remains the sync source.
       })
+        .then(() => {
+          if (!active) return
+          setSavedSignature(nextSignature)
+          setSavedCountSignature(nextCountSignature)
+          setSaveStatus('saved')
+        })
+        .catch(() => {
+          // PGlite is a local cache for fast reload; Yjs remains the sync source.
+        })
     }, WORKFLOW_CACHE_WRITE_DELAY_MS)
 
     return () => {
+      active = false
       window.clearTimeout(cacheTimer)
     }
   }, [

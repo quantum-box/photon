@@ -41,11 +41,14 @@ function ymapToIssue(ymap: Y.Map<string>): Issue {
 }
 
 function snapshot(): Issue[] {
-  const result: Issue[] = []
+  const result = new Map<string, Issue>()
   issuesArray.forEach((ymap) => {
-    result.push(ymapToIssue(ymap))
+    const issue = ymapToIssue(ymap)
+    if (issue.id) {
+      result.set(issue.id, issue)
+    }
   })
-  return result
+  return [...result.values()]
 }
 
 // ---------------------------------------------------------------------------

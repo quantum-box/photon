@@ -5,6 +5,7 @@ edition = "2021"
 description = "Photon backend server — axum + SQLite + yrs CRDT"
 authors = ["Quantum Box"]
 license = "MIT"
+default-run = "photon-server"
 
 [[bin]]
 name = "mock-tachyon-api"

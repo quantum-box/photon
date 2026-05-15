@@ -63,14 +63,14 @@ function ymapToDatabase(ymap: Y.Map<string>): WorkspaceDatabase {
 }
 
 function snapshotDatabases(): WorkspaceDatabase[] {
-  const result: WorkspaceDatabase[] = []
+  const result = new Map<string, WorkspaceDatabase>()
   databasesArray.forEach((ymap) => {
     const database = ymapToDatabase(ymap)
     if (database.id && database.label) {
-      result.push(database)
+      result.set(database.id, database)
     }
   })
-  return result
+  return [...result.values()]
 }
 
 function findYDatabase(id: string): Y.Map<string> | null {
@@ -86,6 +86,7 @@ function upsertYDatabase(database: WorkspaceDatabase) {
   if (existing) {
     existing.set('id', database.id)
     existing.set('label', database.label)
+    removeDuplicateYDatabases(database.id, existing)
     return
   }
 
@@ -93,6 +94,15 @@ function upsertYDatabase(database: WorkspaceDatabase) {
   ymap.set('id', database.id)
   ymap.set('label', database.label)
   databasesArray.push([ymap])
+}
+
+function removeDuplicateYDatabases(id: string, keep: Y.Map<string>) {
+  for (let i = databasesArray.length - 1; i >= 0; i--) {
+    const ymap = databasesArray.get(i)
+    if (ymap !== keep && ymap.get('id') === id) {
+      databasesArray.delete(i, 1)
+    }
+  }
 }
 
 export function DatabasesProvider({ children }: { children: ReactNode }) {

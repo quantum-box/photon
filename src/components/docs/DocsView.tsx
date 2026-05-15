@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate } from '@tanstack/react-router'
 import { useCreateBlockNote, useEditorSelectionChange } from '@blocknote/react'
 import { BlockNoteView } from '@blocknote/shadcn'
@@ -20,6 +20,7 @@ import { FileChip } from '../files/FileChip'
 import { FilePreviewModal } from '../files/FilePreviewModal'
 import type { FileAttachment } from '../files/types'
 import {
+  readStoredSelectedText,
   setCurrentDocContext,
   setCurrentDocSelectedText,
 } from '../../lib/docs/workspaceContext'
@@ -208,7 +209,8 @@ export function DocumentEditor({
   onAttachFiles: (files: FileList | File[]) => void
 }) {
   const { collab, ready, syncStatus, roomId } = useDocumentCollaboration(doc.id)
-  const [selectedText, setSelectedText] = useState('')
+  const [selectedText, setSelectedText] = useState(() => readStoredSelectedText(doc.id))
+  const selectedTextRef = useRef(selectedText)
   const [selectedIssueId, setSelectedIssueId] = useState('')
   const [insertedIssue, setInsertedIssue] = useState<Issue | null>(null)
   const [previewFile, setPreviewFile] = useState<FileAttachment | null>(null)
@@ -219,6 +221,7 @@ export function DocumentEditor({
 
   const handleSelectedTextChange = useCallback((text: string) => {
     if (!text) return
+    selectedTextRef.current = text
     setSelectedText(text)
     setCurrentDocSelectedText(doc.id, text)
   }, [doc.id])
@@ -226,13 +229,15 @@ export function DocumentEditor({
   const handleLinkSelectedIssue = async () => {
     const issue = issues.find((candidate) => candidate.id === selectedIssueId)
     if (!issue) return
-    await onIssueLinked(issue, selectedText)
+    const text = selectedTextRef.current || selectedText
+    await onIssueLinked(issue, text)
     setInsertedIssue(issue)
     setSelectedIssueId('')
   }
 
   const handleCreateFromSelection = async () => {
-    const issue = await onCreateIssueFromSelection(selectedText)
+    const text = selectedTextRef.current || selectedText
+    const issue = await onCreateIssueFromSelection(text)
     if (issue) setInsertedIssue(issue)
   }
 
