@@ -132,7 +132,7 @@ WebSocket や Durable Object は、この protocol を素早く起動する通�
 - [x] local storage adapter contract を定義する
 - [x] PGlite / SQLite のどちらかで最初の adapter を作る
 - [x] issue CRUD を operation log に載せる
-- [ ] 既存 Yjs issues projection との split-brain を解消する
+- [x] 既存 Yjs issues projection との split-brain を解消する
 - [x] `packages/server` の REST issue API と engine projection を一致させる
 
 ### Phase 2: Docs / Yjs snapshot を engine 管理に寄せる 📝
@@ -222,3 +222,4 @@ WebSocket や Durable Object は、この protocol を素早く起動する通�
 - 2026-05-15: `packages/photon-engine` を private Rust crate として追加。generic operation / record / cursor / conflict、storage adapter contract、memory adapter、feature-gated SQLite adapter、projection / sync skeleton、adapter contract test を実装開始。
 - 2026-05-15: integration test を追加。`sync_once` の push/pull、offline two-client convergence、duplicate push dedupe、server conflict / rejection、SQLite reopen persistence を検証。set add-wins の競合解決バグも test で検出して修正。
 - 2026-05-15: `packages/server` に `photon-engine` を接続。generic `scope + collection + record_id` helper 経由で issue create / update / delete を accepted operation として記録し、REST issue response と engine projection の一致を server tests で検証。
+- 2026-05-15: frontend issue CRUD のYjs projectionをserver accepted response後にのみ更新する形へ変更。create / update / delete が未承認状態をYjsへ書かないことを Unit test で固定。

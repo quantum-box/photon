@@ -152,54 +152,6 @@ function serverUpdateForField(
   }
 }
 
-function applyLocalFieldUpdate(issueId: string, field: keyof Issue, value: string) {
-  const ymap = findYMap(issueId)
-  if (!ymap) return
-
-  if (field === 'labels') {
-    ymap.set('labels', JSON.stringify(parseLabels(value)))
-  } else if (field === 'assignee') {
-    ymap.set('assignee', value)
-  } else {
-    ymap.set(field, value)
-  }
-  ymap.set('updatedAt', new Date().toISOString())
-}
-
-function getNextLocalIdentifier() {
-  let maxNum = 0
-  for (let i = 0; i < issuesArray.length; i++) {
-    const identifier = issuesArray.get(i).get('identifier') as string | undefined
-    const num = parseInt(identifier?.split('-')[1] ?? '', 10)
-    if (num > maxNum) maxNum = num
-  }
-  return `${appKitConfig.issues.identifierPrefix}-${maxNum + 1}`
-}
-
-function createLocalIssueId() {
-  return `local-${
-    globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`
-  }`
-}
-
-function createOptimisticIssue(data: CreateIssueData): Issue {
-  const now = new Date().toISOString()
-
-  return {
-    id: createLocalIssueId(),
-    identifier: getNextLocalIdentifier(),
-    title: data.title,
-    status: data.status ?? 'todo',
-    priority: data.priority ?? 'none',
-    assignee: data.assignee ?? null,
-    labels: data.labels ?? [],
-    project: data.project ?? appKitConfig.issues.defaultProject,
-    createdAt: now,
-    updatedAt: now,
-    description: data.description ?? '',
-  }
-}
-
 function seedMockData() {
   ydoc.transact(() => {
     for (const issue of mockIssues) {
@@ -254,9 +206,6 @@ export function IssuesProvider({ children }: { children: ReactNode }) {
   )
 
   const handleMoveIssue = useCallback((issueId: string, newStatus: Status) => {
-    ydoc.transact(() => {
-      applyLocalFieldUpdate(issueId, 'status', newStatus)
-    })
     void updateServerIssue(issueId, { status: newStatus })
       .then((serverIssue) => {
         ydoc.transact(() => upsertYIssue(serverIssue))
@@ -268,10 +217,6 @@ export function IssuesProvider({ children }: { children: ReactNode }) {
 
   const handleUpdateIssue = useCallback(
     (issueId: string, field: keyof Issue, value: string) => {
-      ydoc.transact(() => {
-        applyLocalFieldUpdate(issueId, field, value)
-      })
-
       const serverUpdate = serverUpdateForField(field, value)
       if (Object.keys(serverUpdate).length === 0) return
 
@@ -287,12 +232,6 @@ export function IssuesProvider({ children }: { children: ReactNode }) {
   )
 
   const handleCreateIssue = useCallback((data: CreateIssueData) => {
-    const optimisticIssue = createOptimisticIssue(data)
-
-    ydoc.transact(() => {
-      upsertYIssue(optimisticIssue)
-    })
-
     void createServerIssue({
       ...data,
       assignee: data.assignee ?? null,
@@ -300,10 +239,7 @@ export function IssuesProvider({ children }: { children: ReactNode }) {
       project: data.project ?? appKitConfig.issues.defaultProject,
     })
       .then((serverIssue) => {
-        ydoc.transact(() => {
-          removeYIssue(optimisticIssue.id)
-          upsertYIssue(serverIssue)
-        })
+        ydoc.transact(() => upsertYIssue(serverIssue))
       })
       .catch((error: unknown) => {
         console.warn('Failed to persist created issue', error)
@@ -311,12 +247,15 @@ export function IssuesProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const handleDeleteIssue = useCallback((issueId: string) => {
-    ydoc.transact(() => {
-      removeYIssue(issueId)
-    })
-    void deleteServerIssue(issueId).catch((error: unknown) => {
-      console.warn('Failed to persist issue deletion', error)
-    })
+    void deleteServerIssue(issueId)
+      .then(() => {
+        ydoc.transact(() => {
+          removeYIssue(issueId)
+        })
+      })
+      .catch((error: unknown) => {
+        console.warn('Failed to persist issue deletion', error)
+      })
   }, [])
 
   const syncIssue = useCallback((issue: Issue) => {
