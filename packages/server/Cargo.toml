@@ -6,6 +6,10 @@ description = "Photon backend server — axum + SQLite + yrs CRDT"
 authors = ["Quantum Box"]
 license = "MIT"
 
+[[bin]]
+name = "mock-tachyon-api"
+path = "src/bin/mock_tachyon_api.rs"
+
 [dependencies]
 # Web framework
 axum = { version = "0.7", features = ["ws"] }
@@ -37,4 +41,5 @@ uuid = { version = "1", features = ["v4", "serde"] }
 futures-util = "0.3"
 
 [dev-dependencies]
+async-trait = "0.1"
 tower = { version = "0.5", features = ["util"] }

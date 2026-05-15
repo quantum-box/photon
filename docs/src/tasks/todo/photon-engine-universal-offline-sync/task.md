@@ -238,6 +238,24 @@ WebSocket や Durable Object は、この protocol を素早く起動する通�
 - [ ] API server / Tauri / browser で同じ sync contract を使う
 - [ ] private dependency として Tachyon apps から取り込める package layout を決める
 
+### Local mock Tachyon API
+
+Tachyon API integration 前に sync contract を手元で検証するため、`packages/server` に `mock-tachyon-api` binary を置く。
+
+```bash
+npm run mock:tachyon
+```
+
+default は `127.0.0.1:3101` で listen し、`MOCK_TACHYON_PORT` と `MOCK_TACHYON_DATABASE_URL` で上書きできる。
+
+- `GET /health`
+- `POST /v1/sync/push`
+- `POST /v1/sync/pull`
+- `GET /v1/records/:scope/:collection/:record_id`
+- `POST /__admin/reset`
+
+payload は `photon_engine::PushRequest` / `PullRequest` の JSON contract をそのまま使う。operation metadata に `mock_reject: true` を入れると rejection、`mock_conflict_reason` を入れると conflict を返せる。
+
 ## テスト計画
 
 - [x] storage adapter contract test
@@ -312,3 +330,4 @@ WebSocket や Durable Object は、この protocol を素早く起動する通�
 - 2026-05-15: engine core に snapshot / snapshot update stream contract を追加。Memory / SQLite adapters の contract test を拡張し、server の Yjs update と compaction snapshot を `yjs_documents` snapshot stream に mirror する integration test を追加。
 - 2026-05-15: initial snapshot compaction policy は room ごとの update log が 100 rows を超えた時に発火し、doc read lock 中の `next_seq` を snapshot boundary とする。engine snapshot stream では `snapshot.sequence` 以下の updates を compact し、それより新しい updates だけを残す。
 - 2026-05-15: unique key collision を domain conflict として保存する sync integration test を追加。server/domain resolver 由来の conflict は retry 対象から外れ、local / remote value と reason を first-class conflict record として残す。
+- 2026-05-15: Tachyon API の代替として `mock-tachyon-api` local server を追加。HTTP route 経由で `sync_once` が push / pull できること、remote projection を inspect できること、reset できることを binary unit test で固定。

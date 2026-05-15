@@ -65,7 +65,8 @@
     "pages:build": "npm run build",
     "pages:deploy": "npm run pages:build && cd dist && wrangler pages deploy . --project-name photon --branch main --commit-dirty=true",
     "worker:dev": "wrangler dev --config wrangler.jsonc --port 8787",
-    "worker:deploy": "wrangler deploy --config wrangler.jsonc"
+    "worker:deploy": "wrangler deploy --config wrangler.jsonc",
+    "mock:tachyon": "cd packages/server && cargo run --bin mock-tachyon-api"
   },
   "dependencies": {
     "@blocknote/core": "^0.50.0",
