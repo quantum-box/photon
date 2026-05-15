@@ -226,8 +226,8 @@ WebSocket や Durable Object は、この protocol を素早く起動する通�
 
 ### Phase 3: Attachments / Chat / Tool Calls を載せる 📝
 
-- [ ] attachment metadata と surface link を generic record にする
-- [ ] file bytes は storage provider に残し、engine には reference のみ保存する
+- [x] attachment metadata と surface link を generic record にする
+- [x] file bytes は storage provider に残し、engine には reference のみ保存する
 - [ ] chat messages / tool calls / tool results を collection 化する
 - [ ] offline draft と server accepted history の reconciliation を定義する
 
@@ -307,3 +307,4 @@ WebSocket や Durable Object は、この protocol を素早く起動する通�
 - 2026-05-15: frontend issue CRUD のYjs projectionをserver accepted response後にのみ更新する形へ変更。create / update / delete が未承認状態をYjsへ書かないことを Unit test で固定。
 - 2026-05-15: document metadata API を `collection = documents` の generic record projection で実装。issue 専用テーブルに寄せず、create / update / delete / list が `photon_engine_records` と operation log を通ることを server integration test で固定。
 - 2026-05-15: frontend docs metadata は `/api/documents` の server accepted projection を先に使い、PGlite は local cache / offline fallback として扱う形へ変更。document body の Yjs storage は引き続き別境界に残した。
+- 2026-05-15: attachment metadata と surface link を `attachments` / `attachment_links` collections の generic record として mirror。file bytes は保存せず、storage provider / key / preview metadata の reference のみ engine projection に載せることを integration test で固定。

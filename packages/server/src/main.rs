@@ -632,6 +632,97 @@ async fn fetch_attachment_by_id(
     }
 }
 
+fn attachment_to_engine_value(attachment: &Attachment) -> Result<serde_json::Value, AppError> {
+    Ok(serde_json::to_value(attachment)?)
+}
+
+fn attachment_link_to_engine_value(link: &AttachmentLink) -> Result<serde_json::Value, AppError> {
+    Ok(serde_json::to_value(link)?)
+}
+
+async fn upsert_attachment_link_engine_projection(
+    state: &AppState,
+    link: &AttachmentLink,
+) -> Result<(), AppError> {
+    apply_engine_record_operation(
+        state,
+        "attachment_links",
+        &link.id,
+        EngineRecordMutation::Upsert(attachment_link_to_engine_value(link)?),
+    )
+    .await
+}
+
+async fn delete_attachment_link_engine_projection(
+    state: &AppState,
+    link_id: &str,
+) -> Result<(), AppError> {
+    apply_engine_record_operation(
+        state,
+        "attachment_links",
+        link_id,
+        EngineRecordMutation::Delete,
+    )
+    .await
+}
+
+async fn upsert_attachment_engine_projection(
+    state: &AppState,
+    attachment: &Attachment,
+) -> Result<(), AppError> {
+    apply_engine_record_operation(
+        state,
+        "attachments",
+        &attachment.id,
+        EngineRecordMutation::Upsert(attachment_to_engine_value(attachment)?),
+    )
+    .await?;
+
+    for link in &attachment.links {
+        upsert_attachment_link_engine_projection(state, link).await?;
+    }
+
+    Ok(())
+}
+
+async fn patch_attachment_engine_projection(
+    state: &AppState,
+    attachment: &Attachment,
+) -> Result<(), AppError> {
+    apply_engine_record_operation(
+        state,
+        "attachments",
+        &attachment.id,
+        EngineRecordMutation::Patch(attachment_to_engine_value(attachment)?),
+    )
+    .await?;
+
+    for link in &attachment.links {
+        upsert_attachment_link_engine_projection(state, link).await?;
+    }
+
+    Ok(())
+}
+
+async fn delete_attachment_engine_projection(
+    state: &AppState,
+    attachment: &Attachment,
+) -> Result<(), AppError> {
+    apply_engine_record_operation(
+        state,
+        "attachments",
+        &attachment.id,
+        EngineRecordMutation::Delete,
+    )
+    .await?;
+
+    for link in &attachment.links {
+        delete_attachment_link_engine_projection(state, &link.id).await?;
+    }
+
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // App state
 // ---------------------------------------------------------------------------
@@ -1173,6 +1264,8 @@ async fn create_attachment(
         .await?
         .ok_or(AppError::NotFound)?;
 
+    upsert_attachment_engine_projection(&state, &attachment).await?;
+
     Ok((StatusCode::CREATED, Json(attachment)))
 }
 
@@ -1228,6 +1321,7 @@ async fn update_attachment(
     let attachment = fetch_attachment_by_id(&state.db, &id)
         .await?
         .ok_or(AppError::NotFound)?;
+    patch_attachment_engine_projection(&state, &attachment).await?;
     Ok(Json(attachment))
 }
 
@@ -1242,6 +1336,10 @@ async fn delete_attachment(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, AppError> {
+    let attachment = fetch_attachment_by_id(&state.db, &id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+
     let result = sqlx::query("DELETE FROM attachments WHERE id = ?")
         .bind(&id)
         .execute(&state.db)
@@ -1250,6 +1348,13 @@ async fn delete_attachment(
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound);
     }
+
+    sqlx::query("DELETE FROM attachment_links WHERE attachment_id = ?")
+        .bind(&id)
+        .execute(&state.db)
+        .await?;
+
+    delete_attachment_engine_projection(&state, &attachment).await?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -1298,6 +1403,7 @@ async fn link_attachment(
     let attachment = fetch_attachment_by_id(&state.db, &id)
         .await?
         .ok_or(AppError::NotFound)?;
+    patch_attachment_engine_projection(&state, &attachment).await?;
     Ok(Json(attachment))
 }
 
@@ -1315,6 +1421,10 @@ async fn delete_attachment_link(
     State(state): State<Arc<AppState>>,
     Path((id, link_id)): Path<(String, String)>,
 ) -> Result<StatusCode, AppError> {
+    fetch_attachment_by_id(&state.db, &id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+
     let result = sqlx::query("DELETE FROM attachment_links WHERE attachment_id = ? AND id = ?")
         .bind(&id)
         .bind(&link_id)
@@ -1324,6 +1434,11 @@ async fn delete_attachment_link(
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound);
     }
+
+    if let Some(attachment) = fetch_attachment_by_id(&state.db, &id).await? {
+        patch_attachment_engine_projection(&state, &attachment).await?;
+    }
+    delete_attachment_link_engine_projection(&state, &link_id).await?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -2079,6 +2194,30 @@ mod tests {
             .unwrap()
     }
 
+    async fn engine_attachment_record(
+        state: &AppState,
+        attachment_id: &str,
+    ) -> photon_engine::Record {
+        state
+            .engine
+            .record(&engine_record_key("attachments", attachment_id))
+            .await
+            .unwrap()
+            .unwrap()
+    }
+
+    async fn engine_attachment_link_record(
+        state: &AppState,
+        link_id: &str,
+    ) -> photon_engine::Record {
+        state
+            .engine
+            .record(&engine_record_key("attachment_links", link_id))
+            .await
+            .unwrap()
+            .unwrap()
+    }
+
     async fn test_app() -> (Router, Arc<AppState>) {
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
@@ -2534,7 +2673,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_attachment_metadata_can_link_multiple_surfaces() {
-        let (app, _) = test_app().await;
+        let (app, state) = test_app().await;
 
         let resp = app
             .clone()
@@ -2572,6 +2711,14 @@ mod tests {
         assert_eq!(created.filename, "brief.pdf");
         assert_eq!(created.links.len(), 2);
 
+        let engine_record = engine_attachment_record(&state, &created.id).await;
+        assert_eq!(engine_record.key.collection.as_str(), "attachments");
+        assert_eq!(engine_record.value, serde_json::to_value(&created).unwrap());
+        for link in &created.links {
+            let link_record = engine_attachment_link_record(&state, &link.id).await;
+            assert_eq!(link_record.value, serde_json::to_value(link).unwrap());
+        }
+
         let resp = app
             .clone()
             .oneshot(
@@ -2592,8 +2739,30 @@ mod tests {
             .unwrap();
 
         assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let linked: Attachment = serde_json::from_slice(&body).unwrap();
+        assert_eq!(linked.links.len(), 3);
+        let chat_link = linked
+            .links
+            .iter()
+            .find(|link| link.surface_type == "chat" && link.surface_id == "general")
+            .cloned()
+            .unwrap();
+        assert_eq!(
+            engine_attachment_record(&state, &created.id).await.value,
+            serde_json::to_value(&linked).unwrap()
+        );
+        assert_eq!(
+            engine_attachment_link_record(&state, &chat_link.id)
+                .await
+                .value,
+            serde_json::to_value(&chat_link).unwrap()
+        );
 
         let resp = app
+            .clone()
             .oneshot(
                 Request::builder()
                     .uri("/api/attachments?workspace_id=photon-default&surface_type=chat&surface_id=general")
@@ -2611,6 +2780,61 @@ mod tests {
         assert_eq!(list.total, 1);
         assert_eq!(list.attachments[0].id, created.id);
         assert_eq!(list.attachments[0].links.len(), 3);
+
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!(
+                        "/api/attachments/{}/links/{}",
+                        created.id, chat_link.id
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+        assert!(engine_attachment_link_record(&state, &chat_link.id)
+            .await
+            .is_deleted());
+        let attachment_after_unlink = fetch_attachment_by_id(&state.db, &created.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(attachment_after_unlink.links.len(), 2);
+        assert_eq!(
+            engine_attachment_record(&state, &created.id).await.value,
+            serde_json::to_value(&attachment_after_unlink).unwrap()
+        );
+
+        let remaining_link_ids = attachment_after_unlink
+            .links
+            .iter()
+            .map(|link| link.id.clone())
+            .collect::<Vec<_>>();
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/api/attachments/{}", created.id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+        assert!(engine_attachment_record(&state, &created.id)
+            .await
+            .is_deleted());
+        for link_id in remaining_link_ids {
+            assert!(engine_attachment_link_record(&state, &link_id)
+                .await
+                .is_deleted());
+        }
     }
 
     // -----------------------------------------------------------------------
