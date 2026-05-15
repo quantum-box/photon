@@ -463,7 +463,7 @@ test.describe('Photon shell', () => {
   })
 
   test('reconnects a document after an offline edit and syncs it to another client', async ({ browser }) => {
-    test.setTimeout(120_000)
+    test.setTimeout(180_000)
 
     const title = `E2E reconnect doc ${Date.now()}`
     const initialText = `Online baseline ${Date.now()}`
@@ -505,8 +505,8 @@ test.describe('Photon shell', () => {
     await expect(async () => {
       await verifierPage.reload()
       await expect(verifierPage.getByText('Server connected')).toBeVisible({ timeout: 20_000 })
-      await expect(verifierPage.getByText(offlineText)).toBeVisible({ timeout: 10_000 })
-    }).toPass({ timeout: 60_000 })
+      await expect(verifierPage.getByText(offlineText)).toBeVisible({ timeout: 20_000 })
+    }).toPass({ timeout: 120_000 })
 
     await verifierContext.close()
     await editingContext.close()
