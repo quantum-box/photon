@@ -275,6 +275,11 @@ payload は `photon_engine::PushRequest` / `PullRequest` の JSON contract を�
   - [x] delete/update
   - [x] status transition rejection
   - [x] unique key collision
+- [x] local mock Tachyon API integration test
+  - [x] mock server process を random port / temporary SQLite DB で起動
+  - [x] issue 以外の任意 collection を HTTP sync で convergence
+  - [x] mock conflict decision を local first-class conflict として保存
+  - [x] admin reset 後に remote projection が消えることを確認
 - [ ] WASM/browser test
   - PGlite `idb://` persistence
   - reload 復元
@@ -331,3 +336,4 @@ payload は `photon_engine::PushRequest` / `PullRequest` の JSON contract を�
 - 2026-05-15: initial snapshot compaction policy は room ごとの update log が 100 rows を超えた時に発火し、doc read lock 中の `next_seq` を snapshot boundary とする。engine snapshot stream では `snapshot.sequence` 以下の updates を compact し、それより新しい updates だけを残す。
 - 2026-05-15: unique key collision を domain conflict として保存する sync integration test を追加。server/domain resolver 由来の conflict は retry 対象から外れ、local / remote value と reason を first-class conflict record として残す。
 - 2026-05-15: Tachyon API の代替として `mock-tachyon-api` local server を追加。HTTP route 経由で `sync_once` が push / pull できること、remote projection を inspect できること、reset できることを binary unit test で固定。
+- 2026-05-15: `mock-tachyon-api` binary を実プロセスとして起動する server integration test を追加。任意 collection の HTTP sync convergence、mock conflict decision の永続化、admin reset 後の remote projection 削除を検証。
