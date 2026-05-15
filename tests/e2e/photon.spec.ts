@@ -503,8 +503,9 @@ test.describe('Photon shell', () => {
     await editingPage.evaluate(() => window.dispatchEvent(new Event('online')))
     await expect(editingPage.getByText('Server connected')).toBeVisible({ timeout: 20_000 })
     await expect(async () => {
-      await verifierPage.reload()
+      await verifierPage.goto(documentUrl)
       await expect(verifierPage.getByText('Server connected')).toBeVisible({ timeout: 20_000 })
+      await expect(verifierPage.getByLabel('Document title')).toHaveValue(title, { timeout: 20_000 })
       await expect(verifierPage.getByText(offlineText)).toBeVisible({ timeout: 20_000 })
     }).toPass({ timeout: 120_000 })
 
