@@ -251,12 +251,12 @@ WebSocket や Durable Object は、この protocol を素早く起動する通�
   - [x] 順不同 push
   - [x] retry / duplicate push
   - [x] final projection の一致
-- [ ] conflict policy test
+- [x] conflict policy test
   - [x] scalar 同時更新
   - [x] set add/remove
   - [x] delete/update
   - [x] status transition rejection
-  - [ ] unique key collision
+  - [x] unique key collision
 - [ ] WASM/browser test
   - PGlite `idb://` persistence
   - reload 復元
@@ -295,7 +295,7 @@ WebSocket や Durable Object は、この protocol を素早く起動する通�
 - [ ] browser から WASM / TS wrapper 経由で local mutation を保存できる
 - [x] issue data が engine projection と server API で一致する
 - [x] offline two-client convergence test が通る
-- [ ] conflict policy の初期セットが test で固定されている
+- [x] conflict policy の初期セットが test で固定されている
 - [x] private package / repo 運用方針が README または ADR に記録されている
 
 ## 実装メモ
@@ -311,3 +311,4 @@ WebSocket や Durable Object は、この protocol を素早く起動する通�
 - 2026-05-15: chat history API を追加し、`chat_messages` / `tool_calls` collections に accepted message・tool call・tool result payload を保存できるようにした。message delete 時は紐づく tool calls も tombstone にすることを server integration test で固定。
 - 2026-05-15: engine core に snapshot / snapshot update stream contract を追加。Memory / SQLite adapters の contract test を拡張し、server の Yjs update と compaction snapshot を `yjs_documents` snapshot stream に mirror する integration test を追加。
 - 2026-05-15: initial snapshot compaction policy は room ごとの update log が 100 rows を超えた時に発火し、doc read lock 中の `next_seq` を snapshot boundary とする。engine snapshot stream では `snapshot.sequence` 以下の updates を compact し、それより新しい updates だけを残す。
+- 2026-05-15: unique key collision を domain conflict として保存する sync integration test を追加。server/domain resolver 由来の conflict は retry 対象から外れ、local / remote value と reason を first-class conflict record として残す。

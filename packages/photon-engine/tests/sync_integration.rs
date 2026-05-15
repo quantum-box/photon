@@ -44,6 +44,7 @@ struct RemoteHubState {
     seen_operations: HashSet<String>,
     reject_operation_ids: HashSet<String>,
     conflict_operation_ids: HashSet<String>,
+    unique_identifier_conflict_ids: HashSet<String>,
 }
 
 impl RemoteHub {
@@ -61,6 +62,15 @@ impl RemoteHub {
             .lock()
             .unwrap()
             .conflict_operation_ids
+            .insert(operation_id.to_owned());
+        self
+    }
+
+    fn unique_identifier_conflict(self, operation_id: &str) -> Self {
+        self.inner
+            .lock()
+            .unwrap()
+            .unique_identifier_conflict_ids
             .insert(operation_id.to_owned());
         self
     }
@@ -92,6 +102,20 @@ impl SyncEndpoint for RemoteHub {
                         "status transition rejected",
                         Some(json!({ "status": "done" })),
                         Some(json!({ "status": "todo" })),
+                    ),
+                });
+                continue;
+            }
+
+            if state.unique_identifier_conflict_ids.contains(&operation_id) {
+                decisions.push(PushDecision::Conflict {
+                    operation_id: operation.id.clone(),
+                    conflict: Conflict::new(
+                        operation.key.clone(),
+                        operation.id.clone(),
+                        "unique key collision: issues.identifier=PLT-101",
+                        Some(json!({ "identifier": "PLT-101", "title": "local duplicate" })),
+                        Some(json!({ "identifier": "PLT-101", "title": "remote owner" })),
                     ),
                 });
                 continue;
@@ -293,6 +317,58 @@ async fn sync_once_records_conflicts_as_first_class_state() {
     assert_eq!(stored.status, OperationStatus::Conflict);
     assert_eq!(conflicts.len(), 1);
     assert_eq!(conflicts[0].operation_id, operation.id);
+}
+
+#[tokio::test]
+async fn sync_once_records_unique_key_collisions_as_domain_conflicts() {
+    let operation = patch(
+        "issue-2",
+        "actor-a",
+        10,
+        json!({ "identifier": "PLT-101", "title": "local duplicate" }),
+    )
+    .with_id("op-unique-collision");
+    let remote = RemoteHub::default().unique_identifier_conflict(operation.id.as_str());
+    let storage = MemoryAdapter::new();
+    let engine = PhotonEngine::new(storage.clone());
+
+    engine
+        .apply_local_operation(operation.clone())
+        .await
+        .unwrap();
+
+    let first_summary = engine
+        .sync_once("workspace:test", "origin", &remote)
+        .await
+        .unwrap();
+    let second_summary = engine
+        .sync_once("workspace:test", "origin", &remote)
+        .await
+        .unwrap();
+    let stored = storage.get_operation(&operation.id).await.unwrap().unwrap();
+    let conflicts = storage
+        .list_conflicts(
+            &ScopeId::from("workspace:test"),
+            Some(&CollectionName::from("issues")),
+            Some(&operation.key.record_id),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(first_summary.conflicts, 1);
+    assert_eq!(second_summary.pushed, 0);
+    assert_eq!(stored.status, OperationStatus::Conflict);
+    assert_eq!(conflicts.len(), 1);
+    assert_eq!(conflicts[0].operation_id, operation.id);
+    assert!(conflicts[0].reason.contains("unique key collision"));
+    assert_eq!(
+        conflicts[0].local_value.as_ref().unwrap()["identifier"],
+        "PLT-101"
+    );
+    assert_eq!(
+        conflicts[0].remote_value.as_ref().unwrap()["title"],
+        "remote owner"
+    );
 }
 
 #[tokio::test]
