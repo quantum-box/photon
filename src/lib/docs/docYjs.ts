@@ -236,6 +236,7 @@ export function createDocumentCollaboration(
       backoff = 1000
       setStatus('connected')
       doc.on('update', onDocUpdate)
+      socket.send(Y.encodeStateAsUpdate(doc))
       sendAwarenessUpdate([awareness.clientID])
     })
 
