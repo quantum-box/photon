@@ -68,6 +68,88 @@ Rust core を中心に据え、API server / Tauri では Rust crate として、
 - Server integration: Tachyon API server では permission、audit、multi-tenancy、domain validation を通したうえで engine に accepted operation を渡す。
 - Browser integration: PGlite や IndexedDB-backed storage を使い、offline mutation を pending operation として保持する。
 
+### Runtime 配置
+
+Photon Engine は中央 server だけに置く component ではなく、browser / Tauri / API server / batch / worker など各 runtime に埋め込める共通 core として扱う。各 runtime は同じ operation / projection / cursor / conflict contract を持ち、server runtime が canonical acceptance point になる。
+
+```mermaid
+flowchart LR
+  subgraph Browser["Browser / WebView"]
+    UI["React UI"]
+    ClientEngine["Photon Engine\nWASM + TypeScript wrapper"]
+    ClientStore["PGlite / IndexedDB"]
+    UI --> ClientEngine --> ClientStore
+  end
+
+  subgraph Tauri["Tauri Desktop"]
+    TauriUI["Tauri UI"]
+    TauriEngine["Photon Engine\nRust crate"]
+    TauriStore["SQLite / local durable store"]
+    TauriUI --> TauriEngine --> TauriStore
+  end
+
+  subgraph Server["Application Server"]
+    API["REST / RPC"]
+    Validation["permission / validation / audit"]
+    ServerEngine["Photon Engine\nRust crate"]
+    TiDB["TiDB\ncanonical store"]
+    API --> Validation --> ServerEngine --> TiDB
+  end
+
+  subgraph Transport["Realtime Transport\nengine outside"]
+    Relay["WebSocket / Durable Object / room relay"]
+    Presence["presence / awareness / online count"]
+    Relay --> Presence
+  end
+
+  ClientEngine <-->|"push / pull / ack"| ServerEngine
+  TauriEngine <-->|"push / pull / ack"| ServerEngine
+  Relay -. "wake sync_once only" .-> ClientEngine
+  Relay -. "new remote ops available" .-> TauriEngine
+```
+
+Server-side storage は TiDB を基本方針にする。SQLite は server PoC / local development / Tauri local store / tests の初期 adapter として扱い、production server の canonical store は TiDB compatible adapter に寄せる。
+
+Realtime transport component は当面 Photon repo 内で育てるが、`photon-engine` crate には入れない。`workers/sync` や将来の `packages/realtime` のような別境界に置き、WebSocket 接続、room membership、presence、Yjs awareness、`sync_once` 起動通知だけを持つ。transport は正本でも operation resolver でもなく、engine 同士の `push` / `pull` を早く起動する通知路として扱う。
+
+### Engine Scope
+
+Photon Engine が持つ scope は durable sync core の内側だけに限定する。
+
+```mermaid
+flowchart LR
+  subgraph Engine["Photon Engine Scope"]
+    OpLog["append-only operation log"]
+    Projection["materialized projection"]
+    Cursor["sync cursor / checkpoint"]
+    Conflict["conflict / rejection records"]
+    Policy["deterministic conflict policy"]
+    Adapter["storage adapter contract"]
+
+    OpLog --> Projection
+    OpLog --> Cursor
+    OpLog --> Conflict
+    Policy --> Projection
+    Adapter --> OpLog
+    Adapter --> Projection
+    Adapter --> Cursor
+    Adapter --> Conflict
+  end
+
+  Domain["domain handlers\nissues / documents / attachments / chat"] -->|"accepted generic operation"| Engine
+  Engine --> Store["runtime storage\nTiDB / PGlite / SQLite / memory"]
+  Transport["realtime transport"] -. "trigger only" .-> Engine
+```
+
+Engine の入力は issue 専用ではなく、`scope + collection + record_id` で表現する generic operation にする。
+
+```text
+scope: workspace / tenant / operator / user boundary
+collection: issues | documents | attachments | chat_messages | tool_calls | ...
+record_id: domain record id
+operation: Upsert | Patch | Delete | Restore | Increment | SetAdd | SetRemove
+```
+
 ### データモデル
 
 v1 は Photon surfaces 専用ではなく、generic records を扱う。
@@ -137,10 +219,10 @@ WebSocket や Durable Object は、この protocol を素早く起動する通�
 
 ### Phase 2: Docs / Yjs snapshot を engine 管理に寄せる 📝
 
-- [ ] document metadata を generic record にする
+- [x] document metadata を generic record にする
 - [ ] Yjs update / snapshot を engine の snapshot stream として保存する
 - [ ] snapshot compaction policy を定義する
-- [ ] docs の PGlite metadata と Yjs document storage の境界を整理する
+- [x] docs の PGlite metadata と Yjs document storage の境界を整理する
 
 ### Phase 3: Attachments / Chat / Tool Calls を載せる 📝
 
@@ -223,3 +305,5 @@ WebSocket や Durable Object は、この protocol を素早く起動する通�
 - 2026-05-15: integration test を追加。`sync_once` の push/pull、offline two-client convergence、duplicate push dedupe、server conflict / rejection、SQLite reopen persistence を検証。set add-wins の競合解決バグも test で検出して修正。
 - 2026-05-15: `packages/server` に `photon-engine` を接続。generic `scope + collection + record_id` helper 経由で issue create / update / delete を accepted operation として記録し、REST issue response と engine projection の一致を server tests で検証。
 - 2026-05-15: frontend issue CRUD のYjs projectionをserver accepted response後にのみ更新する形へ変更。create / update / delete が未承認状態をYjsへ書かないことを Unit test で固定。
+- 2026-05-15: document metadata API を `collection = documents` の generic record projection で実装。issue 専用テーブルに寄せず、create / update / delete / list が `photon_engine_records` と operation log を通ることを server integration test で固定。
+- 2026-05-15: frontend docs metadata は `/api/documents` の server accepted projection を先に使い、PGlite は local cache / offline fallback として扱う形へ変更。document body の Yjs storage は引き続き別境界に残した。

@@ -28,6 +28,9 @@ interface DocumentIssueLinkRow {
 }
 
 type DocsListener = () => void
+interface CacheDocOptions {
+  emit?: boolean
+}
 
 const listeners = new Set<DocsListener>()
 
@@ -127,6 +130,29 @@ export async function getDoc(docId: string): Promise<DocMetadata | null> {
     [docId, appKitConfig.workspace.id]
   )
   return result.rows[0] ? toDoc(result.rows[0]) : null
+}
+
+export async function cacheDocMetadata(
+  doc: DocMetadata,
+  options: CacheDocOptions = {}
+): Promise<void> {
+  const db = await dbPromise
+  await db.query(
+    `
+      INSERT INTO documents (id, title, workspace_id, created_at, updated_at)
+      VALUES ($1, $2, $3, $4, $5)
+      ON CONFLICT (id) DO UPDATE SET
+        title = EXCLUDED.title,
+        workspace_id = EXCLUDED.workspace_id,
+        created_at = EXCLUDED.created_at,
+        updated_at = EXCLUDED.updated_at
+    `,
+    [doc.id, doc.title, doc.workspaceId, doc.createdAt, doc.updatedAt]
+  )
+
+  if (options.emit ?? true) {
+    emitDocsChanged()
+  }
 }
 
 export async function createDoc(input: CreateDocInput = {}): Promise<DocMetadata> {

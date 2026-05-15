@@ -65,7 +65,7 @@ export function DocsList({
       <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2.5 md:px-4 md:py-3">
         <div>
           <h1 className="text-sm font-semibold">Docs</h1>
-          <p className="text-xs text-subtle">{docs.length} local docs</p>
+          <p className="text-xs text-subtle">{docs.length} docs</p>
         </div>
         <button
           data-testid="create-doc"
@@ -478,7 +478,7 @@ export function DocsView({ selectedDocId }: DocsViewProps) {
             <div className="max-w-sm text-center">
               <div className="text-sm font-semibold">Start a workspace doc</div>
               <p className="mt-2 text-sm leading-6 text-muted">
-                Local metadata is stored in PGlite, while document blocks are kept in a Yjs document for collaboration-ready editing.
+                Capture notes, specs, and issue context in one shared workspace.
               </p>
               <button
                 className="mt-4 rounded bg-accent px-3 py-2 text-sm font-medium text-white"

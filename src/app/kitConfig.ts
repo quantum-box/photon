@@ -96,6 +96,7 @@ export interface AppKitConfig {
     backend: AppServerBackend
     apiBaseUrl?: string
     issuesPath: string
+    documentsPath: string
   }
   frontendWorker: {
     enabled: true
@@ -336,6 +337,7 @@ export const appKitConfig: AppKitConfig = {
     backend: resolveAppServerBackend(viteEnv.VITE_PHOTON_APP_SERVER_BACKEND),
     apiBaseUrl: viteEnv.VITE_PHOTON_API_BASE_URL,
     issuesPath: '/api/issues',
+    documentsPath: '/api/documents',
   },
   frontendWorker: {
     enabled: true,

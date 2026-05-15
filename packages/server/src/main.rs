@@ -20,7 +20,7 @@ use axum::{
 use futures_util::{SinkExt, StreamExt};
 use photon_engine::{
     ActorId, CollectionName, HybridTimestamp, Operation, OperationKind, PhotonEngine, RecordKey,
-    ScopeId, SqliteAdapter,
+    ScopeId, SqliteAdapter, StorageAdapter,
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use sqlx::{sqlite::SqlitePoolOptions, SqlitePool};
@@ -45,6 +45,11 @@ use yrs::{updates::decoder::Decode, Doc, ReadTxn, StateVector, Transact, Update}
         create_issue,
         update_issue,
         delete_issue,
+        list_documents,
+        get_document,
+        create_document,
+        update_document,
+        delete_document,
         list_attachments,
         get_attachment,
         create_attachment,
@@ -58,6 +63,10 @@ use yrs::{updates::decoder::Decode, Doc, ReadTxn, StateVector, Transact, Update}
         CreateIssue,
         UpdateIssue,
         IssueListResponse,
+        DocumentMetadata,
+        CreateDocument,
+        UpdateDocument,
+        DocumentListResponse,
         Attachment,
         AttachmentLink,
         CreateAttachment,
@@ -169,6 +178,33 @@ pub struct UpdateIssue {
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct IssueListResponse {
     pub issues: Vec<Issue>,
+    pub total: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct DocumentMetadata {
+    pub id: String,
+    pub title: String,
+    pub workspace_id: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct CreateDocument {
+    pub id: Option<String>,
+    pub title: Option<String>,
+    pub workspace_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct UpdateDocument {
+    pub title: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct DocumentListResponse {
+    pub documents: Vec<DocumentMetadata>,
     pub total: i64,
 }
 
@@ -315,6 +351,7 @@ fn parse_preview_metadata(raw: &str) -> serde_json::Value {
     serde_json::from_str(raw).unwrap_or_else(|_| serde_json::json!({}))
 }
 
+const DEFAULT_WORKSPACE_ID: &str = "photon-default";
 const ENGINE_SCOPE_ID: &str = "workspace:photon-default";
 const ENGINE_ACTOR_ID: &str = "photon-server";
 
@@ -398,6 +435,109 @@ async fn patch_issue_engine_projection(state: &AppState, issue: &Issue) -> Resul
 
 async fn delete_issue_engine_projection(state: &AppState, issue_id: &str) -> Result<(), AppError> {
     apply_engine_record_operation(state, "issues", issue_id, EngineRecordMutation::Delete).await
+}
+
+fn default_document_title() -> String {
+    "Untitled doc".into()
+}
+
+fn normalize_document_title(value: Option<String>) -> String {
+    normalize_optional_text(value).unwrap_or_else(default_document_title)
+}
+
+fn document_to_engine_value(document: &DocumentMetadata) -> Result<serde_json::Value, AppError> {
+    Ok(serde_json::to_value(document)?)
+}
+
+fn document_from_engine_record(
+    record: photon_engine::Record,
+) -> Result<Option<DocumentMetadata>, AppError> {
+    if record.is_deleted() {
+        return Ok(None);
+    }
+
+    Ok(Some(serde_json::from_value(record.value)?))
+}
+
+async fn fetch_document_from_engine(
+    state: &AppState,
+    document_id: &str,
+) -> Result<Option<DocumentMetadata>, AppError> {
+    let record = state
+        .engine
+        .record(&engine_record_key("documents", document_id))
+        .await?;
+    match record {
+        Some(record) => document_from_engine_record(record),
+        None => Ok(None),
+    }
+}
+
+async fn list_documents_from_engine(
+    state: &AppState,
+    workspace_id: &str,
+) -> Result<Vec<DocumentMetadata>, AppError> {
+    let mut documents = state
+        .engine
+        .storage()
+        .list_records(
+            &ScopeId::from(ENGINE_SCOPE_ID),
+            &CollectionName::from("documents"),
+        )
+        .await?
+        .into_iter()
+        .filter_map(|record| document_from_engine_record(record).transpose())
+        .collect::<Result<Vec<_>, _>>()?;
+
+    documents.retain(|document| document.workspace_id == workspace_id);
+    documents.sort_by(|left, right| {
+        right
+            .updated_at
+            .cmp(&left.updated_at)
+            .then_with(|| left.title.cmp(&right.title))
+            .then_with(|| left.id.cmp(&right.id))
+    });
+
+    Ok(documents)
+}
+
+async fn upsert_document_engine_projection(
+    state: &AppState,
+    document: &DocumentMetadata,
+) -> Result<(), AppError> {
+    apply_engine_record_operation(
+        state,
+        "documents",
+        &document.id,
+        EngineRecordMutation::Upsert(document_to_engine_value(document)?),
+    )
+    .await
+}
+
+async fn patch_document_engine_projection(
+    state: &AppState,
+    document: &DocumentMetadata,
+) -> Result<(), AppError> {
+    apply_engine_record_operation(
+        state,
+        "documents",
+        &document.id,
+        EngineRecordMutation::Patch(document_to_engine_value(document)?),
+    )
+    .await
+}
+
+async fn delete_document_engine_projection(
+    state: &AppState,
+    document_id: &str,
+) -> Result<(), AppError> {
+    apply_engine_record_operation(
+        state,
+        "documents",
+        document_id,
+        EngineRecordMutation::Delete,
+    )
+    .await
 }
 
 async fn next_issue_identifier(pool: &SqlitePool) -> Result<String, sqlx::Error> {
@@ -735,6 +875,132 @@ async fn delete_issue(
     }
 
     delete_issue_engine_projection(&state, &id).await?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/documents",
+    params(
+        ("limit" = Option<i64>, Query, description = "Max items to return"),
+        ("offset" = Option<i64>, Query, description = "Items to skip"),
+        ("workspace_id" = Option<String>, Query, description = "Workspace scope"),
+    ),
+    responses((status = 200, description = "List of document metadata", body = DocumentListResponse)),
+    tag = "documents"
+)]
+async fn list_documents(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<ListParams>,
+) -> Result<Json<DocumentListResponse>, AppError> {
+    let limit = params.limit.unwrap_or(100).max(0) as usize;
+    let offset = params.offset.unwrap_or(0).max(0) as usize;
+    let workspace_id = params
+        .workspace_id
+        .unwrap_or_else(|| DEFAULT_WORKSPACE_ID.into());
+
+    let documents = list_documents_from_engine(&state, &workspace_id).await?;
+    let total = documents.len() as i64;
+    let documents = documents.into_iter().skip(offset).take(limit).collect();
+
+    Ok(Json(DocumentListResponse { documents, total }))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/documents/:id",
+    params(("id" = String, Path, description = "Document ID")),
+    responses(
+        (status = 200, description = "Document metadata found", body = DocumentMetadata),
+        (status = 404, description = "Document metadata not found"),
+    ),
+    tag = "documents"
+)]
+async fn get_document(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<DocumentMetadata>, AppError> {
+    let document = fetch_document_from_engine(&state, &id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+
+    Ok(Json(document))
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/documents",
+    request_body = CreateDocument,
+    responses((status = 201, description = "Document metadata created", body = DocumentMetadata)),
+    tag = "documents"
+)]
+async fn create_document(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<CreateDocument>,
+) -> Result<(StatusCode, Json<DocumentMetadata>), AppError> {
+    let now = now_timestamp();
+    let document = DocumentMetadata {
+        id: normalize_optional_text(payload.id).unwrap_or_else(|| Uuid::new_v4().to_string()),
+        title: normalize_document_title(payload.title),
+        workspace_id: normalize_optional_text(payload.workspace_id)
+            .unwrap_or_else(|| DEFAULT_WORKSPACE_ID.into()),
+        created_at: now.clone(),
+        updated_at: now,
+    };
+
+    upsert_document_engine_projection(&state, &document).await?;
+
+    Ok((StatusCode::CREATED, Json(document)))
+}
+
+#[utoipa::path(
+    put,
+    path = "/api/documents/:id",
+    params(("id" = String, Path, description = "Document ID")),
+    request_body = UpdateDocument,
+    responses(
+        (status = 200, description = "Document metadata updated", body = DocumentMetadata),
+        (status = 404, description = "Document metadata not found"),
+    ),
+    tag = "documents"
+)]
+async fn update_document(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(payload): Json<UpdateDocument>,
+) -> Result<Json<DocumentMetadata>, AppError> {
+    let mut document = fetch_document_from_engine(&state, &id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+
+    document.title = normalize_document_title(payload.title);
+    document.updated_at = now_timestamp();
+
+    patch_document_engine_projection(&state, &document).await?;
+
+    Ok(Json(document))
+}
+
+#[utoipa::path(
+    delete,
+    path = "/api/documents/:id",
+    params(("id" = String, Path, description = "Document ID")),
+    responses(
+        (status = 204, description = "Document metadata deleted"),
+        (status = 404, description = "Document metadata not found"),
+    ),
+    tag = "documents"
+)]
+async fn delete_document(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, AppError> {
+    fetch_document_from_engine(&state, &id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+
+    delete_document_engine_projection(&state, &id).await?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -1733,6 +1999,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "/api/issues/:id",
             get(get_issue).put(update_issue).delete(delete_issue),
         )
+        // Document metadata backed by photon-engine generic records
+        .route("/api/documents", get(list_documents).post(create_document))
+        .route(
+            "/api/documents/:id",
+            get(get_document)
+                .put(update_document)
+                .delete(delete_document),
+        )
         // Attachment metadata + surface links
         .route(
             "/api/attachments",
@@ -1784,7 +2058,6 @@ mod tests {
     use super::*;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
-    use photon_engine::StorageAdapter;
     use tower::ServiceExt;
 
     async fn engine_issue_value(state: &AppState, issue_id: &str) -> serde_json::Value {
@@ -1795,6 +2068,15 @@ mod tests {
             .unwrap()
             .unwrap()
             .value
+    }
+
+    async fn engine_document_record(state: &AppState, document_id: &str) -> photon_engine::Record {
+        state
+            .engine
+            .record(&engine_record_key("documents", document_id))
+            .await
+            .unwrap()
+            .unwrap()
     }
 
     async fn test_app() -> (Router, Arc<AppState>) {
@@ -1821,6 +2103,13 @@ mod tests {
             .route(
                 "/api/issues/:id",
                 get(get_issue).put(update_issue).delete(delete_issue),
+            )
+            .route("/api/documents", get(list_documents).post(create_document))
+            .route(
+                "/api/documents/:id",
+                get(get_document)
+                    .put(update_document)
+                    .delete(delete_document),
             )
             .route(
                 "/api/attachments",
@@ -1969,6 +2258,134 @@ mod tests {
 
         assert_eq!(record.value["title"], "Offline sync spec");
         assert_eq!(record.value["status"], "ready");
+    }
+
+    #[tokio::test]
+    async fn test_document_metadata_is_engine_backed_generic_record() {
+        let (app, state) = test_app().await;
+
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/documents")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "id": "doc-alpha",
+                            "title": "Offline sync spec",
+                            "workspace_id": DEFAULT_WORKSPACE_ID
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let created: DocumentMetadata = serde_json::from_slice(&body).unwrap();
+        assert_eq!(created.id, "doc-alpha");
+        assert_eq!(created.title, "Offline sync spec");
+        assert_eq!(created.workspace_id, DEFAULT_WORKSPACE_ID);
+
+        let engine_record = engine_document_record(&state, &created.id).await;
+        assert_eq!(engine_record.key.collection.as_str(), "documents");
+        assert_eq!(engine_record.value, serde_json::to_value(&created).unwrap());
+
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/documents/doc-alpha")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "title": "Accepted document title" }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let updated: DocumentMetadata = serde_json::from_slice(&body).unwrap();
+        assert_eq!(updated.title, "Accepted document title");
+        assert_eq!(updated.created_at, created.created_at);
+
+        let engine_record = engine_document_record(&state, &updated.id).await;
+        assert_eq!(engine_record.value, serde_json::to_value(&updated).unwrap());
+
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/documents")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let list: DocumentListResponse = serde_json::from_slice(&body).unwrap();
+        assert_eq!(list.total, 1);
+        assert_eq!(list.documents[0].id, "doc-alpha");
+        assert_eq!(list.documents[0].title, "Accepted document title");
+
+        let operations = state
+            .engine
+            .storage()
+            .list_operations(photon_engine::OperationFilter {
+                scope: Some(ScopeId::from(ENGINE_SCOPE_ID)),
+                collection: Some(CollectionName::from("documents")),
+                status: Some(photon_engine::OperationStatus::Accepted),
+                ..photon_engine::OperationFilter::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(operations.len(), 2);
+        assert_eq!(operations[0].remote_sequence, Some(1));
+        assert_eq!(operations[1].remote_sequence, Some(2));
+
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/api/documents/doc-alpha")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+        assert!(engine_document_record(&state, "doc-alpha")
+            .await
+            .is_deleted());
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/documents/doc-alpha")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
