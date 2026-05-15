@@ -36,7 +36,7 @@ interface IssuesContextValue {
   issues: Issue[]
   handleMoveIssue: (issueId: string, newStatus: Status) => void
   handleUpdateIssue: (issueId: string, field: keyof Issue, value: string) => void
-  handleCreateIssue: (data: CreateIssueData) => void
+  handleCreateIssue: (data: CreateIssueData) => Promise<void>
   handleDeleteIssue: (issueId: string) => void
   syncIssue: (issue: Issue) => void
   syncIssues: (issues: Issue[]) => void
@@ -103,17 +103,8 @@ function removeYIssue(issueId: string) {
 }
 
 function reconcileYIssues(serverIssues: Issue[]) {
-  const serverIds = new Set(serverIssues.map((issue) => issue.id))
-
   for (const issue of serverIssues) {
     upsertYIssue(issue)
-  }
-
-  for (let i = issuesArray.length - 1; i >= 0; i--) {
-    const id = issuesArray.get(i).get('id') as string | undefined
-    if (!id || !serverIds.has(id)) {
-      issuesArray.delete(i, 1)
-    }
   }
 }
 
@@ -231,8 +222,8 @@ export function IssuesProvider({ children }: { children: ReactNode }) {
     []
   )
 
-  const handleCreateIssue = useCallback((data: CreateIssueData) => {
-    void createServerIssue({
+  const handleCreateIssue = useCallback(async (data: CreateIssueData) => {
+    await createServerIssue({
       ...data,
       assignee: data.assignee ?? null,
       labels: data.labels ?? [],
@@ -243,6 +234,7 @@ export function IssuesProvider({ children }: { children: ReactNode }) {
       })
       .catch((error: unknown) => {
         console.warn('Failed to persist created issue', error)
+        throw error
       })
   }, [])
 

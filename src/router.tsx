@@ -23,6 +23,7 @@ import { DatabaseRecordsProvider, useDatabaseRecords } from './contexts/IssuesCo
 import { DatabasesProvider, type WorkspaceDatabase, useWorkspaceDatabases } from './contexts/DatabasesContext'
 import { DatabaseViewsProvider, useDatabaseViews } from './contexts/DatabaseViewsContext'
 import { AttachmentsProvider } from './lib/attachments/useWorkspaceAttachments'
+import { fetchServerIssues } from './lib/issuesApi'
 import { statusConfig, type Status, type DatabaseRecord } from './data/mock'
 import type { SortingState } from '@tanstack/react-table'
 import {
@@ -612,7 +613,7 @@ const issueDetailRoute = createRoute({
 function RecordDetailPanel() {
   const { recordId } = issueDetailRoute.useParams()
   const { database, view } = databasesRoute.useSearch()
-  const { records, handleUpdateRecord, handleDeleteRecord } = useDatabaseRecords()
+  const { records, handleUpdateRecord, handleDeleteRecord, syncRecords } = useDatabaseRecords()
   const { databases } = useWorkspaceDatabases()
   const navigate = useNavigate()
   const databaseRecords = useMemo(
@@ -624,6 +625,21 @@ function RecordDetailPanel() {
     () => databaseRecords.find((candidate) => candidate.identifier === recordId) ?? null,
     [databaseRecords, recordId]
   )
+
+  useEffect(() => {
+    if (record) return
+    let cancelled = false
+    void fetchServerIssues()
+      .then((serverRecords) => {
+        if (!cancelled) syncRecords(serverRecords)
+      })
+      .catch((error: unknown) => {
+        console.warn('Failed to hydrate record detail from Photon Engine', error)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [record, syncRecords])
 
   return (
     <DetailPanel

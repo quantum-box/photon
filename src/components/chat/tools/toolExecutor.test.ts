@@ -11,6 +11,7 @@ import type { Issue } from '../../../data/mock'
 describe('tool executor', () => {
   afterEach(() => {
     vi.useRealTimers()
+    vi.restoreAllMocks()
     vi.unstubAllGlobals()
   })
 
@@ -79,35 +80,13 @@ describe('tool executor', () => {
     })
   })
 
-  it('creates issues through the server-backed issue API and syncs the projection', async () => {
+  it('creates records through Photon Engine and syncs the projection', async () => {
     const synced: Issue[] = []
-    const serverIssue: Issue = {
-      id: 'issue-1',
-      identifier: 'PLT-101',
-      title: 'Created from chat',
-      status: 'todo',
-      priority: 'high',
-      assignee: null,
-      labels: ['chat'],
-      project: 'Photon Core',
-      createdAt: '2026-05-14T00:00:00Z',
-      updatedAt: '2026-05-14T00:00:00Z',
-      description: '',
-    }
-
-    vi.stubGlobal('fetch', vi.fn(async () => ({
-      ok: true,
-      status: 201,
-      json: async () => ({
-        ...serverIssue,
-        created_at: serverIssue.createdAt,
-        updated_at: serverIssue.updatedAt,
-      }),
-    })))
+    const title = `Created from chat ${Date.now()}`
 
     const result = await executeTool(
       'issue_create',
-      { title: 'Created from chat', priority: 'high', labels: ['chat'], project: 'Photon Core' },
+      { title, priority: 'high', labels: ['chat'], project: 'Photon Core' },
       new AbortController().signal,
       {
         issueTools: {
@@ -121,45 +100,38 @@ describe('tool executor', () => {
     const data = result.data as IssueToolResponse
     expect(result.error).toBeUndefined()
     expect(data.action).toBe('create')
-    expect(data.issues[0]).toMatchObject({ identifier: 'PLT-101', title: 'Created from chat' })
+    expect(data.issues[0]).toMatchObject({ title, priority: 'high', labels: ['chat'] })
     expect(synced).toHaveLength(1)
-    expect(fetch).toHaveBeenCalledWith('/api/issues', expect.objectContaining({ method: 'POST' }))
   })
 
-  it('searches the canonical issue list and syncs fetched results', async () => {
-    const issue: Issue = {
-      id: 'issue-2',
-      identifier: 'PLT-102',
-      title: 'Investigate blocker',
-      status: 'in_progress',
-      priority: 'urgent',
-      assignee: 'Alice',
-      labels: ['blocker'],
-      project: 'Photon Core',
-      createdAt: '2026-05-14T00:00:00Z',
-      updatedAt: '2026-05-14T00:00:00Z',
-      description: 'A release blocker',
-    }
+  it('searches canonical Photon Engine records and syncs fetched results', async () => {
     const syncedLists: Issue[][] = []
+    const title = `Investigate blocker ${Date.now()}`
 
-    vi.stubGlobal('fetch', vi.fn(async () => ({
-      ok: true,
-      status: 200,
-      json: async () => ({
-        issues: [
-          {
-            ...issue,
-            created_at: issue.createdAt,
-            updated_at: issue.updatedAt,
-          },
-        ],
-        total: 1,
-      }),
-    })))
+    await executeTool(
+      'issue_create',
+      {
+        title,
+        description: 'A release blocker',
+        status: 'in_progress',
+        priority: 'urgent',
+        assignee: 'Alice',
+        labels: ['blocker'],
+        project: 'Photon Core',
+      },
+      new AbortController().signal,
+      {
+        issueTools: {
+          issues: [],
+          syncIssue: () => {},
+          syncIssues: () => {},
+        },
+      }
+    )
 
     const result = await executeTool(
       'issue_search',
-      { query: 'blocker' },
+      { query: title },
       new AbortController().signal,
       {
         issueTools: {
@@ -172,7 +144,9 @@ describe('tool executor', () => {
 
     const data = result.data as IssueToolResponse
     expect(data.total).toBe(1)
-    expect(data.issues[0].identifier).toBe('PLT-102')
-    expect(syncedLists[0]).toHaveLength(1)
+    expect(data.issues[0]).toMatchObject({ title, assignee: 'Alice', labels: ['blocker'] })
+    expect(syncedLists[0]).toEqual(expect.arrayContaining([
+      expect.objectContaining({ title }),
+    ]))
   })
 })

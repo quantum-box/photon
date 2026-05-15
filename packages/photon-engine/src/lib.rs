@@ -20,6 +20,8 @@ pub mod protocol;
 pub mod sqlite;
 pub mod storage;
 pub mod types;
+#[cfg(feature = "wasm")]
+pub mod wasm;
 
 pub use engine::PhotonEngine;
 pub use error::{EngineError, Result};

@@ -1,6 +1,7 @@
 import { useNavigate, useRouterState, Link } from '@tanstack/react-router'
-import { useState } from 'react'
-import type { FormEvent } from 'react'
+import { useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
+import type { FormEvent, MouseEvent as ReactMouseEvent } from 'react'
 import type { Status } from '../data/mock'
 import { useDatabaseRecords } from '../contexts/IssuesContext'
 import { useWorkspaceDatabases } from '../contexts/DatabasesContext'
@@ -95,12 +96,20 @@ const statusLabels: Record<string, string> = {
 
 export function Sidebar() {
   const { records } = useDatabaseRecords()
-  const { databases, addDatabase } = useWorkspaceDatabases()
+  const { databases, addDatabase, removeDatabase, canRemoveDatabase } = useWorkspaceDatabases()
   const navigate = useNavigate()
   const connStatus = useConnectionStatus()
   const { onlineCount } = useSyncPresence()
   const [newDatabaseName, setNewDatabaseName] = useState('')
   const [sideNavOpen, setSideNavOpen] = useState(true)
+  const [contextMenu, setContextMenu] = useState<{
+    databaseId: string | null
+    label: string
+    count: number
+    x: number
+    y: number
+    canDelete: boolean
+  } | null>(null)
 
   const pathname = useRouterState({ select: (s) => s.location.pathname })
   const search = useRouterState({ select: (s) => s.location.search }) as {
@@ -142,6 +151,68 @@ export function Sidebar() {
       search: { database: nextDatabaseId, view },
     })
   }
+
+  const handleDatabaseContextMenu = (
+    event: ReactMouseEvent,
+    database: { id: string | null; label: string; count: number }
+  ) => {
+    event.preventDefault()
+    setContextMenu({
+      databaseId: database.id,
+      label: database.label,
+      count: database.count,
+      x: event.clientX,
+      y: event.clientY,
+      canDelete: canRemoveDatabase(database.id),
+    })
+  }
+
+  const closeContextMenu = () => setContextMenu(null)
+
+  const copyDatabaseLink = async () => {
+    if (!contextMenu || typeof window === 'undefined') return
+    const url = new URL('/databases', window.location.origin)
+    const databaseId = contextMenu.databaseId ?? undefined
+    url.searchParams.set(
+      'view',
+      getDefaultDatabaseViewId(getDatabaseViewScopeId(databaseId), currentDatabaseViewType)
+    )
+    if (databaseId) url.searchParams.set('database', databaseId)
+    await navigator.clipboard.writeText(url.toString())
+    closeContextMenu()
+  }
+
+  const deleteContextDatabase = () => {
+    if (!contextMenu?.databaseId || !contextMenu.canDelete) return
+    const confirmed = window.confirm(`Delete "${contextMenu.label}" database?`)
+    if (!confirmed) return
+
+    const deleted = removeDatabase(contextMenu.databaseId)
+    closeContextMenu()
+    if (deleted && selectedDatabaseId === contextMenu.databaseId) {
+      handleDatabaseSelect(null)
+    }
+  }
+
+  useEffect(() => {
+    if (!contextMenu) return
+
+    const close = () => closeContextMenu()
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') closeContextMenu()
+    }
+
+    window.addEventListener('click', close)
+    window.addEventListener('resize', close)
+    window.addEventListener('scroll', close, true)
+    window.addEventListener('keydown', handleKeyDown)
+    return () => {
+      window.removeEventListener('click', close)
+      window.removeEventListener('resize', close)
+      window.removeEventListener('scroll', close, true)
+      window.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [contextMenu])
 
   const handleCreateDatabase = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -185,6 +256,13 @@ export function Sidebar() {
             : 'text-muted hover:bg-surface-hover'
         }`}
         onClick={() => handleDatabaseSelect(null)}
+        onContextMenu={(event) =>
+          handleDatabaseContextMenu(event, {
+            id: null,
+            label: 'All databases',
+            count: records.length,
+          })
+        }
       >
         <span>All databases</span>
         <span className="text-xs text-subtle">{records.length}</span>
@@ -201,6 +279,13 @@ export function Sidebar() {
                 : 'text-muted hover:bg-surface-hover'
             }`}
             onClick={() => handleDatabaseSelect(item.id)}
+            onContextMenu={(event) =>
+              handleDatabaseContextMenu(event, {
+                id: item.id,
+                label: item.label,
+                count,
+              })
+            }
           >
             <span className="flex min-w-0 items-center gap-2">
               <span className="h-2 w-2 shrink-0 rounded-full bg-accent" />
@@ -273,25 +358,6 @@ export function Sidebar() {
           >
             Open
           </button>
-          <Link
-            data-testid="nav-databases"
-            to="/databases"
-            search={{
-              database: selectedDatabaseId,
-              view: getDefaultDatabaseViewId(
-                getDatabaseViewScopeId(selectedDatabaseId),
-                currentView === 'board' || currentView === 'workflow' ? currentView : 'table'
-              ),
-            }}
-            className={`mb-1 flex h-8 w-8 items-center justify-center rounded text-sm no-underline transition-colors ${
-              currentView === 'table' || currentView === 'board' || currentView === 'workflow'
-                ? 'bg-surface-hover text-foreground'
-                : 'text-muted hover:bg-surface-hover'
-            }`}
-            title="Databases"
-          >
-            ▦
-          </Link>
           <div className="mt-auto flex flex-col gap-1">
             {workspaceLinks.map((view) => (
               <Link
@@ -327,25 +393,6 @@ export function Sidebar() {
 
       {/* Navigation */}
       <div className="px-2 py-3">
-        <Link
-          data-testid="nav-databases"
-          to="/databases"
-          search={{
-            database: selectedDatabaseId,
-            view: getDefaultDatabaseViewId(
-              getDatabaseViewScopeId(selectedDatabaseId),
-              currentView === 'board' || currentView === 'workflow' ? currentView : 'table'
-            ),
-          }}
-          className={`mb-1 flex items-center gap-2 rounded px-2 py-1.5 text-sm text-left transition-colors no-underline ${
-            currentView === 'table' || currentView === 'board' || currentView === 'workflow'
-              ? 'bg-surface-hover text-foreground'
-              : 'text-muted hover:bg-surface-hover'
-          }`}
-        >
-          <span>▦</span>
-          <span>Databases</span>
-        </Link>
         {appKitConfig.workspace.primaryNav.map((item) => (
           <button
             key={item.id}
@@ -383,6 +430,64 @@ export function Sidebar() {
       <ThemeToggle />
       </aside>
       )}
+      {contextMenu &&
+        createPortal(
+          <div
+            data-testid="database-context-menu"
+            role="menu"
+            className="min-w-52 rounded-md border border-border bg-surface p-1 text-sm text-foreground shadow-soft"
+            style={{
+              position: 'fixed',
+              left: Math.min(contextMenu.x, window.innerWidth - 220),
+              top: Math.min(contextMenu.y, window.innerHeight - 150),
+              zIndex: 10000,
+            }}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="px-2 py-1.5">
+              <div className="truncate text-xs font-medium text-foreground">
+                {contextMenu.label}
+              </div>
+              <div className="text-[11px] text-subtle">
+                {contextMenu.count} records
+              </div>
+            </div>
+            <button
+              type="button"
+              role="menuitem"
+              data-testid="database-context-open"
+              className="flex w-full items-center rounded px-2 py-1.5 text-left text-xs text-muted hover:bg-surface-hover hover:text-foreground"
+              onClick={() => {
+                handleDatabaseSelect(contextMenu.databaseId)
+                closeContextMenu()
+              }}
+            >
+              Open database
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              data-testid="database-context-copy-link"
+              className="flex w-full items-center rounded px-2 py-1.5 text-left text-xs text-muted hover:bg-surface-hover hover:text-foreground"
+              onClick={() => void copyDatabaseLink()}
+            >
+              Copy link
+            </button>
+            <div className="my-1 border-t border-border" />
+            <button
+              type="button"
+              role="menuitem"
+              data-testid="database-context-delete"
+              disabled={!contextMenu.canDelete}
+              className="flex w-full items-center rounded px-2 py-1.5 text-left text-xs text-red-500 hover:bg-surface-hover disabled:cursor-not-allowed disabled:text-subtle"
+              onClick={deleteContextDatabase}
+              title={contextMenu.canDelete ? 'Delete database' : 'Default databases cannot be deleted'}
+            >
+              Delete database
+            </button>
+          </div>,
+          document.body
+        )}
     </>
   )
 }

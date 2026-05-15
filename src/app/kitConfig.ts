@@ -73,6 +73,9 @@ export interface AppKitConfig {
     defaultTitle: string
     yjsArrayName: string
   }
+  engine: {
+    pgliteDataDir: string
+  }
   attachments: {
     yjsArrayName: string
     endpoint: string
@@ -320,6 +323,9 @@ export const appKitConfig: AppKitConfig = {
     pgliteDataDir: 'idb://photon-docs',
     defaultTitle: 'Untitled doc',
     yjsArrayName: 'blocks',
+  },
+  engine: {
+    pgliteDataDir: 'idb://photon-engine',
   },
   attachments: {
     yjsArrayName: 'attachments',

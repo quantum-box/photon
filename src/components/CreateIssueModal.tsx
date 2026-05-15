@@ -12,7 +12,7 @@ import type { CreateRecordData } from '../contexts/IssuesContext'
 interface CreateIssueModalProps {
   open: boolean
   onClose: () => void
-  onCreate: (data: CreateRecordData) => void
+  onCreate: (data: CreateRecordData) => void | Promise<void>
 }
 
 export function CreateIssueModal({ open, onClose, onCreate }: CreateIssueModalProps) {
@@ -45,10 +45,10 @@ export function CreateIssueModal({ open, onClose, onCreate }: CreateIssueModalPr
     return () => document.removeEventListener('keydown', handler)
   }, [open, onClose])
 
-  const handleSubmit = useCallback(() => {
+  const handleSubmit = useCallback(async () => {
     const trimmed = title.trim()
     if (!trimmed) return
-    onCreate({
+    await onCreate({
       title: trimmed,
       status,
       priority,

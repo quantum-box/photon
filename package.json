@@ -62,6 +62,7 @@
     "tauri:ios:init": "tauri ios init",
     "tauri:ios:dev": "tauri ios dev",
     "tauri:ios:build": "tauri ios build",
+    "engine:wasm": "wasm-pack build packages/photon-engine --target web --out-dir pkg --no-default-features --features wasm",
     "pages:build": "npm run build",
     "pages:deploy": "npm run pages:build && cd dist && wrangler pages deploy . --project-name photon --branch main --commit-dirty=true",
     "worker:dev": "wrangler dev --config wrangler.jsonc --port 8787",

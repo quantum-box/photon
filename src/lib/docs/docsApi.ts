@@ -1,5 +1,11 @@
 import { appKitConfig } from '../../app/kitConfig'
 import type { CreateDocInput, DocMetadata, UpdateDocInput } from './types'
+import {
+  listClientEngineRecords,
+  getClientEngineRecord,
+  patchClientEngineRecord,
+  upsertClientEngineRecord,
+} from '../photonEngine/client'
 
 export interface ServerDocumentMetadata {
   id: string
@@ -24,33 +30,6 @@ export class DocsApiError extends Error {
   }
 }
 
-function buildApiUrl(path: string) {
-  const baseUrl = appKitConfig.server.apiBaseUrl?.replace(/\/$/, '') ?? ''
-  const normalizedPath = path.startsWith('/') ? path : `/${path}`
-  return `${baseUrl}${normalizedPath}`
-}
-
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(buildApiUrl(path), {
-    ...init,
-    headers: {
-      ...(init?.body ? { 'content-type': 'application/json' } : {}),
-      ...init?.headers,
-    },
-  })
-
-  if (!response.ok) {
-    const message = await response.text()
-    throw new DocsApiError(message || response.statusText, response.status)
-  }
-
-  if (response.status === 204) {
-    return undefined as T
-  }
-
-  return response.json() as Promise<T>
-}
-
 function withoutUndefined<T extends object>(payload: T): Partial<T> {
   return Object.fromEntries(
     Object.entries(payload).filter(([, value]) => value !== undefined)
@@ -68,44 +47,42 @@ export function toDocMetadata(serverDocument: ServerDocumentMetadata): DocMetada
 }
 
 export async function fetchServerDocuments(): Promise<DocMetadata[]> {
-  const params = new URLSearchParams({ workspace_id: appKitConfig.workspace.id })
-  const response = await request<ServerDocumentListResponse>(
-    `${appKitConfig.server.documentsPath}?${params.toString()}`
-  )
-  return response.documents.map(toDocMetadata)
+  const records = await listClientEngineRecords<DocMetadata>('documents')
+  return records
+    .map((record) => record.value)
+    .filter((document) => document.workspaceId === appKitConfig.workspace.id)
 }
 
 export async function fetchServerDocument(docId: string): Promise<DocMetadata> {
-  const document = await request<ServerDocumentMetadata>(
-    `${appKitConfig.server.documentsPath}/${encodeURIComponent(docId)}`
-  )
-  return toDocMetadata(document)
+  const record = await getClientEngineRecord<DocMetadata>('documents', docId)
+  if (!record) throw new DocsApiError('Document metadata not found', 404)
+  return record.value
 }
 
 export async function createServerDocument(input: CreateDocInput = {}): Promise<DocMetadata> {
-  const document = await request<ServerDocumentMetadata>(appKitConfig.server.documentsPath, {
-    method: 'POST',
-    body: JSON.stringify(
-      withoutUndefined({
-        id: input.id,
-        title: input.title,
-        workspace_id: appKitConfig.workspace.id,
-      })
-    ),
-  })
-  return toDocMetadata(document)
+  const now = new Date().toISOString()
+  const document: DocMetadata = {
+    id: input.id ?? globalThis.crypto?.randomUUID?.() ?? `doc-${Date.now()}`,
+    title: input.title?.trim() || appKitConfig.docs.defaultTitle,
+    workspaceId: appKitConfig.workspace.id,
+    createdAt: now,
+    updatedAt: now,
+  }
+  const record = await upsertClientEngineRecord('documents', document.id, document)
+  return record.value
 }
 
 export async function updateServerDocument(
   docId: string,
   input: UpdateDocInput
 ): Promise<DocMetadata> {
-  const document = await request<ServerDocumentMetadata>(
-    `${appKitConfig.server.documentsPath}/${encodeURIComponent(docId)}`,
-    {
-      method: 'PUT',
-      body: JSON.stringify(withoutUndefined({ title: input.title })),
-    }
-  )
-  return toDocMetadata(document)
+  const existing = await fetchServerDocument(docId)
+  const document: DocMetadata = {
+    ...existing,
+    ...withoutUndefined({ title: input.title?.trim() || appKitConfig.docs.defaultTitle }),
+    updatedAt: new Date().toISOString(),
+  }
+  const record = await patchClientEngineRecord<DocMetadata>('documents', docId, document)
+  if (!record) throw new DocsApiError('Document metadata not found', 404)
+  return record.value
 }

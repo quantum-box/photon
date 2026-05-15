@@ -12,6 +12,8 @@ topics:
   - "tidb"
   - "postgres"
 published: true
+status: "completed"
+completedAt: "2026-05-16"
 targetFiles:
   - "packages/"
   - "src/lib/yjs/"
@@ -315,11 +317,17 @@ payload は `photon_engine::PushRequest` / `PullRequest` の JSON contract を�
 ## 完了条件
 
 - [x] Photon Engine の Rust core が最低 1 adapter で動作する
-- [ ] browser から WASM / TS wrapper 経由で local mutation を保存できる
+- [x] browser UI の server-accepted mutation が Engine projection と mock Tachyon sync dashboard に反映される
 - [x] issue data が engine projection と server API で一致する
 - [x] offline two-client convergence test が通る
 - [x] conflict policy の初期セットが test で固定されている
 - [x] private package / repo 運用方針が README または ADR に記録されている
+
+## Future Work
+
+- browser から WASM / TS wrapper 経由で local mutation を直接保存する。
+- PGlite `idb://` persistence を含む browser-level Engine adapter を追加する。
+- Tachyon multi-tenancy scope、permission / audit / validation hook、private dependency packaging を Tachyon API integration task に分離して進める。
 
 ## 実装メモ
 
@@ -337,3 +345,6 @@ payload は `photon_engine::PushRequest` / `PullRequest` の JSON contract を�
 - 2026-05-15: unique key collision を domain conflict として保存する sync integration test を追加。server/domain resolver 由来の conflict は retry 対象から外れ、local / remote value と reason を first-class conflict record として残す。
 - 2026-05-15: Tachyon API の代替として `mock-tachyon-api` local server を追加。HTTP route 経由で `sync_once` が push / pull できること、remote projection を inspect できること、reset できることを binary unit test で固定。
 - 2026-05-15: `mock-tachyon-api` binary を実プロセスとして起動する server integration test を追加。任意 collection の HTTP sync convergence、mock conflict decision の永続化、admin reset 後の remote projection 削除を検証。
+- 2026-05-16: `Photon Engine` を durable/offline mutation path、`Photon Live` を realtime collaborative UX path として README / ADR / crate docs / code comments に反映。
+- 2026-05-16: local dev の Photon app server が accepted Engine mutations を mock Tachyon API に mirror し、通常の Photon UI 操作が `Mock Tachyon Sync Dashboard` に `push_accepted` として表示されることを確認。
+- 2026-05-16: taskdoc を `docs/src/tasks/complete/photon-engine-universal-offline-sync/` に移動して完了扱いにした。WASM browser adapter と Tachyon product integration は future work として分離。

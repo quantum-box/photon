@@ -13,6 +13,8 @@ export interface WorkspaceDatabase {
 interface DatabasesContextValue {
   databases: WorkspaceDatabase[]
   addDatabase: (label: string) => WorkspaceDatabase | null
+  removeDatabase: (databaseId: string) => boolean
+  canRemoveDatabase: (databaseId: string | null | undefined) => boolean
   getDatabase: (databaseId: string | undefined) => WorkspaceDatabase | null
 }
 
@@ -96,6 +98,15 @@ function upsertYDatabase(database: WorkspaceDatabase) {
   databasesArray.push([ymap])
 }
 
+function deleteYDatabase(id: string) {
+  for (let i = databasesArray.length - 1; i >= 0; i--) {
+    const ymap = databasesArray.get(i)
+    if (ymap.get('id') === id) {
+      databasesArray.delete(i, 1)
+    }
+  }
+}
+
 function removeDuplicateYDatabases(id: string, keep: Y.Map<string>) {
   for (let i = databasesArray.length - 1; i >= 0; i--) {
     const ymap = databasesArray.get(i)
@@ -107,6 +118,10 @@ function removeDuplicateYDatabases(id: string, keep: Y.Map<string>) {
 
 export function DatabasesProvider({ children }: { children: ReactNode }) {
   const [customDatabases, setCustomDatabases] = useState<WorkspaceDatabase[]>([])
+  const baseDatabaseIds = useMemo(
+    () => new Set(baseDatabases.map((database) => database.id)),
+    []
+  )
 
   useEffect(() => {
     let rafId: number | null = null
@@ -148,15 +163,19 @@ export function DatabasesProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const databases = useMemo(() => {
-    const seen = new Set(baseDatabases.map((database) => database.id))
-    const custom = customDatabases.filter((database) => !seen.has(database.id))
+    const custom = customDatabases.filter((database) => !baseDatabaseIds.has(database.id))
     return [...baseDatabases, ...custom]
-  }, [customDatabases])
+  }, [baseDatabaseIds, customDatabases])
 
   const getDatabase = useCallback(
     (databaseId: string | undefined) =>
       databases.find((database) => database.id === databaseId) ?? null,
     [databases]
+  )
+
+  const canRemoveDatabase = useCallback(
+    (databaseId: string | null | undefined) => Boolean(databaseId && !baseDatabaseIds.has(databaseId)),
+    [baseDatabaseIds]
   )
 
   const addDatabase = useCallback(
@@ -192,9 +211,24 @@ export function DatabasesProvider({ children }: { children: ReactNode }) {
     [databases]
   )
 
+  const removeDatabase = useCallback(
+    (databaseId: string) => {
+      if (!canRemoveDatabase(databaseId)) return false
+
+      setCustomDatabases((current) =>
+        current.filter((database) => database.id !== databaseId)
+      )
+      ydoc.transact(() => {
+        deleteYDatabase(databaseId)
+      })
+      return true
+    },
+    [canRemoveDatabase]
+  )
+
   const value = useMemo(
-    () => ({ databases, addDatabase, getDatabase }),
-    [addDatabase, databases, getDatabase]
+    () => ({ databases, addDatabase, removeDatabase, canRemoveDatabase, getDatabase }),
+    [addDatabase, canRemoveDatabase, databases, getDatabase, removeDatabase]
   )
 
   return <DatabasesContext.Provider value={value}>{children}</DatabasesContext.Provider>
