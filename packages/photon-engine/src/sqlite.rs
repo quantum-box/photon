@@ -5,8 +5,8 @@ use crate::{
     storage::StorageAdapter,
     types::{
         unix_time_ms, CollectionName, Conflict, Operation, OperationFilter, OperationId,
-        OperationStatus, Record, RecordId, RecordKey, RemoteId, ScopeId, StoredOperation,
-        SyncCursor,
+        OperationStatus, Record, RecordId, RecordKey, RemoteId, ScopeId, Snapshot, SnapshotFormat,
+        SnapshotUpdate, StoredOperation, SyncCursor,
     },
     EngineError, Result,
 };
@@ -101,6 +101,51 @@ impl SqliteAdapter {
                 operation_id TEXT NOT NULL,
                 conflict_json TEXT NOT NULL
             )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS photon_engine_snapshots (
+                scope TEXT NOT NULL,
+                collection TEXT NOT NULL,
+                record_id TEXT NOT NULL,
+                format TEXT NOT NULL,
+                sequence INTEGER NOT NULL,
+                payload BLOB NOT NULL,
+                metadata_json TEXT NOT NULL,
+                updated_at_ms INTEGER NOT NULL,
+                PRIMARY KEY (scope, collection, record_id)
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS photon_engine_snapshot_updates (
+                scope TEXT NOT NULL,
+                collection TEXT NOT NULL,
+                record_id TEXT NOT NULL,
+                sequence INTEGER NOT NULL,
+                format TEXT NOT NULL,
+                payload BLOB NOT NULL,
+                metadata_json TEXT NOT NULL,
+                created_at_ms INTEGER NOT NULL,
+                PRIMARY KEY (scope, collection, record_id, sequence)
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            CREATE INDEX IF NOT EXISTS idx_photon_engine_snapshot_updates_key_sequence
+            ON photon_engine_snapshot_updates(scope, collection, record_id, sequence)
             "#,
         )
         .execute(&self.pool)
@@ -316,6 +361,143 @@ impl StorageAdapter for SqliteAdapter {
         Ok(())
     }
 
+    async fn save_snapshot(&self, snapshot: Snapshot) -> Result<()> {
+        let metadata_json = serde_json::to_string(&snapshot.metadata)?;
+
+        sqlx::query(
+            r#"
+            INSERT INTO photon_engine_snapshots (
+                scope,
+                collection,
+                record_id,
+                format,
+                sequence,
+                payload,
+                metadata_json,
+                updated_at_ms
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+            ON CONFLICT(scope, collection, record_id)
+            DO UPDATE SET
+                format = excluded.format,
+                sequence = excluded.sequence,
+                payload = excluded.payload,
+                metadata_json = excluded.metadata_json,
+                updated_at_ms = excluded.updated_at_ms
+            "#,
+        )
+        .bind(snapshot.key.scope.as_str())
+        .bind(snapshot.key.collection.as_str())
+        .bind(snapshot.key.record_id.as_str())
+        .bind(snapshot.format.as_str())
+        .bind(snapshot.sequence)
+        .bind(snapshot.payload)
+        .bind(metadata_json)
+        .bind(snapshot.updated_at_ms)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    async fn get_snapshot(&self, key: &RecordKey) -> Result<Option<Snapshot>> {
+        let row = sqlx::query(
+            r#"
+            SELECT format, sequence, payload, metadata_json, updated_at_ms
+            FROM photon_engine_snapshots
+            WHERE scope = ?1 AND collection = ?2 AND record_id = ?3
+            "#,
+        )
+        .bind(key.scope.as_str())
+        .bind(key.collection.as_str())
+        .bind(key.record_id.as_str())
+        .fetch_optional(&self.pool)
+        .await?;
+
+        row.map(|row| snapshot_from_row(key.clone(), row))
+            .transpose()
+    }
+
+    async fn append_snapshot_update(&self, update: SnapshotUpdate) -> Result<()> {
+        let metadata_json = serde_json::to_string(&update.metadata)?;
+
+        sqlx::query(
+            r#"
+            INSERT OR IGNORE INTO photon_engine_snapshot_updates (
+                scope,
+                collection,
+                record_id,
+                sequence,
+                format,
+                payload,
+                metadata_json,
+                created_at_ms
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+            "#,
+        )
+        .bind(update.key.scope.as_str())
+        .bind(update.key.collection.as_str())
+        .bind(update.key.record_id.as_str())
+        .bind(update.sequence)
+        .bind(update.format.as_str())
+        .bind(update.payload)
+        .bind(metadata_json)
+        .bind(update.created_at_ms)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    async fn list_snapshot_updates(
+        &self,
+        key: &RecordKey,
+        after_sequence: i64,
+    ) -> Result<Vec<SnapshotUpdate>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT sequence, format, payload, metadata_json, created_at_ms
+            FROM photon_engine_snapshot_updates
+            WHERE scope = ?1
+              AND collection = ?2
+              AND record_id = ?3
+              AND sequence > ?4
+            ORDER BY sequence ASC
+            "#,
+        )
+        .bind(key.scope.as_str())
+        .bind(key.collection.as_str())
+        .bind(key.record_id.as_str())
+        .bind(after_sequence)
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.into_iter()
+            .map(|row| snapshot_update_from_row(key.clone(), row))
+            .collect()
+    }
+
+    async fn compact_snapshot_updates(&self, key: &RecordKey, up_to_sequence: i64) -> Result<()> {
+        sqlx::query(
+            r#"
+            DELETE FROM photon_engine_snapshot_updates
+            WHERE scope = ?1
+              AND collection = ?2
+              AND record_id = ?3
+              AND sequence <= ?4
+            "#,
+        )
+        .bind(key.scope.as_str())
+        .bind(key.collection.as_str())
+        .bind(key.record_id.as_str())
+        .bind(up_to_sequence)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
     async fn save_cursor(&self, cursor: SyncCursor) -> Result<()> {
         let cursor_json = serde_json::to_string(&cursor)?;
 
@@ -437,5 +619,36 @@ fn stored_operation_from_row(row: sqlx::sqlite::SqliteRow) -> Result<StoredOpera
         local_sequence: row.try_get("local_sequence")?,
         remote_sequence: row.try_get("remote_sequence")?,
         received_at_ms: row.try_get("received_at_ms")?,
+    })
+}
+
+fn snapshot_from_row(key: RecordKey, row: sqlx::sqlite::SqliteRow) -> Result<Snapshot> {
+    let metadata_json: String = row.try_get("metadata_json")?;
+    let format: String = row.try_get("format")?;
+
+    Ok(Snapshot {
+        key,
+        format: SnapshotFormat::from(format),
+        payload: row.try_get("payload")?,
+        sequence: row.try_get("sequence")?,
+        metadata: serde_json::from_str(&metadata_json)?,
+        updated_at_ms: row.try_get("updated_at_ms")?,
+    })
+}
+
+fn snapshot_update_from_row(
+    key: RecordKey,
+    row: sqlx::sqlite::SqliteRow,
+) -> Result<SnapshotUpdate> {
+    let metadata_json: String = row.try_get("metadata_json")?;
+    let format: String = row.try_get("format")?;
+
+    Ok(SnapshotUpdate {
+        key,
+        format: SnapshotFormat::from(format),
+        payload: row.try_get("payload")?,
+        sequence: row.try_get("sequence")?,
+        metadata: serde_json::from_str(&metadata_json)?,
+        created_at_ms: row.try_get("created_at_ms")?,
     })
 }

@@ -220,8 +220,8 @@ WebSocket や Durable Object は、この protocol を素早く起動する通�
 ### Phase 2: Docs / Yjs snapshot を engine 管理に寄せる 📝
 
 - [x] document metadata を generic record にする
-- [ ] Yjs update / snapshot を engine の snapshot stream として保存する
-- [ ] snapshot compaction policy を定義する
+- [x] Yjs update / snapshot を engine の snapshot stream として保存する
+- [x] snapshot compaction policy を定義する
 - [x] docs の PGlite metadata と Yjs document storage の境界を整理する
 
 ### Phase 3: Attachments / Chat / Tool Calls を載せる 📝
@@ -309,3 +309,5 @@ WebSocket や Durable Object は、この protocol を素早く起動する通�
 - 2026-05-15: frontend docs metadata は `/api/documents` の server accepted projection を先に使い、PGlite は local cache / offline fallback として扱う形へ変更。document body の Yjs storage は引き続き別境界に残した。
 - 2026-05-15: attachment metadata と surface link を `attachments` / `attachment_links` collections の generic record として mirror。file bytes は保存せず、storage provider / key / preview metadata の reference のみ engine projection に載せることを integration test で固定。
 - 2026-05-15: chat history API を追加し、`chat_messages` / `tool_calls` collections に accepted message・tool call・tool result payload を保存できるようにした。message delete 時は紐づく tool calls も tombstone にすることを server integration test で固定。
+- 2026-05-15: engine core に snapshot / snapshot update stream contract を追加。Memory / SQLite adapters の contract test を拡張し、server の Yjs update と compaction snapshot を `yjs_documents` snapshot stream に mirror する integration test を追加。
+- 2026-05-15: initial snapshot compaction policy は room ごとの update log が 100 rows を超えた時に発火し、doc read lock 中の `next_seq` を snapshot boundary とする。engine snapshot stream では `snapshot.sequence` 以下の updates を compact し、それより新しい updates だけを残す。

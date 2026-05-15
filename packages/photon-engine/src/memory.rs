@@ -12,8 +12,8 @@ use crate::{
     storage::StorageAdapter,
     types::{
         unix_time_ms, CollectionName, Conflict, Operation, OperationFilter, OperationId,
-        OperationStatus, Record, RecordId, RecordKey, RemoteId, ScopeId, StoredOperation,
-        SyncCursor,
+        OperationStatus, Record, RecordId, RecordKey, RemoteId, ScopeId, Snapshot, SnapshotUpdate,
+        StoredOperation, SyncCursor,
     },
     EngineError, Result,
 };
@@ -29,6 +29,8 @@ struct MemoryState {
     operations: BTreeMap<OperationId, StoredOperation>,
     operation_order: Vec<OperationId>,
     records: BTreeMap<RecordKey, Record>,
+    snapshots: BTreeMap<RecordKey, Snapshot>,
+    snapshot_updates: BTreeMap<(RecordKey, i64), SnapshotUpdate>,
     cursors: BTreeMap<(ScopeId, RemoteId), SyncCursor>,
     conflicts: BTreeMap<crate::ConflictId, Conflict>,
 }
@@ -177,6 +179,48 @@ impl StorageAdapter for MemoryAdapter {
     async fn delete_record_projection(&self, key: &RecordKey) -> Result<()> {
         let mut state = self.write_state()?;
         state.records.remove(key);
+        Ok(())
+    }
+
+    async fn save_snapshot(&self, snapshot: Snapshot) -> Result<()> {
+        let mut state = self.write_state()?;
+        state.snapshots.insert(snapshot.key.clone(), snapshot);
+        Ok(())
+    }
+
+    async fn get_snapshot(&self, key: &RecordKey) -> Result<Option<Snapshot>> {
+        let state = self.read_state()?;
+        Ok(state.snapshots.get(key).cloned())
+    }
+
+    async fn append_snapshot_update(&self, update: SnapshotUpdate) -> Result<()> {
+        let mut state = self.write_state()?;
+        state
+            .snapshot_updates
+            .entry((update.key.clone(), update.sequence))
+            .or_insert(update);
+        Ok(())
+    }
+
+    async fn list_snapshot_updates(
+        &self,
+        key: &RecordKey,
+        after_sequence: i64,
+    ) -> Result<Vec<SnapshotUpdate>> {
+        let state = self.read_state()?;
+        Ok(state
+            .snapshot_updates
+            .iter()
+            .filter(|((update_key, sequence), _)| update_key == key && *sequence > after_sequence)
+            .map(|(_, update)| update.clone())
+            .collect())
+    }
+
+    async fn compact_snapshot_updates(&self, key: &RecordKey, up_to_sequence: i64) -> Result<()> {
+        let mut state = self.write_state()?;
+        state
+            .snapshot_updates
+            .retain(|(update_key, sequence), _| update_key != key || *sequence > up_to_sequence);
         Ok(())
     }
 

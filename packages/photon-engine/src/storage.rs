@@ -3,7 +3,8 @@ use async_trait::async_trait;
 use crate::{
     types::{
         CollectionName, Conflict, Operation, OperationFilter, OperationId, OperationStatus, Record,
-        RecordId, RecordKey, RemoteId, ScopeId, StoredOperation, SyncCursor,
+        RecordId, RecordKey, RemoteId, ScopeId, Snapshot, SnapshotUpdate, StoredOperation,
+        SyncCursor,
     },
     Result,
 };
@@ -38,6 +39,20 @@ pub trait StorageAdapter: Send + Sync {
     ) -> Result<Vec<Record>>;
 
     async fn delete_record_projection(&self, key: &RecordKey) -> Result<()>;
+
+    async fn save_snapshot(&self, snapshot: Snapshot) -> Result<()>;
+
+    async fn get_snapshot(&self, key: &RecordKey) -> Result<Option<Snapshot>>;
+
+    async fn append_snapshot_update(&self, update: SnapshotUpdate) -> Result<()>;
+
+    async fn list_snapshot_updates(
+        &self,
+        key: &RecordKey,
+        after_sequence: i64,
+    ) -> Result<Vec<SnapshotUpdate>>;
+
+    async fn compact_snapshot_updates(&self, key: &RecordKey, up_to_sequence: i64) -> Result<()>;
 
     async fn save_cursor(&self, cursor: SyncCursor) -> Result<()>;
 

@@ -63,6 +63,7 @@ string_id!(ActorId);
 string_id!(OperationId);
 string_id!(RemoteId);
 string_id!(ConflictId);
+string_id!(SnapshotFormat);
 
 impl OperationId {
     pub fn random() -> Self {
@@ -263,6 +264,74 @@ impl Record {
 
     pub fn is_deleted(&self) -> bool {
         self.deleted_at.is_some()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Snapshot {
+    pub key: RecordKey,
+    pub format: SnapshotFormat,
+    pub payload: Vec<u8>,
+    pub sequence: i64,
+    #[serde(default)]
+    pub metadata: Value,
+    pub updated_at_ms: i64,
+}
+
+impl Snapshot {
+    pub fn new(
+        key: RecordKey,
+        sequence: i64,
+        payload: Vec<u8>,
+        format: impl Into<SnapshotFormat>,
+    ) -> Self {
+        Self {
+            key,
+            format: format.into(),
+            payload,
+            sequence,
+            metadata: Value::Null,
+            updated_at_ms: unix_time_ms(),
+        }
+    }
+
+    pub fn with_metadata(mut self, metadata: Value) -> Self {
+        self.metadata = metadata;
+        self
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SnapshotUpdate {
+    pub key: RecordKey,
+    pub format: SnapshotFormat,
+    pub payload: Vec<u8>,
+    pub sequence: i64,
+    #[serde(default)]
+    pub metadata: Value,
+    pub created_at_ms: i64,
+}
+
+impl SnapshotUpdate {
+    pub fn new(
+        key: RecordKey,
+        sequence: i64,
+        payload: Vec<u8>,
+        format: impl Into<SnapshotFormat>,
+    ) -> Self {
+        Self {
+            key,
+            format: format.into(),
+            payload,
+            sequence,
+            metadata: Value::Null,
+            created_at_ms: unix_time_ms(),
+        }
+    }
+
+    pub fn with_metadata(mut self, metadata: Value) -> Self {
+        self.metadata = metadata;
+        self
     }
 }
 

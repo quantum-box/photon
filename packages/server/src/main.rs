@@ -20,7 +20,7 @@ use axum::{
 use futures_util::{SinkExt, StreamExt};
 use photon_engine::{
     ActorId, CollectionName, HybridTimestamp, Operation, OperationKind, PhotonEngine, RecordKey,
-    ScopeId, SqliteAdapter, StorageAdapter,
+    ScopeId, Snapshot, SnapshotUpdate, SqliteAdapter, StorageAdapter,
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use sqlx::{sqlite::SqlitePoolOptions, SqlitePool};
@@ -452,6 +452,13 @@ const DEFAULT_WORKSPACE_ID: &str = "photon-default";
 const DEFAULT_CHAT_THREAD_ID: &str = "general";
 const ENGINE_SCOPE_ID: &str = "workspace:photon-default";
 const ENGINE_ACTOR_ID: &str = "photon-server";
+const ENGINE_YJS_COLLECTION: &str = "yjs_documents";
+const ENGINE_YJS_UPDATE_FORMAT: &str = "yjs-update-v1";
+const ENGINE_YJS_SNAPSHOT_FORMAT: &str = "yjs-state-v1";
+
+fn engine_error_to_sqlx(error: photon_engine::EngineError) -> sqlx::Error {
+    sqlx::Error::Protocol(error.to_string())
+}
 
 enum EngineRecordMutation {
     Upsert(serde_json::Value),
@@ -465,6 +472,10 @@ fn engine_record_key(collection: &str, record_id: &str) -> RecordKey {
         CollectionName::from(collection),
         record_id,
     )
+}
+
+fn engine_yjs_snapshot_key(room_id: &str) -> RecordKey {
+    engine_record_key(ENGINE_YJS_COLLECTION, room_id)
 }
 
 fn value_to_patch_fields(
@@ -1054,6 +1065,7 @@ pub struct AppState {
 
 pub struct RoomState {
     pub db: SqlitePool,
+    pub engine: PhotonEngine<SqliteAdapter>,
     pub doc: RwLock<Doc>,
     pub broadcast_tx: broadcast::Sender<Vec<u8>>,
     pub presence_tx: broadcast::Sender<String>,
@@ -2073,6 +2085,7 @@ async fn get_or_create_room(
     let (presence_tx, _) = broadcast::channel::<String>(256);
     let room = Arc::new(RoomState {
         db: state.db.clone(),
+        engine: state.engine.clone(),
         doc: RwLock::new(doc),
         broadcast_tx,
         presence_tx,
@@ -2482,6 +2495,24 @@ async fn apply_and_persist_update(
     .execute(&state.db)
     .await?;
 
+    state
+        .engine
+        .storage()
+        .append_snapshot_update(
+            SnapshotUpdate::new(
+                engine_yjs_snapshot_key(&state.room_id),
+                seq,
+                update_bytes.to_vec(),
+                ENGINE_YJS_UPDATE_FORMAT,
+            )
+            .with_metadata(serde_json::json!({
+                "room_id": state.room_id,
+                "source": "photon-server-yjs"
+            })),
+        )
+        .await
+        .map_err(engine_error_to_sqlx)?;
+
     let log_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM yjs_updates WHERE room_id = ?")
         .bind(&state.room_id)
         .fetch_one(&state.db)
@@ -2544,6 +2575,30 @@ async fn compact_yjs_log(state: &Arc<RoomState>) -> Result<(), sqlx::Error> {
         .await?;
 
     tx.commit().await?;
+
+    state
+        .engine
+        .storage()
+        .save_snapshot(
+            Snapshot::new(
+                engine_yjs_snapshot_key(&state.room_id),
+                boundary_seq,
+                snapshot_bytes,
+                ENGINE_YJS_SNAPSHOT_FORMAT,
+            )
+            .with_metadata(serde_json::json!({
+                "room_id": state.room_id,
+                "source": "photon-server-yjs-compaction"
+            })),
+        )
+        .await
+        .map_err(engine_error_to_sqlx)?;
+    state
+        .engine
+        .storage()
+        .compact_snapshot_updates(&engine_yjs_snapshot_key(&state.room_id), boundary_seq)
+        .await
+        .map_err(engine_error_to_sqlx)?;
 
     info!(
         room = %state.room_id,
@@ -3698,7 +3753,8 @@ mod tests {
         let (broadcast_tx, _) = broadcast::channel::<Vec<u8>>(256);
         let (presence_tx, _) = broadcast::channel::<String>(256);
         Arc::new(RoomState {
-            db: pool,
+            db: pool.clone(),
+            engine: PhotonEngine::new(SqliteAdapter::from_pool(pool)),
             doc: RwLock::new(Doc::new()),
             broadcast_tx,
             presence_tx,
@@ -3715,6 +3771,7 @@ mod tests {
             .await
             .unwrap();
         init_db(&pool).await.unwrap();
+        init_engine(&pool).await.unwrap();
         pool
     }
 
@@ -3747,6 +3804,16 @@ mod tests {
         let applied = apply_and_persist_update(&state, &update).await.unwrap();
         assert!(applied);
         assert_eq!(state.next_seq.load(Ordering::SeqCst), 1);
+        let engine_updates = state
+            .engine
+            .storage()
+            .list_snapshot_updates(&engine_yjs_snapshot_key(DEFAULT_ROOM_ID), 0)
+            .await
+            .unwrap();
+        assert_eq!(engine_updates.len(), 1);
+        assert_eq!(engine_updates[0].sequence, 1);
+        assert_eq!(engine_updates[0].format.as_str(), ENGINE_YJS_UPDATE_FORMAT);
+        assert_eq!(engine_updates[0].payload, update);
 
         // Hydrate a fresh doc from the same DB and confirm state survived.
         let (reloaded, max_seq) = hydrate_yjs_doc(&pool, DEFAULT_ROOM_ID).await.unwrap();
@@ -3797,6 +3864,13 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(count.0, 0);
+        let engine_updates = state
+            .engine
+            .storage()
+            .list_snapshot_updates(&engine_yjs_snapshot_key(DEFAULT_ROOM_ID), 0)
+            .await
+            .unwrap();
+        assert!(engine_updates.is_empty());
     }
 
     #[tokio::test]
@@ -3826,6 +3900,25 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(snapshot_count.0, 1, "exactly one snapshot row expected");
+        let engine_snapshot = state
+            .engine
+            .storage()
+            .get_snapshot(&engine_yjs_snapshot_key(DEFAULT_ROOM_ID))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(engine_snapshot.sequence <= state.next_seq.load(Ordering::SeqCst));
+        assert_eq!(engine_snapshot.format.as_str(), ENGINE_YJS_SNAPSHOT_FORMAT);
+        assert!(!engine_snapshot.payload.is_empty());
+        let engine_updates = state
+            .engine
+            .storage()
+            .list_snapshot_updates(&engine_yjs_snapshot_key(DEFAULT_ROOM_ID), 0)
+            .await
+            .unwrap();
+        assert!(engine_updates
+            .iter()
+            .all(|update| update.sequence > engine_snapshot.sequence));
 
         // Hydrate from disk and verify all values survived compaction.
         let (reloaded, _) = hydrate_yjs_doc(&pool, DEFAULT_ROOM_ID).await.unwrap();
@@ -3965,6 +4058,7 @@ mod tests {
             .await
             .unwrap();
         init_db(&pool).await.unwrap();
+        init_engine(&pool).await.unwrap();
         let state = make_test_state(pool.clone());
 
         let total = (YJS_COMPACTION_THRESHOLD as usize) * 2;

@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 
 use photon_engine::{
     ActorId, CollectionName, Conflict, HybridTimestamp, MemoryAdapter, Operation, OperationFilter,
-    OperationKind, OperationStatus, PhotonEngine, RecordKey, RemoteId, ScopeId, StorageAdapter,
-    SyncCursor,
+    OperationKind, OperationStatus, PhotonEngine, RecordKey, RemoteId, ScopeId, Snapshot,
+    SnapshotUpdate, StorageAdapter, SyncCursor,
 };
 use serde_json::json;
 
@@ -103,6 +103,50 @@ where
         .await
         .unwrap();
     assert_eq!(records.len(), 1);
+
+    let snapshot_key = RecordKey::new("workspace:test", "yjs_documents", "doc-1");
+    let first_update = SnapshotUpdate::new(snapshot_key.clone(), 1, vec![1, 2, 3], "yjs-update-v1")
+        .with_metadata(json!({ "room": "doc-1" }));
+    adapter
+        .append_snapshot_update(first_update.clone())
+        .await
+        .unwrap();
+    adapter
+        .append_snapshot_update(first_update.clone())
+        .await
+        .unwrap();
+    adapter
+        .append_snapshot_update(SnapshotUpdate::new(
+            snapshot_key.clone(),
+            2,
+            vec![4, 5],
+            "yjs-update-v1",
+        ))
+        .await
+        .unwrap();
+    let updates = adapter
+        .list_snapshot_updates(&snapshot_key, 0)
+        .await
+        .unwrap();
+    assert_eq!(updates.len(), 2);
+    assert_eq!(updates[0], first_update);
+
+    let snapshot = Snapshot::new(snapshot_key.clone(), 2, vec![9, 9, 9], "yjs-state-v1")
+        .with_metadata(json!({ "compacted": true }));
+    adapter.save_snapshot(snapshot.clone()).await.unwrap();
+    let loaded_snapshot = adapter.get_snapshot(&snapshot_key).await.unwrap();
+    assert_eq!(loaded_snapshot, Some(snapshot));
+
+    adapter
+        .compact_snapshot_updates(&snapshot_key, 1)
+        .await
+        .unwrap();
+    let remaining_updates = adapter
+        .list_snapshot_updates(&snapshot_key, 0)
+        .await
+        .unwrap();
+    assert_eq!(remaining_updates.len(), 1);
+    assert_eq!(remaining_updates[0].sequence, 2);
 }
 
 #[tokio::test]
