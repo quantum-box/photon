@@ -3,7 +3,10 @@
 ## Goal
 
 Photon Engine sync means the client-side Engine and the server-side Engine
-communicate directly.
+exchange the same durable operation protocol. The server side is not just a
+database adapter: Engine enters the application server, then server-side
+business logic validates and accepts the operation before durable storage is
+updated.
 
 ```txt
 Web / Tauri / mobile client Engine
@@ -16,9 +19,16 @@ Web / Tauri / mobile client Engine
         POST /api/engine/push
         POST /api/engine/pull
 
-Photon Engine server
+Edge server
+  - terminates public client traffic close to the user
+  - owns Photon Live / realtime WebSocket rooms where possible
+  - forwards Engine push/pull to the cloud authority
+  - may cache bootstrap metadata, but does not decide durable truth
+
+Cloud server / Photon Engine authority
   - Rust Engine
-  - durable store: TiDB/MySQL in production, SQLite for local preview
+  - server-side business logic: auth, permissions, schema validation, audit
+  - durable store behind that logic: TiDB/MySQL in production, SQLite for local preview
   - accepted operation log
   - remote sequence cursor
 ```
@@ -26,6 +36,9 @@ Photon Engine server
 Photon Live remains separate. Live owns realtime Yjs rooms, WebSocket transport,
 presence, awareness, and fast collaborative feel. Live does not decide durable
 truth.
+
+For local experiments that simulate Client -> Edge -> Cloud Server -> DB, see
+[`three-tier-local-sync-lab.md`](./three-tier-local-sync-lab.md).
 
 ## Current State
 
@@ -37,11 +50,20 @@ truth.
   cursor semantics must stay identical.
 - Engine server exposes `POST /api/engine/push`.
 - Engine server exposes `POST /api/engine/pull`.
-- Engine server can use TiDB/MySQL through `PHOTON_ENGINE_DATABASE_URL=mysql://...`.
+- Production topology can route those endpoints through an edge server first,
+  then to the cloud server that owns durable truth.
+- Engine server can use TiDB/MySQL through
+  `PHOTON_ENGINE_DATABASE_URL=mysql://...` or
+  `PHOTON_ENGINE_DATABASE_URL=tidb://...`.
+- Engine server must keep business rules between incoming Engine operations and
+  durable storage. The storage adapter is an implementation detail, not the
+  product boundary.
 - Engine and Live can run as separate binaries:
   - `photon-engine-server`
   - `photon-live-server`
   - `photon-server` remains a combined local compatibility binary.
+- `mock-tachyon-api` remains a local test/scenario server, not the production
+  Engine role.
 
 ## Target Write Flow
 
@@ -50,20 +72,37 @@ truth.
 3. Client Engine applies the operation locally.
 4. Client stores the projected record and pending operation in PGlite.
 5. Sync loop sends pending operations to `POST /api/engine/push`.
-6. Server Engine validates and applies operations.
-7. Server stores accepted operations with `remote_sequence`.
-8. Server returns accepted/rejected/conflict decisions.
-9. Client marks accepted operations in PGlite.
-10. Client records rejected/conflict decisions for product-level resolution.
+6. Edge server authenticates/rate-limits/proxies the request when deployed.
+7. Cloud server Engine parses the operation and routes it into application/domain logic.
+8. Server-side business logic validates permissions, collection rules, schema,
+   transitions, audit metadata, and conflict policy.
+9. Cloud server stores accepted operations/projections with `remote_sequence`.
+10. Server returns accepted/rejected/conflict decisions through the edge.
+11. Client marks accepted operations in PGlite.
+12. Client records rejected/conflict decisions for product-level resolution.
 
 ## Target Pull Flow
 
 1. Client keeps a durable Engine cursor in PGlite.
-2. Sync loop calls `POST /api/engine/pull` with the cursor.
-3. Server returns accepted operations after the cursor.
+2. Sync loop calls `POST /api/engine/pull` with the cursor, usually through the
+   edge server.
+3. Cloud server returns accepted operations after the cursor.
 4. Client applies pulled operations through the local Engine runtime.
 5. Client updates local projections in PGlite.
 6. Client advances the cursor only after local apply succeeds.
+
+## Runtime Call Map
+
+Use this map when tracing a sync bug from UI to storage:
+
+| Surface | Local Engine call | Local store | Server sync call |
+| --- | --- | --- | --- |
+| Web | `src/lib/photonEngine/client.ts` loads `packages/photon-engine/pkg/photon_engine.js` and applies operations through WASM | PGlite `appKitConfig.engine.pgliteDataDir` | `syncClientEngineOperations()` posts pending operations to `appKitConfig.engine.pushPath` |
+| Tauri desktop | `src/lib/photonEngine/client.ts` calls Tauri `invoke('photon_engine_apply_operation')` | PGlite in the WebView | same `syncClientEngineOperations()` HTTP push path |
+| Tauri mobile/iPad | planned Tauri invoke bridge mirroring desktop | PGlite or Rust/SQLite after durability decision | same push/pull JSON protocol |
+| Edge server | Worker/edge runtime or lightweight Rust ingress receives public client traffic | cache/session/rate-limit only | proxies Engine push/pull to cloud authority; owns nearby Live transport when possible |
+| Cloud Server Engine | `packages/server/src/lib.rs` receives `/api/engine/push` and `/api/engine/pull` behind edge | business/domain layer first, then `photon-engine` storage adapter backed by TiDB/MySQL in production | accepts/rejects/publishes remote sequence cursor |
+| Live | `src/lib/yjs/*` and `/ws` realtime transport, often edge-hosted | Yjs IndexedDB / room state | no durable Engine decisions |
 
 ## Remaining Implementation Work
 
@@ -93,13 +132,26 @@ truth.
 
 - Treat iPhone/iPad as first-class Photon Engine clients, not companion views.
 - Reuse the same operation JSON protocol used by Web and Tauri.
-- Prefer a native bridge to the Rust Engine crate when the platform allows it.
+- Add a Tauri mobile command surface that mirrors the desktop invoke contract:
+  - `photon_engine_apply_operation`
+  - `photon_engine_sync_push`
+  - `photon_engine_sync_pull`
+- Decide the local store for mobile:
+  - iPad/Tauri shell can keep PGlite if WebView IndexedDB durability is
+    acceptable.
+  - Native bridge can use SQLite through the Rust Engine crate if IndexedDB
+    durability is insufficient.
+- Add mobile-local operation queue persistence tests for app restart.
+- Add simulator smoke for offline create -> restart -> push -> pull.
 - Keep local durable storage on-device so edits survive app restarts and bad
   network conditions.
 - Sync over the same Engine server endpoints:
   - `POST /api/engine/push`
   - `POST /api/engine/pull`
-- Make iPad layout a primary product surface for workspace/table/document flows.
+- Make iPad layout a primary product surface for workspace/table/document flows:
+  - split view for sidebar + table/document
+  - touch-friendly row selection and command actions
+  - resilient offline banner/sync status
 - Keep Photon Live optional: mobile should still sync durable Engine operations
   even if realtime rooms are disconnected.
 
@@ -120,8 +172,8 @@ truth.
 
 ### 6. TiDB/MySQL Production Hardening
 
-- Run integration smoke against a real TiDB endpoint.
-- Confirm table DDL against TiDB SQL mode.
+- Run `npm run server:engine:smoke` against a real TiDB endpoint.
+- Confirm table DDL against TiDB SQL mode and MySQL compatibility mode.
 - Add deployment docs for TLS and connection parameters.
 - Add migration/version tracking for Engine tables.
 

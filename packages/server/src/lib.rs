@@ -1435,8 +1435,23 @@ fn init_tracing() {
         .try_init();
 }
 
-fn resolve_app_database_url() -> String {
-    std::env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite:photon.db?mode=rwc".into())
+fn resolve_app_database_url(mode: PhotonServerMode) -> String {
+    resolve_app_database_url_from(mode, |key| std::env::var(key).ok())
+}
+
+fn resolve_app_database_url_from(
+    mode: PhotonServerMode,
+    mut lookup: impl FnMut(&str) -> Option<String>,
+) -> String {
+    match mode {
+        PhotonServerMode::Live => lookup("PHOTON_LIVE_DATABASE_URL")
+            .unwrap_or_else(|| "sqlite:photon-live.db?mode=rwc".into()),
+        PhotonServerMode::Engine => lookup("PHOTON_ENGINE_APP_DATABASE_URL")
+            .unwrap_or_else(|| "sqlite:photon.db?mode=rwc".into()),
+        PhotonServerMode::Combined => {
+            lookup("DATABASE_URL").unwrap_or_else(|| "sqlite:photon.db?mode=rwc".into())
+        }
+    }
 }
 
 fn resolve_engine_database_url(mode: PhotonServerMode) -> String {
@@ -1451,6 +1466,20 @@ fn resolve_engine_database_url(mode: PhotonServerMode) -> String {
         PhotonServerMode::Combined => std::env::var("PHOTON_ENGINE_DATABASE_URL")
             .or_else(|_| std::env::var("DATABASE_URL"))
             .unwrap_or_else(|_| "sqlite:photon.db?mode=rwc".into()),
+    }
+}
+
+fn normalize_engine_database_url(engine_database_url: &str) -> String {
+    MySqlAdapter::normalize_database_url(engine_database_url)
+}
+
+fn engine_database_kind(engine_database_url: &str) -> &'static str {
+    if engine_database_url.starts_with("tidb://") {
+        "tidb"
+    } else if engine_database_url.starts_with("mysql://") {
+        "mysql"
+    } else {
+        "sqlite"
     }
 }
 
@@ -1473,6 +1502,7 @@ async fn build_state(
 
     init_db(&pool).await?;
     let engine = init_engine(&pool, engine_database_url).await?;
+    verify_engine_startup(&engine, engine_database_url).await?;
     let engine_next_seq = init_engine_next_sequence(&engine).await?;
     seed_if_empty(&pool).await?;
 
@@ -1509,7 +1539,7 @@ fn app_router_for_mode(mode: PhotonServerMode, state: Arc<AppState>) -> Router {
 pub async fn run_server(mode: PhotonServerMode) -> Result<(), Box<dyn std::error::Error>> {
     init_tracing();
 
-    let database_url = resolve_app_database_url();
+    let database_url = resolve_app_database_url(mode);
     let engine_database_url = resolve_engine_database_url(mode);
     let state = build_state(&database_url, &engine_database_url).await?;
     let app = app_router_for_mode(mode, state);
@@ -2824,10 +2854,7 @@ async fn init_engine(
     engine_database_url: &str,
 ) -> Result<PhotonEngine<ServerEngineAdapter>, photon_engine::EngineError> {
     if engine_database_url.starts_with("mysql://") || engine_database_url.starts_with("tidb://") {
-        let database_url = engine_database_url
-            .strip_prefix("tidb://")
-            .map(|rest| format!("mysql://{rest}"))
-            .unwrap_or_else(|| engine_database_url.to_owned());
+        let database_url = normalize_engine_database_url(engine_database_url);
         let adapter = MySqlAdapter::connect(&database_url).await?;
         return Ok(PhotonEngine::new(ServerEngineAdapter::MySql(adapter)));
     }
@@ -2835,6 +2862,24 @@ async fn init_engine(
     let adapter = SqliteAdapter::from_pool(pool.clone());
     adapter.migrate().await?;
     Ok(PhotonEngine::new(ServerEngineAdapter::Sqlite(adapter)))
+}
+
+async fn verify_engine_startup(
+    engine: &PhotonEngine<ServerEngineAdapter>,
+    engine_database_url: &str,
+) -> photon_engine::Result<()> {
+    engine
+        .storage()
+        .list_operations(OperationFilter {
+            limit: Some(1),
+            ..OperationFilter::default()
+        })
+        .await?;
+    info!(
+        "Photon Engine storage ready: kind={}, schema=prepared",
+        engine_database_kind(engine_database_url)
+    );
+    Ok(())
 }
 
 async fn init_engine_next_sequence(
@@ -3507,6 +3552,67 @@ mod tests {
         assert_eq!(pulled.operations.len(), 1);
         assert_eq!(pulled.operations[0].operation.id, operation.id);
         assert_eq!(pulled.operations[0].remote_sequence, 1);
+    }
+
+    #[test]
+    fn test_engine_database_url_normalization_keeps_mysql_driver_compatible() {
+        assert_eq!(
+            normalize_engine_database_url("tidb://user:pass@tidb.example.com:4000/photon"),
+            "mysql://user:pass@tidb.example.com:4000/photon"
+        );
+        assert_eq!(
+            normalize_engine_database_url("mysql://user:pass@mysql.example.com:3306/photon"),
+            "mysql://user:pass@mysql.example.com:3306/photon"
+        );
+    }
+
+    #[test]
+    fn test_engine_database_kind_labels_production_storage() {
+        assert_eq!(
+            engine_database_kind("tidb://user:pass@tidb.example.com:4000/photon"),
+            "tidb"
+        );
+        assert_eq!(
+            engine_database_kind("mysql://user:pass@mysql.example.com:3306/photon"),
+            "mysql"
+        );
+        assert_eq!(engine_database_kind("sqlite:photon.db?mode=rwc"), "sqlite");
+    }
+
+    #[test]
+    fn test_mode_specific_app_database_url_resolution() {
+        let lookup = |key: &str| match key {
+            "DATABASE_URL" => Some("sqlite:shared.db?mode=rwc".to_owned()),
+            "PHOTON_LIVE_DATABASE_URL" => Some("sqlite:live.db?mode=rwc".to_owned()),
+            "PHOTON_ENGINE_APP_DATABASE_URL" => Some("sqlite:engine-app.db?mode=rwc".to_owned()),
+            _ => None,
+        };
+
+        assert_eq!(
+            resolve_app_database_url_from(PhotonServerMode::Combined, lookup),
+            "sqlite:shared.db?mode=rwc"
+        );
+        assert_eq!(
+            resolve_app_database_url_from(PhotonServerMode::Engine, lookup),
+            "sqlite:engine-app.db?mode=rwc"
+        );
+        assert_eq!(
+            resolve_app_database_url_from(PhotonServerMode::Live, lookup),
+            "sqlite:live.db?mode=rwc"
+        );
+
+        let shared_only = |key: &str| match key {
+            "DATABASE_URL" => Some("mysql://user:pass@mysql.example.com:3306/photon".to_owned()),
+            _ => None,
+        };
+        assert_eq!(
+            resolve_app_database_url_from(PhotonServerMode::Engine, shared_only),
+            "sqlite:photon.db?mode=rwc"
+        );
+        assert_eq!(
+            resolve_app_database_url_from(PhotonServerMode::Live, shared_only),
+            "sqlite:photon-live.db?mode=rwc"
+        );
     }
 
     #[tokio::test]

@@ -1,7 +1,20 @@
 # Photon Server Deploy
 
 Photon's Rust servers live in `packages/server`. Production should deploy the
-Engine and Live roles separately:
+Engine and Live roles separately, usually behind an edge ingress:
+
+```text
+Client
+  -> edge server / Worker / ingress
+       - TLS, auth/session checks, rate limits
+       - Photon Live WebSocket rooms when edge-hosted
+       - Engine push/pull proxy
+  -> cloud server
+       - Photon Engine authority
+       - business/domain validation
+       - durable database writes
+  -> TiDB/MySQL or another production database
+```
 
 - `photon-engine-server`: durable Engine API (`/api/*`, Swagger UI)
 - `photon-live-server`: realtime Live WebSocket (`/ws`)
@@ -45,6 +58,15 @@ npm run server:engine
 PHOTON_LIVE_PORT=3002 npm run server:live
 ```
 
+Smoke the Engine API after `npm run server:engine` is listening:
+
+```bash
+npm run server:engine:smoke
+```
+
+Set `PHOTON_ENGINE_SMOKE_URL` when the Engine service is not on
+`http://127.0.0.1:3001`.
+
 The container reads:
 
 - `PORT`: HTTP listen port. Defaults to `8080` in the container and `3001` when
@@ -53,19 +75,55 @@ The container reads:
 - `PHOTON_LIVE_PORT`: Live-only local listen port. Defaults to `3002`.
 - `DATABASE_URL`: SQLite URL. The container default is
   `sqlite:/tmp/photon.db?mode=rwc`.
+- `PHOTON_ENGINE_APP_DATABASE_URL`: Engine-role app-domain SQLite database URL
+  override. This is separate from the Engine sync store and mainly keeps local
+  previews isolated.
 - `PHOTON_ENGINE_DATABASE_URL`: Engine storage URL override. Use
-  `mysql://user:password@host:4000/database` for TiDB/MySQL.
-- `PHOTON_LIVE_DATABASE_URL`: Live-only database URL override.
+  `mysql://user:password@host:4000/database` for MySQL or
+  `tidb://user:password@host:4000/database` for TiDB. `tidb://` is normalized
+  to the MySQL driver at startup.
+- `PHOTON_LIVE_DATABASE_URL`: Live-only SQLite database URL override for Yjs
+  room state.
+- `PHOTON_LIVE_ENGINE_DATABASE_URL`: optional Engine storage URL for Live when
+  Live needs the same durable snapshot/update storage as Engine.
 
 The default SQLite database is suitable for preview/demo deployments only. Cloud
 Run filesystem data is ephemeral, so production issue data needs a durable
 database URL once Photon moves beyond preview.
 
-For production Engine deployments, prefer TiDB/MySQL:
+For production Engine deployments, prefer TiDB/MySQL. The server connects,
+prepares Engine schema, and performs a startup storage probe before it starts
+accepting HTTP traffic:
 
 ```bash
-PHOTON_ENGINE_DATABASE_URL=mysql://<user>:<password>@<tidb-host>:4000/photon \
+PHOTON_ENGINE_DATABASE_URL=tidb://<user>:<password>@<tidb-host>:4000/photon \
   npm run server:engine
+```
+
+Engine schema preparation currently creates the `photon_engine_*` tables and
+indexes from the Rust adapter at process startup. Treat that adapter as the
+storage implementation behind cloud-server business logic. Incoming Engine
+operations may first pass through edge auth/session checks and rate limits, but
+they should still reach the cloud application/server layer for durable auth,
+permission checks, collection rules, schema validation, conflict policy, and
+audit metadata before they become accepted operations. App-domain SQLite
+migrations under `packages/server/migrations/` are still for the local
+compatibility app database; they are not the TiDB Engine schema source.
+
+Local MySQL can stand in for TiDB when validating the production storage path:
+
+```bash
+docker run --name photon-engine-mysql \
+  -e MYSQL_ROOT_PASSWORD=photon_root \
+  -e MYSQL_DATABASE=photon_engine \
+  -e MYSQL_USER=photon \
+  -e MYSQL_PASSWORD=photon_pass \
+  -p 127.0.0.1:3307:3306 \
+  -d mysql:8.0.35
+
+PHOTON_ENGINE_MYSQL_TEST_DATABASE_URL=mysql://photon:photon_pass@127.0.0.1:3307/photon_engine \
+  cargo test --manifest-path packages/photon-engine/Cargo.toml --features mysql \
+  mysql_adapter_satisfies_storage_contract_when_url_is_configured
 ```
 
 Photon Engine exposes durable push/pull sync endpoints:
@@ -74,6 +132,24 @@ Photon Engine exposes durable push/pull sync endpoints:
 - `POST /api/engine/pull`: return accepted operations after the client's cursor.
 
 Photon Live does not expose these Engine endpoints. It only owns `/ws`.
+
+## Server Roles
+
+Use these roles in production:
+
+| Role | Binary | Endpoints | Storage |
+| --- | --- | --- | --- |
+| Edge | Worker, ingress, or lightweight Rust edge role | public TLS, rate limit, auth/session check, optional `/ws`, Engine proxy | no durable truth |
+| Engine | `photon-engine-server` on cloud server | `/api/health`, `/api/engine/push`, `/api/engine/pull`, REST APIs | cloud business logic, then `PHOTON_ENGINE_DATABASE_URL`, TiDB/MySQL preferred |
+| Live | `photon-live-server` or edge-hosted Live room | `/ws` | `PHOTON_LIVE_DATABASE_URL` for room state; optional `PHOTON_LIVE_ENGINE_DATABASE_URL` |
+| Test/mock | `mock-tachyon-api` | `/v1/sync/push`, `/v1/sync/pull`, admin scenario routes | SQLite only, local scenario verification |
+| Compatibility | `photon-server` | Engine + Live in one process | local preview and development |
+
+`mock-tachyon-api` is not a production Engine server. Keep it for deterministic
+scenario tests and dashboard verification.
+
+For a local lab that runs the Client -> Edge -> Cloud Server -> DB shape, see
+[`architecture/three-tier-local-sync-lab.md`](./architecture/three-tier-local-sync-lab.md).
 
 ## GitHub Actions Cloud Run Deploy
 

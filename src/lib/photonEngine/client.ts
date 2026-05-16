@@ -503,6 +503,8 @@ export async function deleteClientEngineRecord(
 export async function syncClientEngineOperations(
   apiBaseUrl = appKitConfig.server.apiBaseUrl ?? ''
 ): Promise<{ pushed: number; accepted: number }> {
+  // Server sync is intentionally transport-agnostic: Web and Tauri both store
+  // pending Engine operations in PGlite, then POST the shared JSON protocol.
   const db = await dbPromise
   const pending = await db.query<PhotonEngineOperationRow>(
     `

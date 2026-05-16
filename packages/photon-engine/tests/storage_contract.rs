@@ -163,3 +163,38 @@ async fn sqlite_adapter_satisfies_storage_contract() {
 
     run_storage_contract(adapter).await;
 }
+
+#[cfg(feature = "mysql")]
+#[tokio::test]
+async fn mysql_adapter_satisfies_storage_contract_when_url_is_configured() {
+    let Ok(database_url) = std::env::var("PHOTON_ENGINE_MYSQL_TEST_DATABASE_URL") else {
+        eprintln!(
+            "skipping MySQL storage contract: PHOTON_ENGINE_MYSQL_TEST_DATABASE_URL is unset"
+        );
+        return;
+    };
+
+    let adapter = photon_engine::MySqlAdapter::connect(&database_url)
+        .await
+        .unwrap();
+    reset_mysql_storage(&adapter).await;
+    run_storage_contract(adapter.clone()).await;
+    reset_mysql_storage(&adapter).await;
+}
+
+#[cfg(feature = "mysql")]
+async fn reset_mysql_storage(adapter: &photon_engine::MySqlAdapter) {
+    for table in [
+        "photon_engine_snapshot_updates",
+        "photon_engine_snapshots",
+        "photon_engine_conflicts",
+        "photon_engine_cursors",
+        "photon_engine_records",
+        "photon_engine_operations",
+    ] {
+        sqlx::query(&format!("DELETE FROM {table}"))
+            .execute(adapter.pool())
+            .await
+            .unwrap();
+    }
+}
