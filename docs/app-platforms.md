@@ -28,6 +28,16 @@ Tauri release candidates must pass the CI Linux smoke build and should use
 `tauri-local-file-cache` for desktop attachment byte references. Synced
 attachment metadata must not contain absolute local filesystem paths.
 
+Mobile release candidates must also pass the phone-viewport browser smoke:
+
+```bash
+npm run test:e2e:mobile
+```
+
+CI runs an Android APK smoke build for `aarch64` so the Tauri mobile wrapper,
+Rust command bridge, WASM frontend build, and generated Android project stay in
+sync with the shared app shell.
+
 Release following for apps that should avoid the npm registry is documented in
 [`release-following.md`](./release-following.md).
 
@@ -119,6 +129,7 @@ The Android project lives under `src-tauri/gen/android`.
 ```bash
 npm run tauri:android:dev
 npm run tauri:android:build
+npm run tauri:android:build -- --target aarch64 --apk
 ```
 
 The generated Android manifest includes Internet permission so the bundled app
@@ -140,7 +151,12 @@ The iOS project lives under `src-tauri/gen/apple`.
 ```bash
 npm run tauri:ios:dev
 npm run tauri:ios:build -- --target aarch64-sim
+npm run tauri:ios:build:sim
 ```
+
+CI uses `npm run tauri:ios:build:sim` as the unsigned simulator smoke build.
+This catches regressions in the shared React bundle, Tauri mobile wrapper, and
+Rust command bridge without requiring App Store signing.
 
 Code signing uses the Quantum Box Apple development team configured in
 `src-tauri/tauri.conf.json`. Set `APPLE_DEVELOPMENT_TEAM` in CI or the shell to
