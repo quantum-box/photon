@@ -409,6 +409,7 @@ function MobileIssueCard({
 
   return (
     <div
+      data-testid="mobile-record-card"
       role="button"
       tabIndex={0}
       className={`w-full rounded-md border p-3 text-left transition-colors ${
