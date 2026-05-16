@@ -1,0 +1,37 @@
+services:
+  mysql:
+    image: mysql:8.0.35
+    environment:
+      MYSQL_ROOT_PASSWORD: photon_root
+      MYSQL_DATABASE: photon_engine
+      MYSQL_USER: photon
+      MYSQL_PASSWORD: photon_pass
+    ports:
+      - "127.0.0.1:3307:3306"
+    volumes:
+      - photon-engine-mysql:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -pphoton_root --silent"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  engine:
+    build:
+      context: ./packages/server
+      dockerfile: Dockerfile
+      args:
+        PHOTON_SERVER_BIN: photon-engine-server
+    environment:
+      PORT: "8080"
+      PHOTON_ENGINE_APP_DATABASE_URL: "sqlite:/tmp/photon-engine-app.db?mode=rwc"
+      PHOTON_ENGINE_DATABASE_URL: "mysql://photon:photon_pass@mysql:3306/photon_engine"
+      RUST_LOG: "photon_server=debug,tower_http=debug"
+    ports:
+      - "127.0.0.1:3001:8080"
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+volumes:
+  photon-engine-mysql:

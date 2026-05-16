@@ -18,13 +18,21 @@ pub struct MySqlAdapter {
 
 impl MySqlAdapter {
     pub async fn connect(database_url: &str) -> Result<Self> {
+        let database_url = Self::normalize_database_url(database_url);
         let pool = MySqlPoolOptions::new()
             .max_connections(5)
-            .connect(database_url)
+            .connect(&database_url)
             .await?;
         let adapter = Self { pool };
         adapter.migrate().await?;
         Ok(adapter)
+    }
+
+    pub fn normalize_database_url(database_url: &str) -> String {
+        database_url
+            .strip_prefix("tidb://")
+            .map(|rest| format!("mysql://{rest}"))
+            .unwrap_or_else(|| database_url.to_owned())
     }
 
     pub fn from_pool(pool: MySqlPool) -> Self {
@@ -55,13 +63,12 @@ impl MySqlAdapter {
         .execute(&self.pool)
         .await?;
 
-        sqlx::query(
-            r#"
-            CREATE INDEX IF NOT EXISTS idx_photon_engine_operations_scope
-            ON photon_engine_operations(scope, collection, status, remote_sequence)
-            "#,
+        create_index_if_missing(
+            &self.pool,
+            "photon_engine_operations",
+            "idx_photon_engine_operations_scope",
+            "CREATE INDEX idx_photon_engine_operations_scope ON photon_engine_operations(scope, collection, status, remote_sequence)",
         )
-        .execute(&self.pool)
         .await?;
 
         sqlx::query(
@@ -142,17 +149,43 @@ impl MySqlAdapter {
         .execute(&self.pool)
         .await?;
 
-        sqlx::query(
-            r#"
-            CREATE INDEX IF NOT EXISTS idx_photon_engine_snapshot_updates_key_sequence
-            ON photon_engine_snapshot_updates(scope, collection, record_id, sequence)
-            "#,
+        create_index_if_missing(
+            &self.pool,
+            "photon_engine_snapshot_updates",
+            "idx_photon_engine_snapshot_updates_key_sequence",
+            "CREATE INDEX idx_photon_engine_snapshot_updates_key_sequence ON photon_engine_snapshot_updates(scope, collection, record_id, sequence)",
         )
-        .execute(&self.pool)
         .await?;
 
         Ok(())
     }
+}
+
+async fn create_index_if_missing(
+    pool: &MySqlPool,
+    table_name: &str,
+    index_name: &str,
+    create_statement: &str,
+) -> Result<()> {
+    let exists: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)
+        FROM information_schema.statistics
+        WHERE table_schema = DATABASE()
+          AND table_name = ?
+          AND index_name = ?
+        "#,
+    )
+    .bind(table_name)
+    .bind(index_name)
+    .fetch_one(pool)
+    .await?;
+
+    if exists == 0 {
+        sqlx::query(create_statement).execute(pool).await?;
+    }
+
+    Ok(())
 }
 
 #[async_trait]
@@ -594,6 +627,23 @@ impl StorageAdapter for MySqlAdapter {
                 Ok(serde_json::from_str(&conflict_json)?)
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MySqlAdapter;
+
+    #[test]
+    fn normalizes_tidb_urls_for_sqlx_mysql_driver() {
+        assert_eq!(
+            MySqlAdapter::normalize_database_url("tidb://user:pass@host:4000/photon"),
+            "mysql://user:pass@host:4000/photon"
+        );
+        assert_eq!(
+            MySqlAdapter::normalize_database_url("mysql://user:pass@host:3306/photon"),
+            "mysql://user:pass@host:3306/photon"
+        );
     }
 }
 

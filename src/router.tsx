@@ -19,6 +19,7 @@ import { DetailPanel } from './components/DetailPanel'
 import { CreateIssueModal } from './components/CreateIssueModal'
 import { ChatView } from './components/chat/ChatView'
 import { DocsView } from './components/docs/DocsView'
+import { EngineSyncDashboard } from './components/sync/EngineSyncDashboard'
 import { DatabaseRecordsProvider, useDatabaseRecords } from './contexts/IssuesContext'
 import { DatabasesProvider, type WorkspaceDatabase, useWorkspaceDatabases } from './contexts/DatabasesContext'
 import { DatabaseViewsProvider, useDatabaseViews } from './contexts/DatabaseViewsContext'
@@ -724,6 +725,14 @@ function ChatPage() {
   )
 }
 
+// ── Sync Dashboard Route (/sync) ──────────────────────────────
+
+const syncRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: 'sync',
+  component: EngineSyncDashboard,
+})
+
 // ── Documents Route (/docs, /documents/$documentId) ───────────
 
 const docsRoute = createRoute({
@@ -793,6 +802,7 @@ const routeTree = rootRoute.addChildren([
   legacyIssueDetailRoute,
   legacyKanbanRoute,
   chatRoute,
+  syncRoute,
   docsRoute,
   documentDetailRoute,
 ])
