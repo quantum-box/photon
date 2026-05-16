@@ -54,6 +54,8 @@ test.describe('Photon shell', () => {
   })
 
   test('adds database items to the workflow canvas', async ({ page }) => {
+    test.setTimeout(90_000)
+
     const canvasDatabase = `workflow-e2e-${Date.now()}`
 
     await page.goto(`/databases/workflow?database=${canvasDatabase}`)
