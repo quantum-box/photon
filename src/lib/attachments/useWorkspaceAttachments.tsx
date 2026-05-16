@@ -90,11 +90,21 @@ function upsertYAttachment(attachment: WorkspaceAttachment) {
   const existing = findYAttachment(attachment.id)
   if (existing) {
     writeAttachmentToYMap(existing, attachment)
+    removeDuplicateYAttachments(attachment.id, existing)
     return
   }
   const ymap = new Y.Map<string>()
   writeAttachmentToYMap(ymap, attachment)
   attachmentsArray.push([ymap])
+}
+
+function removeDuplicateYAttachments(id: string, keep: Y.Map<string>) {
+  for (let i = attachmentsArray.length - 1; i >= 0; i--) {
+    const ymap = attachmentsArray.get(i)
+    if (ymap !== keep && ymap.get('id') === id) {
+      attachmentsArray.delete(i, 1)
+    }
+  }
 }
 
 function removeYAttachment(attachmentId: string) {
@@ -107,11 +117,14 @@ function removeYAttachment(attachmentId: string) {
 }
 
 function snapshot(): WorkspaceAttachment[] {
-  const result: WorkspaceAttachment[] = []
+  const result = new Map<string, WorkspaceAttachment>()
   attachmentsArray.forEach((ymap) => {
-    result.push(ymapToAttachment(ymap))
+    const attachment = ymapToAttachment(ymap)
+    if (attachment.id) {
+      result.set(attachment.id, attachment)
+    }
   })
-  return result
+  return [...result.values()]
 }
 
 export function AttachmentsProvider({ children }: { children: ReactNode }) {

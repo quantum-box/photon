@@ -1,5 +1,12 @@
 import { appKitConfig } from '../../app/kitConfig'
 import { detectFileType } from '../../components/files/types'
+import {
+  deleteClientEngineRecord,
+  getClientEngineRecord,
+  listClientEngineRecords,
+  patchClientEngineRecord,
+  upsertClientEngineRecord,
+} from '../photonEngine/client'
 import type {
   AttachmentContentStatus,
   AttachmentLink,
@@ -34,11 +41,6 @@ interface ServerAttachment {
   links?: ServerAttachmentLink[]
 }
 
-interface ServerAttachmentListResponse {
-  attachments: ServerAttachment[]
-  total: number
-}
-
 export interface CreateAttachmentMetadataInput {
   file: File
   links: AttachmentSurfaceRef[]
@@ -52,33 +54,6 @@ export class AttachmentApiError extends Error {
     this.name = 'AttachmentApiError'
     this.status = status
   }
-}
-
-function buildApiUrl(path: string) {
-  const baseUrl = appKitConfig.server.apiBaseUrl?.replace(/\/$/, '') ?? ''
-  const normalizedPath = path.startsWith('/') ? path : `/${path}`
-  return `${baseUrl}${normalizedPath}`
-}
-
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(buildApiUrl(path), {
-    ...init,
-    headers: {
-      ...(init?.body ? { 'content-type': 'application/json' } : {}),
-      ...init?.headers,
-    },
-  })
-
-  if (!response.ok) {
-    const message = await response.text()
-    throw new AttachmentApiError(message || response.statusText, response.status)
-  }
-
-  if (response.status === 204) {
-    return undefined as T
-  }
-
-  return response.json() as Promise<T>
 }
 
 function normalizeSurfaceType(value: string): AttachmentSurfaceType {
@@ -142,68 +117,89 @@ function toAttachmentLink(serverLink: ServerAttachmentLink): AttachmentLink {
   }
 }
 
-function surfaceQuery(surface?: AttachmentSurfaceRef) {
-  const params = new URLSearchParams({ workspace_id: appKitConfig.workspace.id })
-  if (surface) {
-    params.set('surface_type', surface.surfaceType)
-    params.set('surface_id', surface.surfaceId)
-  }
-  return params.toString()
-}
-
 export async function fetchServerAttachments(surface?: AttachmentSurfaceRef): Promise<WorkspaceAttachment[]> {
-  const response = await request<ServerAttachmentListResponse>(
-    `${appKitConfig.attachments.endpoint}?${surfaceQuery(surface)}`
-  )
-  return response.attachments.map(toWorkspaceAttachment)
+  const records = await listClientEngineRecords<WorkspaceAttachment>('attachments')
+  return records
+    .map((record) => record.value)
+    .filter((attachment) => attachment.workspaceId === appKitConfig.workspace.id)
+    .filter((attachment) => {
+      if (!surface) return true
+      return attachment.links.some((link) =>
+        link.surfaceType === surface.surfaceType && link.surfaceId === surface.surfaceId
+      )
+    })
 }
 
 export async function createServerAttachment(
   input: CreateAttachmentMetadataInput
 ): Promise<WorkspaceAttachment> {
   const fileType = detectFileType(input.file)
-  const attachment = await request<ServerAttachment>(appKitConfig.attachments.endpoint, {
-    method: 'POST',
-    body: JSON.stringify({
-      workspace_id: appKitConfig.workspace.id,
-      filename: input.file.name,
-      content_type: input.file.type || 'application/octet-stream',
-      byte_size: input.file.size,
-      storage_provider: appKitConfig.attachments.webStorageProvider,
-      content_status: 'local_cache',
-      preview_metadata: {
-        fileType,
-        previewStatus: fileType === 'unknown' ? 'unsupported' : 'available',
-        previewGeneratedAt: new Date().toISOString(),
-      },
-      links: input.links.map((link) => ({
-        surface_type: link.surfaceType,
-        surface_id: link.surfaceId,
-      })),
-    }),
-  })
-  return toWorkspaceAttachment(attachment)
+  const id = globalThis.crypto?.randomUUID?.() ?? `attachment-${Date.now()}`
+  const now = new Date().toISOString()
+  const attachment: WorkspaceAttachment = {
+    id,
+    workspaceId: appKitConfig.workspace.id,
+    filename: input.file.name,
+    contentType: input.file.type || 'application/octet-stream',
+    byteSize: input.file.size,
+    storageProvider: appKitConfig.attachments.webStorageProvider,
+    storageKey: `${appKitConfig.workspace.id}/attachments/${id}`,
+    contentStatus: 'local_cache',
+    previewMetadata: {
+      fileType,
+      previewStatus: fileType === 'unknown' ? 'unsupported' : 'available',
+      previewGeneratedAt: now,
+    },
+    createdBy: null,
+    createdAt: now,
+    updatedAt: now,
+    links: input.links.map((link) => ({
+      id: globalThis.crypto?.randomUUID?.() ?? `attachment-link-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      attachmentId: id,
+      surfaceType: link.surfaceType,
+      surfaceId: link.surfaceId,
+      createdAt: now,
+    })),
+  }
+  const record = await upsertClientEngineRecord('attachments', attachment.id, attachment)
+  return record.value
 }
 
 export async function linkServerAttachment(
   attachmentId: string,
   surface: AttachmentSurfaceRef
 ): Promise<WorkspaceAttachment> {
-  const attachment = await request<ServerAttachment>(
-    `${appKitConfig.attachments.endpoint}/${encodeURIComponent(attachmentId)}/links`,
-    {
-      method: 'POST',
-      body: JSON.stringify({
-        surface_type: surface.surfaceType,
-        surface_id: surface.surfaceId,
-      }),
-    }
+  const record = await getClientEngineRecord<WorkspaceAttachment>('attachments', attachmentId)
+  if (!record) throw new AttachmentApiError('Attachment not found', 404)
+  const now = new Date().toISOString()
+  const existingLink = record.value.links.find((link) =>
+    link.surfaceType === surface.surfaceType && link.surfaceId === surface.surfaceId
   )
-  return toWorkspaceAttachment(attachment)
+  const attachment: WorkspaceAttachment = {
+    ...record.value,
+    updatedAt: now,
+    links: existingLink
+      ? record.value.links
+      : [
+          ...record.value.links,
+          {
+            id: globalThis.crypto?.randomUUID?.() ?? `attachment-link-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+            attachmentId,
+            surfaceType: surface.surfaceType,
+            surfaceId: surface.surfaceId,
+            createdAt: now,
+          },
+        ],
+  }
+  const nextRecord = await patchClientEngineRecord<WorkspaceAttachment>(
+    'attachments',
+    attachmentId,
+    attachment
+  )
+  if (!nextRecord) throw new AttachmentApiError('Attachment not found', 404)
+  return nextRecord.value
 }
 
 export async function deleteServerAttachment(attachmentId: string): Promise<void> {
-  await request<void>(`${appKitConfig.attachments.endpoint}/${encodeURIComponent(attachmentId)}`, {
-    method: 'DELETE',
-  })
+  await deleteClientEngineRecord('attachments', attachmentId)
 }

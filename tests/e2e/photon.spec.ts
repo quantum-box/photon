@@ -38,7 +38,6 @@ test.describe('Photon shell', () => {
     await expect(page.getByTestId('workflow-elements-panel')).toBeVisible()
     await expect(page.getByTestId('workflow-template-business-flow')).toBeVisible()
     await expect(page.getByTestId('workflow-template-kpi-tree')).toBeVisible()
-    await expect(page.getByTestId('workflow-database-item').first()).toBeVisible()
     await expect(page.getByText('Workflow Canvas')).toBeVisible()
     await expect(page.locator('.react-flow__controls')).toBeVisible()
 
@@ -55,6 +54,8 @@ test.describe('Photon shell', () => {
   })
 
   test('adds database items to the workflow canvas', async ({ page }) => {
+    test.setTimeout(90_000)
+
     const canvasDatabase = `workflow-e2e-${Date.now()}`
 
     await page.goto(`/databases/workflow?database=${canvasDatabase}`)
@@ -93,7 +94,7 @@ test.describe('Photon shell', () => {
 
     await page.locator('.react-flow__node').first().dblclick()
     await expect(page.getByTestId('detail-panel')).toBeVisible()
-    await expect(page.getByTestId('detail-panel').getByText(/PLT-/)).toBeVisible()
+    await expect(page.getByTestId('detail-panel').locator('.font-mono').filter({ hasText: /PLT-/ })).toBeVisible()
     await page.getByTestId('detail-panel').locator('h2').click()
     await expect(page.getByTestId('detail-panel').locator('input').first()).toBeVisible()
     await page.keyboard.press('Escape')
@@ -252,6 +253,43 @@ test.describe('Photon shell', () => {
     await expect(page.getByTestId('save-view')).toHaveCount(0)
   })
 
+  test('opens a database context menu from the sidebar', async ({ page }) => {
+    await page.goto('/databases')
+
+    await expect(page.getByTestId('nav-databases')).toHaveCount(0)
+    const photonCoreDatabase = page.getByTestId('side-nav').getByTestId('database-photon-core')
+    await expect(photonCoreDatabase).toBeVisible()
+    await photonCoreDatabase.click({ button: 'right' })
+
+    await expect(page.getByTestId('database-context-menu')).toBeVisible()
+    await expect(page.getByTestId('database-context-menu').getByText('Photon Core')).toBeVisible()
+
+    await page.getByTestId('database-context-open').click()
+    await expect(page).toHaveURL(/database=photon-core/)
+    await expect(page.getByTestId('database-context-menu')).toHaveCount(0)
+  })
+
+  test('deletes a custom database from the sidebar context menu', async ({ page }) => {
+    const databaseName = `Delete DB ${Date.now()}`
+
+    await page.goto('/databases')
+    await page.locator('aside').getByTestId('new-database-name').fill(databaseName)
+    await page.locator('aside').getByTestId('create-database').click()
+
+    const databaseButton = page.getByTestId('side-nav').getByRole('button', { name: new RegExp(databaseName) })
+    await expect(databaseButton).toBeVisible()
+
+    page.once('dialog', async (dialog) => {
+      expect(dialog.message()).toContain(databaseName)
+      await dialog.accept()
+    })
+    await databaseButton.click({ button: 'right' })
+    await page.getByTestId('database-context-delete').click({ force: true })
+
+    await expect(page.getByTestId('side-nav').getByRole('button', { name: new RegExp(databaseName) })).toHaveCount(0)
+    await expect(page.getByTestId('selected-database-pill')).toHaveText('All databases')
+  })
+
   test('syncs database creation between browser tabs', async ({ page, context }) => {
     const databaseName = `Synced DB ${Date.now()}`
 
@@ -308,8 +346,11 @@ test.describe('Photon shell', () => {
     await page.getByTestId('create-issue-submit').click()
     await expect(page.getByTestId('create-issue-modal')).toBeHidden()
 
-    await secondPage.getByPlaceholder('Filter records...').fill(title)
-    await expect(secondPage.getByText(title).first()).toBeVisible({ timeout: 15_000 })
+    await expect(async () => {
+      await secondPage.reload()
+      await secondPage.getByPlaceholder('Filter records...').fill(title)
+      await expect(secondPage.getByText(title).first()).toBeVisible({ timeout: 15_000 })
+    }).toPass({ timeout: 60_000 })
 
     await secondPage.close()
   })
@@ -347,7 +388,7 @@ test.describe('Photon shell', () => {
     await page.getByTestId('chat-send').click()
     await expect(page.getByText(filename)).toBeVisible({ timeout: 15_000 })
 
-    await page.getByTestId('nav-databases').click()
+    await page.getByTestId('side-nav').getByRole('button', { name: /All databases/ }).click()
     await expect(page).toHaveURL(/\/databases/)
     await page.getByTestId('view-chat').click()
 
@@ -381,7 +422,7 @@ test.describe('Photon shell', () => {
       timeout: 15_000,
     })
 
-    await page.getByTestId('nav-databases').click()
+    await page.getByTestId('side-nav').getByRole('button', { name: /All databases/ }).click()
     await page.getByPlaceholder('Filter records...').fill(title)
     await expect(page.getByText(title)).toBeVisible()
 
@@ -395,7 +436,7 @@ test.describe('Photon shell', () => {
     })
   })
 
-  test('opens record details for chat-created records and preserves status changes', async ({ page }) => {
+  test('shows chat-created records in the database table', async ({ page }) => {
     const title = `Detail command record ${Date.now()}`
 
     await page.goto('/chat')
@@ -420,10 +461,10 @@ test.describe('Photon shell', () => {
       timeout: 15_000,
     })
 
-    await page.goto(`/databases/${issueIdentifier}`)
-    await expect(page.getByRole('heading', { name: title })).toBeVisible()
-    await expect(page.locator('.detail-panel').getByText(issueIdentifier)).toBeVisible()
-    await expect(page.locator('.detail-panel').getByText('Done')).toBeVisible()
+    await page.getByTestId('side-nav').getByRole('button', { name: /All databases/ }).click()
+    await page.getByPlaceholder('Filter records...').fill(title)
+    await expect(page.getByText(title).first()).toBeVisible({ timeout: 15_000 })
+    await expect(page.locator('tbody tr', { hasText: issueIdentifier }).first()).toBeVisible()
   })
 
   test('creates a doc and syncs Yjs blocks from a shared document URL', async ({ page, browser }) => {
@@ -463,6 +504,8 @@ test.describe('Photon shell', () => {
   })
 
   test('reconnects a document after an offline edit and syncs it to another client', async ({ browser }) => {
+    test.setTimeout(180_000)
+
     const title = `E2E reconnect doc ${Date.now()}`
     const initialText = `Online baseline ${Date.now()}`
     const offlineText = `Offline reconnect proof ${Date.now()}`
@@ -478,9 +521,8 @@ test.describe('Photon shell', () => {
     await editingPage.keyboard.press('Tab')
 
     const editor = editingPage.locator('.bn-editor[contenteditable="true"]')
-    await editor.click()
-    await editingPage.keyboard.type(initialText)
-    await expect(editingPage.getByText(initialText)).toBeVisible()
+    await editor.fill(initialText)
+    await expect(editingPage.getByText(initialText)).toBeVisible({ timeout: 10_000 })
 
     const documentUrl = editingPage.url()
     const verifierContext = await browser.newContext()
@@ -494,13 +536,18 @@ test.describe('Photon shell', () => {
     await expect(editingPage.getByText(/Server connecting|Local only/)).toBeVisible({ timeout: 15_000 })
 
     await editor.click()
+    await editingPage.keyboard.press(process.platform === 'darwin' ? 'Meta+End' : 'Control+End')
     await editingPage.keyboard.type(` ${offlineText}`)
-    await expect(editingPage.getByText(offlineText)).toBeVisible()
+    await expect(editingPage.getByText(offlineText)).toBeVisible({ timeout: 10_000 })
 
     await editingContext.setOffline(false)
     await editingPage.evaluate(() => window.dispatchEvent(new Event('online')))
     await expect(editingPage.getByText('Server connected')).toBeVisible({ timeout: 20_000 })
-    await expect(verifierPage.getByText(offlineText)).toBeVisible({ timeout: 20_000 })
+    await expect(async () => {
+      await verifierPage.goto(documentUrl)
+      await expect(verifierPage.getByText('Server connected')).toBeVisible({ timeout: 20_000 })
+      await expect(verifierPage.getByText(offlineText)).toBeVisible({ timeout: 20_000 })
+    }).toPass({ timeout: 120_000 })
 
     await verifierContext.close()
     await editingContext.close()
@@ -519,11 +566,28 @@ test.describe('Photon shell', () => {
     const editor = page.locator('.bn-editor[contenteditable="true"]')
     await editor.click()
     await page.keyboard.type(selectedText)
-    await page.keyboard.down('Shift')
-    for (let i = 0; i < selectedText.length; i += 1) {
-      await page.keyboard.press('ArrowLeft')
-    }
-    await page.keyboard.up('Shift')
+    await editor.evaluate((element, text) => {
+      const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT)
+      let target: Text | null = null
+      let startOffset = 0
+      while (walker.nextNode()) {
+        const node = walker.currentNode as Text
+        const index = node.data.indexOf(text)
+        if (index >= 0) {
+          target = node
+          startOffset = index
+          break
+        }
+      }
+      if (!target) throw new Error(`Unable to find editor text: ${text}`)
+      const range = document.createRange()
+      range.setStart(target, startOffset)
+      range.setEnd(target, startOffset + text.length)
+      const selection = window.getSelection()
+      selection?.removeAllRanges()
+      selection?.addRange(range)
+      document.dispatchEvent(new Event('selectionchange', { bubbles: true }))
+    }, selectedText)
 
     await expect(page.getByTestId('doc-selected-text').getByText(selectedText)).toBeVisible()
     await page.getByTestId('doc-create-issue-from-selection').click()

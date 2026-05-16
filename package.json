@@ -39,7 +39,7 @@
   "scripts": {
     "dev": "vite",
     "dev:cf-sync": "VITE_PHOTON_SYNC_WS_URL=ws://127.0.0.1:8787/ws vite",
-    "build": "tsc -b && vite build",
+    "build": "npm run engine:wasm && tsc -b && vite build",
     "build:package": "tsc -p tsconfig.package.json && tsc -p tsconfig.package.worker.json",
     "lint": "eslint .",
     "prepare": "npm run build:package",
@@ -62,10 +62,16 @@
     "tauri:ios:init": "tauri ios init",
     "tauri:ios:dev": "tauri ios dev",
     "tauri:ios:build": "tauri ios build",
+    "engine:wasm": "npx wasm-pack build packages/photon-engine --target web --out-dir pkg --no-default-features --features wasm",
+    "server": "cd packages/server && cargo run --bin photon-server",
+    "server:engine": "cd packages/server && cargo run --bin photon-engine-server",
+    "server:live": "cd packages/server && cargo run --bin photon-live-server",
+    "server:test": "cargo test --manifest-path packages/server/Cargo.toml",
     "pages:build": "npm run build",
     "pages:deploy": "npm run pages:build && cd dist && wrangler pages deploy . --project-name photon --branch main --commit-dirty=true",
     "worker:dev": "wrangler dev --config wrangler.jsonc --port 8787",
-    "worker:deploy": "wrangler deploy --config wrangler.jsonc"
+    "worker:deploy": "wrangler deploy --config wrangler.jsonc",
+    "mock:tachyon": "cd packages/server && cargo run --bin mock-tachyon-api"
   },
   "dependencies": {
     "@blocknote/core": "^0.50.0",

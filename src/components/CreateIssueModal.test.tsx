@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { CreateIssueModal } from './CreateIssueModal'
 
@@ -33,7 +33,7 @@ describe('CreateIssueModal', () => {
     expect(screen.getByTestId('create-issue-submit')).toBeEnabled()
   })
 
-  it('submits normalized create issue data and closes the modal', () => {
+  it('submits normalized create issue data and closes the modal', async () => {
     const onClose = vi.fn()
     const onCreate = vi.fn()
 
@@ -69,7 +69,7 @@ describe('CreateIssueModal', () => {
       assignee: '佐藤健',
       description: 'Build reusable app foundation.',
     })
-    expect(onClose).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1))
   })
 
   it('closes from escape and backdrop interactions', () => {

@@ -1,5 +1,12 @@
 import { appKitConfig } from '../app/kitConfig.js'
-import type { Issue, Priority, Status } from '../data/mock'
+import { mockIssues, type Issue, type Priority, type Status } from '../data/mock'
+import {
+  deleteClientEngineRecord,
+  getClientEngineRecord,
+  listClientEngineRecords,
+  patchClientEngineRecord,
+  upsertClientEngineRecord,
+} from './photonEngine/client'
 
 export interface ServerIssue {
   id: string
@@ -49,6 +56,10 @@ const statuses: Status[] = [
   'cancelled',
 ]
 const priorities: Priority[] = ['urgent', 'high', 'medium', 'low', 'none']
+const seedCollection = 'engine_seed'
+const defaultIssueSeedId = 'default-issues-v1'
+
+let seedDefaultIssuesPromise: Promise<void> | null = null
 
 export class IssueApiError extends Error {
   readonly status: number
@@ -58,33 +69,6 @@ export class IssueApiError extends Error {
     this.name = 'IssueApiError'
     this.status = status
   }
-}
-
-function buildApiUrl(path: string) {
-  const baseUrl = appKitConfig.server.apiBaseUrl?.replace(/\/$/, '') ?? ''
-  const normalizedPath = path.startsWith('/') ? path : `/${path}`
-  return `${baseUrl}${normalizedPath}`
-}
-
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(buildApiUrl(path), {
-    ...init,
-    headers: {
-      ...(init?.body ? { 'content-type': 'application/json' } : {}),
-      ...init?.headers,
-    },
-  })
-
-  if (!response.ok) {
-    const message = await response.text()
-    throw new IssueApiError(message || response.statusText, response.status)
-  }
-
-  if (response.status === 204) {
-    return undefined as T
-  }
-
-  return response.json() as Promise<T>
 }
 
 function normalizeStatus(value: string | undefined): Status {
@@ -136,35 +120,95 @@ function withoutUndefined<T extends object>(payload: T): Partial<T> {
   ) as Partial<T>
 }
 
+function randomIssueId() {
+  return globalThis.crypto?.randomUUID?.() ?? `issue-${Date.now()}-${Math.random().toString(36).slice(2)}`
+}
+
+function nextIdentifier(issues: Issue[]) {
+  const prefix = appKitConfig.issues.identifierPrefix
+  const maxNumber = issues.reduce((max, issue) => {
+    const match = issue.identifier?.match(new RegExp(`^${prefix}-(\\d+)$`))
+    return match ? Math.max(max, Number(match[1])) : max
+  }, 100)
+  return `${prefix}-${maxNumber + 1}`
+}
+
+async function ensureDefaultIssueRecords() {
+  seedDefaultIssuesPromise ??= (async () => {
+    const existingSeed = await getClientEngineRecord(seedCollection, defaultIssueSeedId, {
+      includeDeleted: true,
+    })
+    if (existingSeed) return
+
+    for (const issue of mockIssues) {
+      await upsertClientEngineRecord('issues', issue.id, issue)
+    }
+    await upsertClientEngineRecord(seedCollection, defaultIssueSeedId, {
+      seededAt: new Date().toISOString(),
+      count: mockIssues.length,
+    })
+  })().catch((error: unknown) => {
+    seedDefaultIssuesPromise = null
+    throw error
+  })
+
+  return seedDefaultIssuesPromise
+}
+
 export async function fetchServerIssues(): Promise<Issue[]> {
-  const response = await request<ServerIssueListResponse>(appKitConfig.server.issuesPath)
-  return response.issues.map(toIssue)
+  let records = await listClientEngineRecords<Issue>('issues')
+  if (import.meta.env.MODE === 'test') {
+    return records.map((record) => record.value)
+  }
+  if (records.length === 0) {
+    await ensureDefaultIssueRecords()
+    records = await listClientEngineRecords<Issue>('issues')
+  }
+  return records.map((record) => record.value)
 }
 
 export async function createServerIssue(data: ServerCreateIssueData): Promise<Issue> {
-  const issue = await request<ServerIssue>(appKitConfig.server.issuesPath, {
-    method: 'POST',
-    body: JSON.stringify(withoutUndefined(data)),
-  })
-  return toIssue(issue)
+  const issues = (await listClientEngineRecords<Issue>('issues')).map((record) => record.value)
+  const now = new Date().toISOString()
+  const issue: Issue = {
+    id: randomIssueId(),
+    identifier: nextIdentifier(issues),
+    title: data.title,
+    status: data.status ?? 'todo',
+    priority: data.priority ?? 'none',
+    assignee: data.assignee ?? null,
+    labels: data.labels ?? [],
+    project: data.project ?? appKitConfig.issues.defaultProject,
+    createdAt: now,
+    updatedAt: now,
+    description: data.description ?? '',
+  }
+  const record = await upsertClientEngineRecord('issues', issue.id, issue)
+  return record.value
 }
 
 export async function updateServerIssue(
   issueId: string,
   data: ServerUpdateIssueData
 ): Promise<Issue> {
-  const issue = await request<ServerIssue>(
-    `${appKitConfig.server.issuesPath}/${encodeURIComponent(issueId)}`,
-    {
-      method: 'PUT',
-      body: JSON.stringify(withoutUndefined(data)),
-    }
-  )
-  return toIssue(issue)
+  const existing = (await listClientEngineRecords<Issue>('issues'))
+    .find((record) => record.recordId === issueId)?.value
+  if (!existing) {
+    throw new IssueApiError('Issue not found', 404)
+  }
+
+  const issue: Issue = {
+    ...existing,
+    ...withoutUndefined(data),
+    assignee: data.assignee === undefined ? existing.assignee : data.assignee,
+    labels: data.labels ?? existing.labels,
+    updatedAt: new Date().toISOString(),
+  }
+  const record = await patchClientEngineRecord<Issue>('issues', issueId, issue)
+  if (!record) throw new IssueApiError('Issue not found', 404)
+  return record.value
 }
 
 export async function deleteServerIssue(issueId: string): Promise<void> {
-  await request<void>(`${appKitConfig.server.issuesPath}/${encodeURIComponent(issueId)}`, {
-    method: 'DELETE',
-  })
+  await deleteClientEngineRecord('issues', issueId)
 }

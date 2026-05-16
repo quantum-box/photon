@@ -1,13 +1,39 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { DocMetadata } from './types'
-import { createDoc, ensureDoc, listDocs, subscribeDocs, updateDoc } from './docsDb'
+import {
+  cacheDocMetadata,
+  createDoc,
+  ensureDoc,
+  getDoc,
+  listDocs,
+  subscribeDocs,
+  updateDoc,
+} from './docsDb'
+import {
+  createServerDocument,
+  DocsApiError,
+  fetchServerDocument,
+  fetchServerDocuments,
+  updateServerDocument,
+} from './docsApi'
+
+const sharedDocumentTitle = 'Shared document'
 
 export function useDocs() {
   const [docs, setDocs] = useState<DocMetadata[]>([])
   const [ready, setReady] = useState(false)
 
   const loadDocs = useCallback(async () => {
-    return listDocs()
+    try {
+      const serverDocs = await fetchServerDocuments()
+      await Promise.all(
+        serverDocs.map((doc) => cacheDocMetadata(doc, { emit: false }))
+      )
+      return serverDocs
+    } catch (error: unknown) {
+      console.warn('Failed to load server documents; using local cache', error)
+      return listDocs()
+    }
   }, [])
 
   const refresh = useCallback(async () => {
@@ -49,15 +75,53 @@ export function useDocs() {
   }, [loadDocs, refresh])
 
   const createDocument = useCallback(async (title?: string) => {
-    return createDoc({ title })
+    try {
+      const serverDoc = await createServerDocument({ title })
+      await cacheDocMetadata(serverDoc)
+      return serverDoc
+    } catch (error: unknown) {
+      console.warn('Failed to create server document; keeping local metadata', error)
+      return createDoc({ title })
+    }
   }, [])
 
   const ensureDocument = useCallback(async (docId: string) => {
-    return ensureDoc(docId)
+    const cachedDoc = await getDoc(docId)
+    if (cachedDoc) return cachedDoc
+
+    try {
+      const serverDoc = await fetchServerDocument(docId)
+      await cacheDocMetadata(serverDoc)
+      return serverDoc
+    } catch (error: unknown) {
+      if (!(error instanceof DocsApiError && error.status === 404)) {
+        console.warn('Failed to fetch server document; ensuring local metadata', error)
+        return ensureDoc(docId)
+      }
+    }
+
+    try {
+      const serverDoc = await createServerDocument({
+        id: docId,
+        title: sharedDocumentTitle,
+      })
+      await cacheDocMetadata(serverDoc)
+      return serverDoc
+    } catch (error: unknown) {
+      console.warn('Failed to create server document; ensuring local metadata', error)
+      return ensureDoc(docId)
+    }
   }, [])
 
   const renameDocument = useCallback(async (docId: string, title: string) => {
-    return updateDoc(docId, { title })
+    try {
+      const serverDoc = await updateServerDocument(docId, { title })
+      await cacheDocMetadata(serverDoc)
+      return serverDoc
+    } catch (error: unknown) {
+      console.warn('Failed to rename server document; updating local metadata', error)
+      return updateDoc(docId, { title })
+    }
   }, [])
 
   return useMemo(

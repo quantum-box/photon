@@ -1,5 +1,8 @@
 export type DeploymentMode = 'local' | 'cloud' | 'onprem'
 export type FrontendWorkerRuntime = 'cloudflare-workers' | 'workerd'
+// Photon Live backend: realtime collaborative UX transport for Yjs rooms,
+// presence, awareness, and reconnect behavior. Durable mutations belong to
+// Photon Engine and are synced through REST/RPC push/pull endpoints.
 export type SyncBackend = 'rust-server' | 'cloudflare-durable-object'
 export type AppServerBackend = 'rust-server' | 'external-api'
 export type ChatStreamMode = 'mock' | 'backend'
@@ -70,6 +73,11 @@ export interface AppKitConfig {
     defaultTitle: string
     yjsArrayName: string
   }
+  engine: {
+    pgliteDataDir: string
+    pushPath: string
+    pullPath: string
+  }
   attachments: {
     yjsArrayName: string
     endpoint: string
@@ -79,6 +87,13 @@ export interface AppKitConfig {
     tauriStorageProvider: 'tauri-local-file-cache'
   }
   sync: {
+    /**
+     * Photon Live configuration.
+     *
+     * This controls realtime collaborative UX only: Yjs room transport,
+     * presence, awareness, local IndexedDB hydration, and reconnect behavior.
+     * It is intentionally separate from Photon Engine durable mutation sync.
+     */
     backend: SyncBackend
     workspaceId: string
     issuesRoomId: string
@@ -96,6 +111,7 @@ export interface AppKitConfig {
     backend: AppServerBackend
     apiBaseUrl?: string
     issuesPath: string
+    documentsPath: string
   }
   frontendWorker: {
     enabled: true
@@ -310,6 +326,11 @@ export const appKitConfig: AppKitConfig = {
     defaultTitle: 'Untitled doc',
     yjsArrayName: 'blocks',
   },
+  engine: {
+    pgliteDataDir: 'idb://photon-engine',
+    pushPath: '/api/engine/push',
+    pullPath: '/api/engine/pull',
+  },
   attachments: {
     yjsArrayName: 'attachments',
     endpoint: '/api/attachments',
@@ -336,6 +357,7 @@ export const appKitConfig: AppKitConfig = {
     backend: resolveAppServerBackend(viteEnv.VITE_PHOTON_APP_SERVER_BACKEND),
     apiBaseUrl: viteEnv.VITE_PHOTON_API_BASE_URL,
     issuesPath: '/api/issues',
+    documentsPath: '/api/documents',
   },
   frontendWorker: {
     enabled: true,
