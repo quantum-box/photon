@@ -18,6 +18,7 @@ import type { DatabaseViewType } from '../lib/databaseViews/types'
 const workspaceLinks = [
   { id: 'docs' as const, label: 'Docs', to: '/docs' as const },
   { id: 'chat' as const, label: 'Chat', to: '/chat' as const },
+  { id: 'sync' as const, label: 'Sync', to: '/sync' as const },
 ] as const
 
 const SunIcon = (
@@ -133,6 +134,8 @@ export function Sidebar() {
       ? 'docs'
     : pathname.startsWith('/chat')
       ? 'chat'
+    : pathname.startsWith('/sync')
+      ? 'sync'
       : currentDatabaseViewType
 
   const handleDatabaseSelect = (databaseId: string | null) => {
@@ -315,7 +318,7 @@ export function Sidebar() {
   )
 
   const workspaceNavigation = (testIdSuffix = '') => (
-    <div className="grid grid-cols-2 gap-1 px-1">
+    <div className="grid grid-cols-3 gap-1 px-1">
       {workspaceLinks.map((view) => (
         <Link
           key={view.id}

@@ -37,6 +37,43 @@ interface PhotonEngineOperationRow {
   status: string
 }
 
+interface PhotonEngineOperationDebugRow extends PhotonEngineOperationRow {
+  local_sequence: number
+  collection: string
+  record_id: string
+  created_at: string
+}
+
+interface PhotonEngineStatusCountRow {
+  status: string
+  count: number
+}
+
+interface PhotonEngineRecordCountRow {
+  count: number
+}
+
+export interface ClientEngineDebugState {
+  scope: string
+  records: number
+  operations: {
+    pending: number
+    accepted: number
+    rejected: number
+    conflict: number
+    total: number
+  }
+  recentOperations: Array<{
+    operationId: string
+    collection: string
+    recordId: string
+    status: string
+    localSequence: number
+    createdAt: string
+    kind: string
+  }>
+}
+
 const engineScope = `workspace:${appKitConfig.workspace.id}`
 const engineActorId = `${appKitConfig.app.id}-client`
 
@@ -138,6 +175,22 @@ interface EngineRuntimeOperation {
   metadata: unknown
 }
 
+interface LegacyClientOperation {
+  id: string
+  key?: {
+    scope?: string
+    collection?: string
+    recordId?: string
+    record_id?: string
+  }
+  actorId?: string
+  actor_id?: string
+  timestamp?: string | EngineRuntimeRecord['version']
+  kind?: PhotonEngineMutationKind | EngineRuntimeOperation['kind']
+  value?: unknown
+  metadata?: unknown
+}
+
 let wasmModulePromise: Promise<WasmPhotonEngineModule> | null = null
 let wasmUnavailable = false
 
@@ -193,6 +246,54 @@ function runtimeOperation({
           : { type: 'upsert', value: value ?? {} },
     metadata: { source: 'photon-web-wasm' },
   }
+}
+
+function normalizeOperationKind(operation: LegacyClientOperation): EngineRuntimeOperation['kind'] {
+  if (typeof operation.kind === 'object' && operation.kind && 'type' in operation.kind) {
+    return operation.kind as EngineRuntimeOperation['kind']
+  }
+
+  if (operation.kind === 'patch') {
+    const fields = operation.value && typeof operation.value === 'object'
+      ? operation.value as object
+      : {}
+    return { type: 'patch', fields }
+  }
+
+  if (operation.kind === 'delete') {
+    return { type: 'delete' }
+  }
+
+  return { type: 'upsert', value: operation.value ?? {} }
+}
+
+function normalizeEngineOperation(raw: string): EngineRuntimeOperation {
+  const operation = JSON.parse(raw) as LegacyClientOperation
+  const key = operation.key ?? {}
+  const actorId = operation.actor_id ?? operation.actorId ?? engineActorId
+  const timestampMs = typeof operation.timestamp === 'string'
+    ? Date.parse(operation.timestamp)
+    : Date.now()
+  const timestamp = typeof operation.timestamp === 'object' && operation.timestamp
+    ? operation.timestamp
+    : runtimeTimestamp(Number.isFinite(timestampMs) ? timestampMs : Date.now())
+
+  return {
+    id: operation.id,
+    key: {
+      scope: key.scope ?? engineScope,
+      collection: key.collection ?? 'unknown',
+      record_id: key.record_id ?? key.recordId ?? 'unknown',
+    },
+    actor_id: actorId,
+    timestamp,
+    kind: normalizeOperationKind(operation),
+    metadata: operation.metadata ?? { source: 'photon-client-pglite-normalized' },
+  }
+}
+
+function operationKindLabel(kind: EngineRuntimeOperation['kind']): string {
+  return kind.type ?? Object.keys(kind)[0] ?? 'operation'
 }
 
 async function getRawEngineRecord(
@@ -375,19 +476,13 @@ async function applyClientOperationInPgliteForTests<T>({
         ? existing?.value ?? {}
         : value ?? {}
   const deleted = kind === 'delete'
-  const operation = {
-    id: randomId('op'),
-    key: {
-      scope: engineScope,
-      collection,
-      recordId,
-    },
-    actorId: engineActorId,
-    timestamp: now,
+  const operation = runtimeOperation({
+    collection,
+    recordId,
     kind,
     value: kind === 'patch' ? fields ?? {} : nextValue,
-    metadata: { source: 'photon-client-pglite' },
-  }
+    fields,
+  })
 
   await db.query(
     `
@@ -518,13 +613,17 @@ export async function syncClientEngineOperations(
   if (pending.rows.length === 0) {
     return { pushed: 0, accepted: 0 }
   }
+  const normalizedPending = pending.rows.map((row) => ({
+    ...row,
+    operation: normalizeEngineOperation(row.operation_json),
+  }))
 
   const response = await fetch(`${apiBaseUrl}${appKitConfig.engine.pushPath}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
       scope: engineScope,
-      operations: pending.rows.map((row) => JSON.parse(row.operation_json)),
+      operations: normalizedPending.map((row) => row.operation),
       cursor: null,
     }),
   })
@@ -553,7 +652,94 @@ export async function syncClientEngineOperations(
     )
   }
 
+  await Promise.all(
+    normalizedPending.map((row) =>
+      db.query(
+        `
+          UPDATE photon_engine_operations
+          SET operation_json = $1
+          WHERE scope = $2 AND operation_id = $3
+        `,
+        [
+          JSON.stringify(row.operation),
+          engineScope,
+          row.operation_id,
+        ]
+      )
+    )
+  )
+
   return { pushed: pending.rows.length, accepted }
+}
+
+function emptyOperationCounts(): ClientEngineDebugState['operations'] {
+  return {
+    pending: 0,
+    accepted: 0,
+    rejected: 0,
+    conflict: 0,
+    total: 0,
+  }
+}
+
+export async function getClientEngineDebugState(): Promise<ClientEngineDebugState> {
+  const db = await dbPromise
+  const [recordCounts, operationCounts, recentOperations] = await Promise.all([
+    db.query<PhotonEngineRecordCountRow>(
+      `
+        SELECT COUNT(*)::int AS count
+        FROM photon_engine_records
+        WHERE scope = $1 AND deleted = FALSE
+      `,
+      [engineScope]
+    ),
+    db.query<PhotonEngineStatusCountRow>(
+      `
+        SELECT status, COUNT(*)::int AS count
+        FROM photon_engine_operations
+        WHERE scope = $1
+        GROUP BY status
+      `,
+      [engineScope]
+    ),
+    db.query<PhotonEngineOperationDebugRow>(
+      `
+        SELECT local_sequence, operation_id, operation_json, status, collection, record_id, created_at
+        FROM photon_engine_operations
+        WHERE scope = $1
+        ORDER BY local_sequence DESC
+        LIMIT 20
+      `,
+      [engineScope]
+    ),
+  ])
+
+  const operations = emptyOperationCounts()
+  for (const row of operationCounts.rows) {
+    const status = row.status as keyof ClientEngineDebugState['operations']
+    if (status in operations) {
+      operations[status] = Number(row.count)
+    }
+    operations.total += Number(row.count)
+  }
+
+  return {
+    scope: engineScope,
+    records: Number(recordCounts.rows[0]?.count ?? 0),
+    operations,
+    recentOperations: recentOperations.rows.map((row) => {
+      const operation = normalizeEngineOperation(row.operation_json)
+      return {
+        operationId: row.operation_id,
+        collection: row.collection,
+        recordId: row.record_id,
+        status: row.status,
+        localSequence: Number(row.local_sequence),
+        createdAt: row.created_at,
+        kind: operationKindLabel(operation.kind),
+      }
+    }),
+  }
 }
 
 export const __testOnly = {

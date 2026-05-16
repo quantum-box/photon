@@ -3,13 +3,23 @@ import * as Y from 'yjs'
 
 export interface Env {
   PHOTON_SYNC_ROOMS: DurableObjectNamespace<PhotonSyncRoom>
+  PHOTON_CLOUD_ENGINE_BASE_URL?: string
+  PHOTON_EDGE_SERVICE_TOKEN?: string
 }
 
 const DEFAULT_ROOM_ID = 'issues'
+const DEFAULT_CLOUD_ENGINE_BASE_URL = 'http://127.0.0.1:3001'
 const SNAPSHOT_KEY = 'yjs:snapshot:bytes'
 const SNAPSHOT_META_KEY = 'yjs:snapshot:meta'
 const UPDATE_META_KEY = 'yjs:update:meta'
 const UPDATE_KEY_PREFIX = 'yjs:update:'
+const ENGINE_PROXY_PATHS = new Set([
+  '/api/engine/push',
+  '/api/engine/pull',
+  '/api/engine/debug',
+])
+const MAX_PROXY_BODY_BYTES = 1024 * 1024
+const EDGE_LOG_LIMIT = 100
 
 // Compact the on-disk update log into a snapshot once the log exceeds this
 // many rows. Keeps replay cost bounded for long-lived rooms.
@@ -19,6 +29,7 @@ const COMPACTION_THRESHOLD = 50
 // headroom for serialization overhead; if the encoded snapshot exceeds
 // the limit we keep replaying the log instead of writing a too-large value.
 const MAX_SNAPSHOT_BYTES = 128 * 1024 - 4096
+const MAX_UPDATE_BYTES = MAX_SNAPSHOT_BYTES
 
 interface SnapshotMeta {
   seq: number
@@ -34,6 +45,23 @@ interface UpdateMeta {
   oldestSeq: number
 }
 
+interface EdgeSyncLog {
+  id: string
+  requestId: string
+  timestamp: string
+  method: string
+  path: string
+  target: string
+  status: number
+  durationMs: number
+  requestBytes: number
+  responseBytes: number
+  ok: boolean
+  error?: string
+}
+
+const edgeSyncLogs: EdgeSyncLog[] = []
+
 function paddedSeq(seq: number): string {
   // 12 zero-padded digits keeps lexicographic sort == numeric sort up to
   // ~10^12 updates per room, which is comfortably beyond any realistic
@@ -43,6 +71,129 @@ function paddedSeq(seq: number): string {
 
 function updateKey(seq: number): string {
   return `${UPDATE_KEY_PREFIX}${paddedSeq(seq)}`
+}
+
+function corsHeaders(): HeadersInit {
+  return {
+    'access-control-allow-origin': '*',
+    'access-control-allow-methods': 'GET,POST,OPTIONS',
+    'access-control-allow-headers': 'content-type,x-request-id,x-photon-request-id',
+    'access-control-expose-headers': 'x-photon-request-id',
+  }
+}
+
+function requestId(request: Request): string {
+  return request.headers.get('x-photon-request-id') ||
+    request.headers.get('x-request-id') ||
+    `edge_${crypto.randomUUID()}`
+}
+
+function cloudEngineBaseUrl(env: Env): string {
+  return (env.PHOTON_CLOUD_ENGINE_BASE_URL || DEFAULT_CLOUD_ENGINE_BASE_URL).replace(/\/$/, '')
+}
+
+function appendEdgeLog(log: EdgeSyncLog) {
+  edgeSyncLogs.unshift(log)
+  edgeSyncLogs.splice(EDGE_LOG_LIMIT)
+  console.info(
+    `[photon-edge] ${log.method} ${log.path} -> ${log.status} ` +
+      `${log.durationMs}ms request_id=${log.requestId}`,
+  )
+}
+
+function jsonResponse(payload: unknown, init: ResponseInit = {}): Response {
+  const headers = new Headers(init.headers)
+  headers.set('content-type', 'application/json')
+  for (const [key, value] of Object.entries(corsHeaders())) {
+    headers.set(key, value)
+  }
+  return new Response(JSON.stringify(payload), { ...init, headers })
+}
+
+async function proxyEngineRequest(request: Request, env: Env, path: string): Promise<Response> {
+  const startedAt = Date.now()
+  const id = requestId(request)
+  const target = `${cloudEngineBaseUrl(env)}${path}`
+  let requestBytes = 0
+
+  try {
+    const body = request.method === 'GET' ? undefined : await request.arrayBuffer()
+    requestBytes = body?.byteLength ?? 0
+    if (requestBytes > MAX_PROXY_BODY_BYTES) {
+      const status = 413
+      appendEdgeLog({
+        id: crypto.randomUUID(),
+        requestId: id,
+        timestamp: new Date().toISOString(),
+        method: request.method,
+        path,
+        target,
+        status,
+        durationMs: Date.now() - startedAt,
+        requestBytes,
+        responseBytes: 0,
+        ok: false,
+        error: 'request body too large',
+      })
+      return jsonResponse({ error: 'request body too large', maxBytes: MAX_PROXY_BODY_BYTES }, { status })
+    }
+
+    const headers = new Headers()
+    headers.set('content-type', request.headers.get('content-type') || 'application/json')
+    headers.set('x-photon-request-id', id)
+    if (env.PHOTON_EDGE_SERVICE_TOKEN) {
+      headers.set('authorization', `Bearer ${env.PHOTON_EDGE_SERVICE_TOKEN}`)
+    }
+
+    const response = await fetch(target, {
+      method: request.method,
+      headers,
+      body,
+    })
+    const responseBody = await response.arrayBuffer()
+    const responseHeaders = new Headers(response.headers)
+    responseHeaders.set('x-photon-request-id', id)
+    for (const [key, value] of Object.entries(corsHeaders())) {
+      responseHeaders.set(key, value)
+    }
+
+    appendEdgeLog({
+      id: crypto.randomUUID(),
+      requestId: id,
+      timestamp: new Date().toISOString(),
+      method: request.method,
+      path,
+      target,
+      status: response.status,
+      durationMs: Date.now() - startedAt,
+      requestBytes,
+      responseBytes: responseBody.byteLength,
+      ok: response.ok,
+    })
+
+    return new Response(responseBody, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: responseHeaders,
+    })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    appendEdgeLog({
+      id: crypto.randomUUID(),
+      requestId: id,
+      timestamp: new Date().toISOString(),
+      method: request.method,
+      path,
+      target,
+      status: 502,
+      durationMs: Date.now() - startedAt,
+      requestBytes,
+      responseBytes: 0,
+      ok: false,
+      error: message,
+    })
+    return jsonResponse({ error: 'cloud engine proxy failed', detail: message }, { status: 502 })
+  }
 }
 
 function presenceMessage(onlineCount: number): string {
@@ -72,8 +223,34 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url)
 
+    if (request.method === 'OPTIONS') {
+      return new Response(null, { status: 204, headers: corsHeaders() })
+    }
+
+    if (url.pathname === '/__debug/sync') {
+      return jsonResponse({
+        edge: {
+          status: 'ok',
+          role: 'photon-edge-worker',
+          cloudEngineBaseUrl: cloudEngineBaseUrl(env),
+          engineProxyPaths: Array.from(ENGINE_PROXY_PATHS),
+          logLimit: EDGE_LOG_LIMIT,
+        },
+        logs: edgeSyncLogs,
+      })
+    }
+
     if (url.pathname === '/api/health') {
-      return Response.json({ status: 'ok', backend: 'cloudflare-durable-object' })
+      return jsonResponse({
+        status: 'ok',
+        backend: 'cloudflare-durable-object',
+        edge: 'photon-edge-worker',
+        cloudEngineBaseUrl: cloudEngineBaseUrl(env),
+      })
+    }
+
+    if (ENGINE_PROXY_PATHS.has(url.pathname)) {
+      return proxyEngineRequest(request, env, url.pathname)
     }
 
     if (url.pathname !== '/ws') {
@@ -201,6 +378,14 @@ export class PhotonSyncRoom extends DurableObject<Env> {
   }
 
   private async tryApplyAndPersist(update: Uint8Array): Promise<boolean> {
+    if (update.byteLength > MAX_UPDATE_BYTES) {
+      console.warn(
+        `[photon-sync] dropping oversized yjs update ${update.byteLength}B; ` +
+          `limit is ${MAX_UPDATE_BYTES}B`,
+      )
+      return false
+    }
+
     const doc = await this.ensureDoc()
 
     try {

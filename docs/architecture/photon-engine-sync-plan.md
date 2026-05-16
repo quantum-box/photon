@@ -180,8 +180,11 @@ Use this map when tracing a sync bug from UI to storage:
 ### 7. Observability
 
 - Log push/pull counts, accepted/rejected/conflict counts, and cursor movement.
-- Add health/debug endpoint for Engine storage backend.
-- Add client-side sync status:
+- `GET /api/engine/debug` exposes Engine storage debug state for local and
+  development verification.
+- The `/sync` app dashboard shows client PGlite queue state, edge proxy logs,
+  and cloud Engine accepted operations.
+- Add product-facing client-side sync status:
   - idle
   - syncing
   - offline

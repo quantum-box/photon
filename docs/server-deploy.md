@@ -130,6 +130,9 @@ Photon Engine exposes durable push/pull sync endpoints:
 
 - `POST /api/engine/push`: accept pending client operations and return decisions.
 - `POST /api/engine/pull`: return accepted operations after the client's cursor.
+- `GET /api/engine/debug`: local/development observability for accepted counts,
+  collection counts, cursor position, next remote sequence, and recent
+  operations.
 
 Photon Live does not expose these Engine endpoints. It only owns `/ws`.
 

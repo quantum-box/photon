@@ -13,7 +13,7 @@ use axum::{
         ws::{Message, WebSocket, WebSocketUpgrade},
         Path, Query, State,
     },
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::IntoResponse,
     routing::get,
     Json, Router,
@@ -71,6 +71,7 @@ use yrs::{updates::decoder::Decode, Doc, ReadTxn, StateVector, Transact, Update}
         create_tool_call,
         update_tool_call,
         delete_tool_call,
+        engine_debug_state,
     ),
     components(schemas(
         Issue,
@@ -96,6 +97,10 @@ use yrs::{updates::decoder::Decode, Doc, ReadTxn, StateVector, Transact, Update}
         UpdateToolCall,
         ToolCallListResponse,
         HealthResponse,
+        EngineDebugState,
+        EngineOperationCounts,
+        EngineCollectionDebugState,
+        EngineRecentOperation,
     )),
     info(
         title = "Photon API",
@@ -1145,6 +1150,47 @@ pub struct RoomState {
     pub next_seq: AtomicI64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct EngineOperationCounts {
+    pub pending: usize,
+    pub accepted: usize,
+    pub rejected: usize,
+    pub conflict: usize,
+    pub total: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct EngineCollectionDebugState {
+    pub collection: String,
+    pub records: usize,
+    pub operations: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct EngineRecentOperation {
+    pub operation_id: String,
+    pub collection: String,
+    pub record_id: String,
+    pub actor_id: String,
+    pub kind: String,
+    pub status: String,
+    pub local_sequence: i64,
+    pub remote_sequence: Option<i64>,
+    pub received_at_ms: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct EngineDebugState {
+    pub role: String,
+    pub scope: String,
+    pub remote: String,
+    pub next_remote_sequence: i64,
+    pub cursor_position: Option<i64>,
+    pub counts: EngineOperationCounts,
+    pub collections: Vec<EngineCollectionDebugState>,
+    pub recent_operations: Vec<EngineRecentOperation>,
+}
+
 #[derive(Clone, Debug)]
 pub enum ServerEngineAdapter {
     Sqlite(SqliteAdapter),
@@ -1328,6 +1374,7 @@ fn engine_api_router() -> Router<Arc<AppState>> {
             "/api/engine/pull",
             axum::routing::post(pull_engine_operations),
         )
+        .route("/api/engine/debug", get(engine_debug_state))
         .route("/api/issues", get(list_issues).post(create_issue))
         .route(
             "/api/issues/:id",
@@ -1587,8 +1634,15 @@ async fn health() -> Json<HealthResponse> {
 
 async fn push_engine_operations(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Json(payload): Json<PushRequest>,
 ) -> Result<Json<PushResult>, AppError> {
+    let request_id = headers
+        .get("x-photon-request-id")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("none");
+    let scope = payload.scope.clone();
+    let operation_count = payload.operations.len();
     let mut decisions = Vec::with_capacity(payload.operations.len());
     let mut max_remote_sequence = 0;
 
@@ -1615,6 +1669,15 @@ async fn push_engine_operations(
         payload.cursor
     };
 
+    info!(
+        request_id,
+        scope = %scope,
+        operation_count,
+        accepted = decisions.len(),
+        max_remote_sequence,
+        "Photon Engine push accepted operations",
+    );
+
     Ok(Json(PushResult {
         decisions,
         server_operations: Vec::new(),
@@ -1624,8 +1687,14 @@ async fn push_engine_operations(
 
 async fn pull_engine_operations(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Json(payload): Json<PullRequest>,
 ) -> Result<Json<PullResult>, AppError> {
+    let request_id = headers
+        .get("x-photon-request-id")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("none");
+    let scope = payload.scope.clone();
     let after_remote_sequence = payload.cursor.as_ref().map(|cursor| cursor.position);
     let operations = state
         .engine
@@ -1643,7 +1712,7 @@ async fn pull_engine_operations(
         .as_ref()
         .map(|cursor| cursor.position)
         .unwrap_or_default();
-    let pulled = operations
+    let pulled: Vec<_> = operations
         .into_iter()
         .filter_map(|stored| {
             stored.remote_sequence.map(|remote_sequence| {
@@ -1655,6 +1724,16 @@ async fn pull_engine_operations(
             })
         })
         .collect();
+    let pulled_count = pulled.len();
+
+    info!(
+        request_id,
+        scope = %scope,
+        after_remote_sequence,
+        pulled_count,
+        max_remote_sequence,
+        "Photon Engine pull returned operations",
+    );
 
     Ok(Json(PullResult {
         operations: pulled,
@@ -1663,6 +1742,116 @@ async fn pull_engine_operations(
             RemoteId::from(ENGINE_ACTOR_ID),
             max_remote_sequence,
         )),
+    }))
+}
+
+fn operation_kind_label(kind: &OperationKind) -> &'static str {
+    match kind {
+        OperationKind::Upsert { .. } => "upsert",
+        OperationKind::Patch { .. } => "patch",
+        OperationKind::RemoveFields { .. } => "remove_fields",
+        OperationKind::Delete => "delete",
+        OperationKind::Restore { .. } => "restore",
+        OperationKind::Increment { .. } => "increment",
+        OperationKind::SetAdd { .. } => "set_add",
+        OperationKind::SetRemove { .. } => "set_remove",
+    }
+}
+
+fn count_status(counts: &mut EngineOperationCounts, status: &OperationStatus) {
+    match status {
+        OperationStatus::Pending => counts.pending += 1,
+        OperationStatus::Accepted => counts.accepted += 1,
+        OperationStatus::Rejected => counts.rejected += 1,
+        OperationStatus::Conflict => counts.conflict += 1,
+    }
+    counts.total += 1;
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/engine/debug",
+    responses(
+        (status = 200, description = "Photon Engine sync debug state", body = EngineDebugState)
+    ),
+    tag = "engine"
+)]
+async fn engine_debug_state(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<EngineDebugState>, AppError> {
+    let scope = ScopeId::from(ENGINE_SCOPE_ID);
+    let operations = state
+        .engine
+        .storage()
+        .list_operations(OperationFilter {
+            scope: Some(scope.clone()),
+            ..OperationFilter::default()
+        })
+        .await?;
+
+    let mut counts = EngineOperationCounts {
+        pending: 0,
+        accepted: 0,
+        rejected: 0,
+        conflict: 0,
+        total: 0,
+    };
+    let mut collection_operation_counts: BTreeMap<String, usize> = BTreeMap::new();
+
+    for stored in &operations {
+        count_status(&mut counts, &stored.status);
+        *collection_operation_counts
+            .entry(stored.operation.key.collection.to_string())
+            .or_default() += 1;
+    }
+
+    let mut collections = Vec::with_capacity(collection_operation_counts.len());
+    for (collection, operations) in collection_operation_counts {
+        let records = state
+            .engine
+            .storage()
+            .list_records(&scope, &CollectionName::from(collection.clone()))
+            .await?
+            .into_iter()
+            .filter(|record| !record.is_deleted())
+            .count();
+        collections.push(EngineCollectionDebugState {
+            collection,
+            records,
+            operations,
+        });
+    }
+
+    let mut recent_operations = operations;
+    recent_operations.sort_by_key(|stored| std::cmp::Reverse(stored.local_sequence));
+    let recent_operations = recent_operations
+        .into_iter()
+        .take(20)
+        .map(|stored| EngineRecentOperation {
+            operation_id: stored.operation.id.to_string(),
+            collection: stored.operation.key.collection.to_string(),
+            record_id: stored.operation.key.record_id.to_string(),
+            actor_id: stored.operation.actor_id.to_string(),
+            kind: operation_kind_label(&stored.operation.kind).to_owned(),
+            status: stored.status.as_str().to_owned(),
+            local_sequence: stored.local_sequence,
+            remote_sequence: stored.remote_sequence,
+            received_at_ms: stored.received_at_ms,
+        })
+        .collect();
+
+    let remote = RemoteId::from(ENGINE_ACTOR_ID);
+    let cursor = state.engine.storage().get_cursor(&scope, &remote).await?;
+
+    Ok(Json(EngineDebugState {
+        role: "photon-engine-authority".to_owned(),
+        scope: ENGINE_SCOPE_ID.to_owned(),
+        remote: ENGINE_ACTOR_ID.to_owned(),
+        next_remote_sequence: state.engine_next_seq.load(Ordering::SeqCst) + 1,
+        cursor_position: cursor.map(|cursor| cursor.position),
+        counts,
+        collections,
+        recent_operations,
     }))
 }
 
@@ -3552,6 +3741,66 @@ mod tests {
         assert_eq!(pulled.operations.len(), 1);
         assert_eq!(pulled.operations[0].operation.id, operation.id);
         assert_eq!(pulled.operations[0].remote_sequence, 1);
+    }
+
+    #[tokio::test]
+    async fn test_engine_debug_endpoint_reports_recent_sync_state() {
+        let (app, _) = engine_test_app().await;
+        let operation = Operation::new(
+            engine_record_key("issues", "issue-debug-1"),
+            ActorId::from("client-debug"),
+            OperationKind::Upsert {
+                value: serde_json::json!({
+                    "id": "issue-debug-1",
+                    "identifier": "PLT-902",
+                    "title": "Debug me"
+                }),
+            },
+        );
+
+        let push_resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/engine/push")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_string(&PushRequest {
+                            scope: ScopeId::from(ENGINE_SCOPE_ID),
+                            operations: vec![operation.clone()],
+                            cursor: None,
+                        })
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(push_resp.status(), StatusCode::OK);
+
+        let debug_resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/engine/debug")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(debug_resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(debug_resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let debug: EngineDebugState = serde_json::from_slice(&body).unwrap();
+        assert_eq!(debug.counts.accepted, 1);
+        assert_eq!(debug.collections[0].collection, "issues");
+        assert_eq!(debug.collections[0].records, 1);
+        assert_eq!(
+            debug.recent_operations[0].operation_id,
+            operation.id.to_string()
+        );
+        assert_eq!(debug.recent_operations[0].remote_sequence, Some(1));
     }
 
     #[test]

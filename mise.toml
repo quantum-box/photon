@@ -32,3 +32,32 @@ run = "npm run type-check"
 [tasks.lint]
 description = "Run ESLint"
 run = "npm run lint"
+
+[tasks."sync:infra"]
+description = "Start local Photon Engine infra with Docker Compose"
+run = "docker compose -f docker-compose.local-sync.yml up --build mysql engine"
+
+[tasks."sync:edge"]
+description = "Start local Edge Worker for Live and Engine proxy"
+run = "npm run worker:dev"
+
+[tasks."sync:web"]
+description = "Start web app pointed at the local Edge Worker"
+run = "VITE_PHOTON_SYNC_WS_URL=ws://127.0.0.1:8787/ws VITE_PHOTON_API_BASE_URL=http://127.0.0.1:8787 npm run dev -- --host 127.0.0.1"
+
+[tasks."sync:smoke"]
+description = "Smoke Photon Engine push/pull through the local Edge Worker"
+run = "PHOTON_ENGINE_SMOKE_URL=http://127.0.0.1:8787 PHOTON_ENGINE_SMOKE_SCOPE=workspace:photon-default npm run server:engine:smoke"
+
+[tasks."sync:debug"]
+description = "Fetch local Edge and Cloud Engine sync debug state"
+run = """
+curl -sS http://127.0.0.1:8787/__debug/sync
+printf '\\n'
+curl -sS http://127.0.0.1:8787/api/engine/debug
+printf '\\n'
+"""
+
+[tasks."sync:down"]
+description = "Stop local Docker Compose sync infra"
+run = "docker compose -f docker-compose.local-sync.yml down"

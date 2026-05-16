@@ -3,6 +3,9 @@
   "name": "photon-sync",
   "main": "workers/sync/index.ts",
   "compatibility_date": "2026-05-05",
+  "vars": {
+    "PHOTON_CLOUD_ENGINE_BASE_URL": "http://127.0.0.1:3001"
+  },
   "durable_objects": {
     "bindings": [
       {

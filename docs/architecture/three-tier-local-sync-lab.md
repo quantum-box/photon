@@ -55,19 +55,45 @@ canonical application server. Durable acceptance belongs to the cloud server.
 
 ## Current Local Lab
 
-This is possible with the current code after PR #33:
+This is possible with the current code:
 
 ```text
 Client
-  -> Edge Worker for Photon Live `/ws`
-  -> Cloud Engine directly for `/api/engine/push` and `/api/engine/pull`
+  -> Edge Worker
+       /ws
+       /api/engine/push
+       /api/engine/pull
+       /api/engine/debug
+       /__debug/sync
+  -> Cloud Engine
   -> MySQL
 ```
 
-This validates the cloud authority and database path, but not the Engine proxy
-inside the edge layer yet.
+This validates the cloud authority, database path, and the Engine proxy inside
+the edge layer.
 
-### 1. Start MySQL
+### 1. Start MySQL And Cloud Engine
+
+The repeatable path is Docker Compose:
+
+```bash
+mise run sync:infra
+```
+
+This starts:
+
+- MySQL on `127.0.0.1:3307`
+- Cloud Engine on `127.0.0.1:3001`
+
+Watch the Engine logs in that terminal while pushing changes through the edge.
+
+The underlying command is:
+
+```bash
+docker compose -f docker-compose.local-sync.yml up --build mysql engine
+```
+
+If you want to run the pieces manually instead, start MySQL first:
 
 ```bash
 docker run --name photon-engine-mysql \
@@ -85,7 +111,7 @@ If the container already exists:
 docker start photon-engine-mysql
 ```
 
-### 2. Start Cloud Engine
+Then start Cloud Engine:
 
 ```bash
 PHOTON_ENGINE_PORT=3001 \
@@ -94,7 +120,7 @@ PHOTON_ENGINE_DATABASE_URL=mysql://photon:photon_pass@127.0.0.1:3307/photon_engi
   npm run server:engine
 ```
 
-### 3. Smoke Cloud Engine
+### 2. Smoke Cloud Engine
 
 ```bash
 PHOTON_ENGINE_SMOKE_URL=http://127.0.0.1:3001 \
@@ -111,38 +137,22 @@ Expected result:
 `remoteSequence` may be higher when the database already contains accepted
 operations.
 
-### 4. Start Edge Worker For Live
+### 3. Start Edge Worker For Live And Engine Proxy
 
 ```bash
 npm run worker:dev
 ```
 
-### 5. Start Client Against Edge Live And Cloud Engine
+or:
 
 ```bash
-VITE_PHOTON_SYNC_WS_URL=ws://127.0.0.1:8787/ws \
-VITE_PHOTON_API_BASE_URL=http://127.0.0.1:3001 \
-  npm run dev -- --host 127.0.0.1
+mise run sync:edge
 ```
 
-This keeps Live traffic on the edge Worker and Engine sync traffic on the cloud
-Engine server.
+The local Worker uses `PHOTON_CLOUD_ENGINE_BASE_URL=http://127.0.0.1:3001`
+from `wrangler.jsonc` by default.
 
-## Target Local Lab
-
-The next implementation step should make this possible:
-
-```text
-Client
-  -> Edge Worker
-       /ws
-       /api/engine/push
-       /api/engine/pull
-  -> Cloud Engine
-  -> MySQL
-```
-
-The client should point only at the edge:
+### 4. Start Client Against The Edge
 
 ```bash
 VITE_PHOTON_SYNC_WS_URL=ws://127.0.0.1:8787/ws \
@@ -150,13 +160,52 @@ VITE_PHOTON_API_BASE_URL=http://127.0.0.1:8787 \
   npm run dev -- --host 127.0.0.1
 ```
 
+or:
+
+```bash
+mise run sync:web
+```
+
+This keeps Live traffic and Engine sync traffic on the same edge Worker. The
+Worker forwards Engine traffic to the cloud Engine authority.
+
+### 5. Open The Sync Dashboard
+
+Open:
+
+```bash
+http://127.0.0.1:5173/sync
+```
+
+The dashboard shows:
+
+- Client PGlite operation counts and recent local operations.
+- Edge proxy request logs from `GET /__debug/sync`.
+- Cloud Engine accepted counts, collection counts, cursor, next sequence, and
+  recent accepted operations from `GET /api/engine/debug`.
+- A **Sync now** action that pushes local pending Engine operations through the
+  edge.
+
+The raw observability endpoints are:
+
+| Layer | Endpoint |
+| --- | --- |
+| Edge | `GET http://127.0.0.1:8787/__debug/sync` |
+| Edge health | `GET http://127.0.0.1:8787/api/health` |
+| Cloud Engine debug through edge | `GET http://127.0.0.1:8787/api/engine/debug` |
+| Cloud Engine debug direct | `GET http://127.0.0.1:3001/api/engine/debug` |
+
+Use `mise run sync:smoke` to run the edge-routed push/pull smoke test, and
+`mise run sync:debug` to print the edge and cloud debug JSON.
+
 The edge Worker should forward:
 
 | Edge route | Cloud route |
 | --- | --- |
 | `POST /api/engine/push` | `POST http://127.0.0.1:3001/api/engine/push` |
 | `POST /api/engine/pull` | `POST http://127.0.0.1:3001/api/engine/pull` |
-| `GET /api/health` | `GET http://127.0.0.1:3001/api/health` or edge-local health |
+| `GET /api/engine/debug` | `GET http://127.0.0.1:3001/api/engine/debug` |
+| `GET /api/health` | edge-local health |
 
 ## Edge Proxy Requirements
 
@@ -203,27 +252,20 @@ between parsed Engine operations and storage writes.
 | MySQL adapter DDL | supported | supported |
 | Cloud Engine push/pull smoke | supported | supported |
 | Client direct Engine push | supported | optional |
-| Client Engine push through edge | not yet | required |
+| Client Engine push through edge | supported | required |
 | Live WebSocket on edge Worker | supported | supported |
-| Edge request ID propagation | not yet | required |
+| Edge request ID propagation | supported | required |
 | Edge auth/session check | not yet | required |
 | Cloud business validation boundary | partial | required |
 | Pull apply and durable cursor on client | not yet | required |
 
 ## Suggested Implementation Tasks
 
-1. Add Worker env config:
-   - `PHOTON_CLOUD_ENGINE_BASE_URL`
-   - optional `PHOTON_EDGE_SERVICE_TOKEN`
-2. Add Worker routes:
-   - `GET /api/health`
-   - `POST /api/engine/push`
-   - `POST /api/engine/pull`
-3. Add Worker tests for pass-through proxy behavior.
-4. Add cloud server request ID logging for push/pull.
-5. Add a domain validation boundary in `packages/server`.
-6. Add client pull apply and cursor persistence.
-7. Add a Playwright or Node smoke that starts:
+1. Add Worker tests for pass-through proxy behavior.
+2. Add cloud server request ID logging for push/pull.
+3. Add a domain validation boundary in `packages/server`.
+4. Add client pull apply and cursor persistence.
+5. Add a Playwright or Node smoke that starts:
    - MySQL
    - cloud Engine
    - edge Worker
