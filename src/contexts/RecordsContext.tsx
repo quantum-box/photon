@@ -146,6 +146,28 @@ function serverUpdateForField(
   }
 }
 
+function optimisticRecordId() {
+  const randomId = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`
+  return `optimistic-record-${randomId}`
+}
+
+function createOptimisticDatabaseRecord(data: CreateRecordData): DatabaseRecord {
+  const now = new Date().toISOString()
+  return {
+    id: optimisticRecordId(),
+    identifier: `${appKitConfig.records.identifierPrefix}-NEW`,
+    title: data.title,
+    status: data.status ?? 'todo',
+    priority: data.priority ?? 'none',
+    assignee: data.assignee ?? null,
+    labels: data.labels ?? [],
+    project: data.project ?? appKitConfig.records.defaultProject,
+    createdAt: now,
+    updatedAt: now,
+    description: data.description ?? '',
+  }
+}
+
 function seedMockData() {
   ydoc.transact(() => {
     for (const record of mockDatabaseRecords) {
@@ -226,6 +248,12 @@ export function RecordsProvider({ children }: { children: ReactNode }) {
   )
 
   const handleCreateRecord = useCallback(async (data: CreateRecordData) => {
+    const optimisticRecord = createOptimisticDatabaseRecord(data)
+
+    ydoc.transact(() => {
+      upsertYDatabaseRecord(optimisticRecord)
+    })
+
     await createServerRecord({
       ...data,
       assignee: data.assignee ?? null,
@@ -233,10 +261,16 @@ export function RecordsProvider({ children }: { children: ReactNode }) {
       project: data.project ?? appKitConfig.records.defaultProject,
     })
       .then((serverRecord) => {
-        ydoc.transact(() => upsertYDatabaseRecord(serverRecord))
+        ydoc.transact(() => {
+          removeYDatabaseRecord(optimisticRecord.id)
+          upsertYDatabaseRecord(serverRecord)
+        })
       })
       .catch((error: unknown) => {
         console.warn('Failed to persist created record', error)
+        ydoc.transact(() => {
+          removeYDatabaseRecord(optimisticRecord.id)
+        })
         throw error
       })
   }, [])
