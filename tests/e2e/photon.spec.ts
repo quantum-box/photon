@@ -56,6 +56,9 @@ test.describe('Photon shell', () => {
   test('supports global keyboard shortcuts for fast navigation and creation', async ({ page }) => {
     await page.goto('/databases')
 
+    await expect(page.getByTestId('open-create-record').locator('kbd').filter({ hasText: 'C' })).toBeVisible()
+    await expect(page.locator('kbd').filter({ hasText: '/' }).first()).toBeVisible()
+
     await page.keyboard.press('ControlOrMeta+F')
     await expect(page.getByTestId('records-global-filter')).toBeFocused()
 
@@ -77,6 +80,8 @@ test.describe('Photon shell', () => {
 
     await page.keyboard.press('ControlOrMeta+K')
     await expect(page.getByTestId('keyboard-shortcuts-panel')).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Command Menu' })).toBeVisible()
+    await expect(page.getByTestId('keyboard-shortcuts-panel').locator('kbd').filter({ hasText: 'G' }).first()).toBeVisible()
     await page.keyboard.press('Escape')
     await expect(page.getByTestId('keyboard-shortcuts-panel')).toHaveCount(0)
 

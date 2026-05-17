@@ -18,6 +18,7 @@ import { DatabaseViewTabs } from './components/DatabaseViewTabs'
 import { DatabaseViewSettingsPanel } from './components/DatabaseViewSettingsPanel'
 import { DetailPanel } from './components/DetailPanel'
 import { CreateRecordModal } from './components/CreateRecordModal'
+import { Kbd, KbdGroup } from './components/Kbd'
 import { ChatView } from './components/chat/ChatView'
 import { DocsView } from './components/docs/DocsView'
 import { EngineSyncDashboard } from './components/sync/EngineSyncDashboard'
@@ -57,8 +58,6 @@ interface RecordSearchParams {
 const isMacPlatform = () =>
   typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.test(navigator.platform)
 
-const shortcutModifierLabel = () => (isMacPlatform() ? 'Cmd' : 'Ctrl')
-
 function isEditableShortcutTarget(target: EventTarget | null) {
   if (!(target instanceof HTMLElement)) return false
   if (target.isContentEditable) return true
@@ -93,6 +92,33 @@ const goShortcutActions: Record<string, ShortcutAction> = {
   d: 'docs',
   c: 'chat',
   s: 'sync',
+}
+
+function modifierKeyLabel() {
+  return isMacPlatform() ? '⌘' : 'Ctrl'
+}
+
+function renderShortcutKeys(keys: string[]) {
+  return (
+    <KbdGroup>
+      {keys.map((key, index) => (
+        <Kbd key={`${key}-${index}`}>{key}</Kbd>
+      ))}
+    </KbdGroup>
+  )
+}
+
+function renderShortcutSequence(keys: string[]) {
+  return (
+    <KbdGroup>
+      {keys.map((key, index) => (
+        <span key={`${key}-${index}`} className="inline-flex items-center gap-1">
+          {index > 0 && <span className="text-[10px] text-subtle">then</span>}
+          <Kbd>{key}</Kbd>
+        </span>
+      ))}
+    </KbdGroup>
+  )
 }
 
 function validateRecordSearch(search: Record<string, unknown>): RecordSearchParams {
@@ -211,11 +237,12 @@ function DatabaseHeader({
           {onCreate && (
             <button
               data-testid="open-create-record"
-              className="whitespace-nowrap rounded px-2.5 py-1.5 text-xs font-medium md:px-3"
+              className="flex items-center gap-2 whitespace-nowrap rounded px-2.5 py-1.5 text-xs font-medium md:px-3"
               style={{ background: 'var(--accent)', color: '#fff' }}
               onClick={onCreate}
             >
-              + New Record
+              <span>+ New Record</span>
+              <Kbd className="border-white/25 bg-white/15 text-white shadow-none">C</Kbd>
             </button>
           )}
         </div>
@@ -250,20 +277,20 @@ function KeyboardShortcutsPanel({ open, onClose }: { open: boolean; onClose: () 
 
   if (!open) return null
 
-  const modifier = shortcutModifierLabel()
+  const modifier = modifierKeyLabel()
   const shortcuts = [
-    { keys: 'C', label: 'New record' },
-    { keys: '/', label: 'Focus record search' },
-    { keys: `${modifier}+F`, label: 'Focus record search' },
-    { keys: `${modifier}+B`, label: 'Toggle table or board' },
-    { keys: `${modifier}+K`, label: 'Open command menu' },
-    { keys: 'G then T', label: shortcutViewLabel('table') },
-    { keys: 'G then B', label: shortcutViewLabel('board') },
-    { keys: 'G then W', label: shortcutViewLabel('workflow') },
-    { keys: 'G then D', label: shortcutViewLabel('docs') },
-    { keys: 'G then C', label: shortcutViewLabel('chat') },
-    { keys: 'G then S', label: shortcutViewLabel('sync') },
-    { keys: '?', label: 'Show shortcuts' },
+    { keys: renderShortcutKeys(['C']), label: 'New record' },
+    { keys: renderShortcutKeys(['/']), label: 'Focus record search' },
+    { keys: renderShortcutKeys([modifier, 'F']), label: 'Focus record search' },
+    { keys: renderShortcutKeys([modifier, 'B']), label: 'Toggle table or board' },
+    { keys: renderShortcutKeys([modifier, 'K']), label: 'Open command menu' },
+    { keys: renderShortcutSequence(['G', 'T']), label: shortcutViewLabel('table') },
+    { keys: renderShortcutSequence(['G', 'B']), label: shortcutViewLabel('board') },
+    { keys: renderShortcutSequence(['G', 'W']), label: shortcutViewLabel('workflow') },
+    { keys: renderShortcutSequence(['G', 'D']), label: shortcutViewLabel('docs') },
+    { keys: renderShortcutSequence(['G', 'C']), label: shortcutViewLabel('chat') },
+    { keys: renderShortcutSequence(['G', 'S']), label: shortcutViewLabel('sync') },
+    { keys: renderShortcutKeys(['?']), label: 'Show shortcuts' },
   ]
 
   return (
@@ -287,12 +314,10 @@ function KeyboardShortcutsPanel({ open, onClose }: { open: boolean; onClose: () 
           </button>
         </div>
         <div className="space-y-1">
-          {shortcuts.map((shortcut) => (
-            <div key={shortcut.keys} className="flex items-center justify-between gap-4 rounded px-1 py-1.5">
+          {shortcuts.map((shortcut, index) => (
+            <div key={`${shortcut.label}-${index}`} className="flex items-center justify-between gap-4 rounded px-1 py-1.5">
               <span className="text-xs text-muted">{shortcut.label}</span>
-              <kbd className="rounded border border-border bg-canvas px-2 py-1 font-mono text-[11px] text-foreground">
-                {shortcut.keys}
-              </kbd>
+              {shortcut.keys}
             </div>
           ))}
         </div>
