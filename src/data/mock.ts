@@ -3,7 +3,7 @@ import { appKitConfig } from '../app/kitConfig'
 export type Priority = 'urgent' | 'high' | 'medium' | 'low' | 'none'
 export type Status = 'backlog' | 'todo' | 'in_progress' | 'in_review' | 'done' | 'cancelled'
 
-export interface Issue {
+export interface DatabaseRecord {
   id: string
   identifier: string
   title: string
@@ -16,8 +16,6 @@ export interface Issue {
   updatedAt: string
   description: string
 }
-
-export type DatabaseRecord = Issue
 
 export const mockUsers = appKitConfig.workspace.users
 const projects = appKitConfig.workspace.projects.map((project) => project.label)
@@ -80,27 +78,27 @@ const extraTitles = [
 let counter = 1
 const statuses: Status[] = ['backlog', 'todo', 'in_progress', 'in_review', 'done', 'cancelled']
 
-function generateIssues(): Issue[] {
-  const issues: Issue[] = []
+function generateRecords(): DatabaseRecord[] {
+  const records: DatabaseRecord[] = []
   // Original titles by status
   for (const [status, titleList] of Object.entries(titles)) {
     for (const title of titleList) {
-      issues.push(makeIssue(title, status as Status))
+      records.push(makeRecord(title, status as Status))
     }
   }
-  // Extra issues for virtual scroll testing (200+ total)
+  // Extra records for virtual scroll testing (200+ total)
   for (let i = 0; i < 180; i++) {
     const title = `${extraTitles[i % extraTitles.length]} #${Math.floor(i / extraTitles.length) + 2}`
     const status = statuses[i % statuses.length]
-    issues.push(makeIssue(title, status))
+    records.push(makeRecord(title, status))
   }
-  return issues
+  return records
 }
 
-function makeIssue(title: string, status: Status): Issue {
-  const id = `issue-${counter}`
-  const identifier = `${appKitConfig.issues.identifierPrefix}-${100 + counter}`
-  const issue: Issue = {
+function makeRecord(title: string, status: Status): DatabaseRecord {
+  const id = `record-${counter}`
+  const identifier = `${appKitConfig.records.identifierPrefix}-${100 + counter}`
+  const record: DatabaseRecord = {
     id,
     identifier,
     title,
@@ -114,11 +112,10 @@ function makeIssue(title: string, status: Status): Issue {
     description: `${title}の詳細な説明がここに入ります。\n\n## 要件\n- 要件1\n- 要件2\n- 要件3\n\n## 関連\n- ${identifier}`,
   }
   counter++
-  return issue
+  return record
 }
 
-export const mockIssues: Issue[] = generateIssues()
-export const mockDatabaseRecords: DatabaseRecord[] = mockIssues
+export const mockDatabaseRecords: DatabaseRecord[] = generateRecords()
 
 export const statusConfig: Record<Status, { label: string; color: string; icon: string }> = {
   backlog: { label: 'Backlog', color: 'var(--text-muted)', icon: '○' },

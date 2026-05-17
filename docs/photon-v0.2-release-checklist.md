@@ -1,7 +1,7 @@
 # Photon v0.2 Release Checklist
 
 Photon v0.2 release readiness is based on workspace flows, not isolated UI
-screens. A release candidate should keep issue, chat, editor, file metadata,
+screens. A release candidate should keep record, chat, editor, file metadata,
 and sync behavior working together across web and Tauri assumptions.
 
 ## Required Verification
@@ -45,14 +45,14 @@ npm run tauri:build
 
 ## Release Decision Gates
 
-- Issue creation, detail editing, and table filtering work in one tab and sync
+- Record creation, detail editing, and table filtering work in one tab and sync
   to another tab.
-- Chat can stream an assistant response and issue tools can create, move, and
-  search workspace issues.
+- Chat can stream an assistant response and record tools can create, move, and
+  search workspace records.
 - Docs can create a collaborative document, persist title metadata, sync editor
-  blocks to another client, and link selected text back to issues and chat
+  blocks to another client, and link selected text back to records and chat
   context.
-- Attachments persist metadata through the server and surface again from issue,
+- Attachments persist metadata through the server and surface again from record,
   chat, and document views. Binary bytes remain provider-owned.
 - Offline-ish document edits reconnect and sync after the client comes back
   online.
@@ -65,7 +65,7 @@ npm run tauri:build
   keeps preview bytes in runtime object URLs, so CI proves metadata sync and
   chips, not durable binary download.
 - The local Rust server has no authentication or authorization boundary for
-  issue, document sync, chat tool, or attachment metadata endpoints.
+  record, document sync, chat tool, or attachment metadata endpoints.
 - Playwright covers Chromium workspace flows only. Native desktop packaging is
   covered by Tauri smoke builds, not full desktop UI automation.
 - Offline coverage is intentionally reconnect-focused. It verifies local Yjs

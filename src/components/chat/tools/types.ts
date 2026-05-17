@@ -2,19 +2,19 @@
  * Tool integration types for external tool calls (web search, API calls, etc.)
  */
 
-import type { Issue } from '../../../data/mock'
+import type { DatabaseRecord } from '../../../data/mock'
 import type { WorkspaceDocContext } from '../../../lib/docs/workspaceContext'
 
 export type ToolType =
   | 'web_search'
   | 'api_call'
   | 'code_exec'
-  | 'issue_search'
-  | 'issue_list'
-  | 'issue_get'
-  | 'issue_create'
-  | 'issue_update'
-  | 'issue_move'
+  | 'record_search'
+  | 'record_list'
+  | 'record_get'
+  | 'record_create'
+  | 'record_update'
+  | 'record_move'
 export type ToolStatus = 'pending' | 'running' | 'completed' | 'error' | 'cancelled'
 
 export interface ToolCall {
@@ -33,21 +33,21 @@ export interface ToolResult {
   duration?: number // ms
 }
 
-export interface IssueToolRuntime {
-  issues: Issue[]
-  syncIssue: (issue: Issue) => void
-  syncIssues: (issues: Issue[]) => void
+export interface RecordToolRuntime {
+  records: DatabaseRecord[]
+  syncRecord: (record: DatabaseRecord) => void
+  syncRecords: (records: DatabaseRecord[]) => void
 }
 
-export interface IssueToolResponse {
+export interface RecordToolResponse {
   action: 'search' | 'list' | 'get' | 'create' | 'update' | 'move'
-  issues: Issue[]
+  records: DatabaseRecord[]
   total: number
   message: string
 }
 
 export interface ToolRuntimeContext {
-  issueTools?: IssueToolRuntime
+  recordTools?: RecordToolRuntime
   documentContext?: WorkspaceDocContext | null
 }
 

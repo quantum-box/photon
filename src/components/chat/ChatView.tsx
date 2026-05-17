@@ -7,11 +7,11 @@ import { FilePreviewModal } from '../files/FilePreviewModal'
 import { type FileAttachment, detectFileType } from '../files/types'
 import type { ToolCall } from './tools/types'
 import { appKitConfig } from '../../app/kitConfig'
-import { useDatabaseRecords } from '../../contexts/IssuesContext'
+import { useDatabaseRecords } from '../../contexts/RecordsContext'
 import { toFileAttachment } from '../../lib/attachments/presentation'
 import { useWorkspaceAttachments } from '../../lib/attachments/useWorkspaceAttachments'
 import type { AttachmentSurfaceRef } from '../../lib/attachments/types'
-import { listDocIssueLinks } from '../../lib/docs/docsDb'
+import { listDocRecordLinks } from '../../lib/docs/docsDb'
 import {
   readStoredDocContext,
   readStoredSelectedText,
@@ -73,11 +73,11 @@ export function ChatView() {
       return
     }
 
-    void listDocIssueLinks(stored.docId).then((relatedIssues) => {
+    void listDocRecordLinks(stored.docId).then((relatedRecords) => {
       setDocumentContext({
         ...stored,
         selectedText: readStoredSelectedText(stored.docId),
-        relatedIssues,
+        relatedRecords,
       })
     })
   }, [])
@@ -117,7 +117,7 @@ export function ChatView() {
         prompt,
         messages: conversation.map((message) => ({ role: message.role, content: message.content })),
         context: {
-          issueTools: { issues: records, syncIssue: syncRecord, syncIssues: syncRecords },
+          recordTools: { records, syncRecord, syncRecords },
           documentContext,
         },
       },
@@ -457,9 +457,9 @@ export function ChatView() {
                 Selected: {documentContext.selectedText}
               </span>
             )}
-            {documentContext.relatedIssues.length > 0 && (
+            {documentContext.relatedRecords.length > 0 && (
               <span>
-                {documentContext.relatedIssues.length} related records
+                {documentContext.relatedRecords.length} related records
               </span>
             )}
             <button

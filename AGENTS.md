@@ -5,7 +5,7 @@
 Photon is a React 19 + Vite client with Tauri and a Rust backend.
 
 - `src/`: frontend app code. Routes live in `src/router.tsx`; shared state is under `src/contexts/`; Yjs sync helpers are in `src/lib/yjs/`.
-- `src/app/kitConfig.ts`: project settings for branding, navigation, issue defaults, storage, and sync.
+- `src/app/kitConfig.ts`: project settings for branding, navigation, record defaults, storage, and sync.
 - `src/components/chat/` and `src/components/files/`: chat and file preview features.
 - `src/assets/`: static frontend assets.
 - `src-tauri/`: Tauri desktop shell.
@@ -26,7 +26,7 @@ Photon is a React 19 + Vite client with Tauri and a Rust backend.
 
 ## Coding Style & Naming Conventions
 
-Use TypeScript, React function components, and hooks. Keep components in PascalCase files such as `CreateIssueModal.tsx`; hooks use `useSomething.ts`.
+Use TypeScript, React function components, and hooks. Keep components in PascalCase files such as `CreateRecordModal.tsx`; hooks use `useSomething.ts`.
 
 ESLint is configured in `eslint.config.js`. Use two-space indentation, single quotes, and existing Tailwind utility patterns. Add `data-testid` only for stable user-facing flows that need E2E coverage.
 
@@ -36,16 +36,16 @@ Keep reusable shell code independent of project names. Put labels, defaults, per
 
 Use Vitest for focused unit tests in `src/**/*.{test,spec}.{ts,tsx}`. Use Playwright for browser flows in `tests/e2e/*.spec.ts`.
 
-E2E tests should cover critical shell behavior: route navigation, issue creation/editing, Kanban movement, chat streaming, file attachment, and persistence/sync behavior. Prefer role, label, and `data-testid` locators.
+E2E tests should cover critical shell behavior: route navigation, record creation/editing, Kanban movement, chat streaming, file attachment, and persistence/sync behavior. Prefer role, label, and `data-testid` locators.
 
 ## Commit & Pull Request Guidelines
 
 History uses concise conventional commits with Linear-style IDs, for example:
 
-- `feat: PLT-348 implement issue CRUD operations with Y.Doc integration`
+- `feat: PLT-348 implement record CRUD operations with Y.Doc integration`
 - `feat: PLT-346 add dark mode and theme system with light/dark/system toggle`
 
-For pull requests, include a summary, linked issue or PLT ID, verification commands, and screenshots for UI changes. Call out migrations, Tauri changes, and setup changes.
+For pull requests, include a summary, linked ticket or PLT ID, verification commands, and screenshots for UI changes. Call out migrations, Tauri changes, and setup changes.
 
 ## Security & Configuration Tips
 

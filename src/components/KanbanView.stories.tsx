@@ -1,19 +1,19 @@
 import type { Meta, StoryObj } from '@storybook/react-vite'
 import { expect, fn, userEvent, within } from 'storybook/test'
-import { mockIssues } from '../data/mock'
+import { mockDatabaseRecords } from '../data/mock'
 import { KanbanView } from './KanbanView'
 
-const boardIssues = mockIssues.slice(0, 15)
+const boardRecords = mockDatabaseRecords.slice(0, 15)
 
 const meta = {
   title: 'Databases/BoardView',
   component: KanbanView,
   tags: ['autodocs'],
   args: {
-    issues: boardIssues,
-    selectedIssueId: boardIssues[2]?.id ?? null,
-    onSelectIssue: fn(),
-    onMoveIssue: fn(),
+    records: boardRecords,
+    selectedRecordId: boardRecords[2]?.id ?? null,
+    onSelectRecord: fn(),
+    onMoveRecord: fn(),
   },
   parameters: {
     layout: 'fullscreen',

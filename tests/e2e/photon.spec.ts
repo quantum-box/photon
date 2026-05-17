@@ -10,14 +10,14 @@ test.describe('Photon shell', () => {
     await expect(page.getByRole('heading', { name: 'Databases' })).toBeVisible()
     await expect(page.getByText(/\d+ records/)).toBeVisible()
 
-    await page.getByTestId('open-create-issue').click()
-    await expect(page.getByTestId('create-issue-modal')).toBeVisible()
+    await page.getByTestId('open-create-record').click()
+    await expect(page.getByTestId('create-record-modal')).toBeVisible()
 
     await page.getByLabel(/Record title/i).fill(title)
     await page.getByLabel('Description').fill('Created from Playwright')
-    await page.getByTestId('create-issue-submit').click()
+    await page.getByTestId('create-record-submit').click()
 
-    await expect(page.getByTestId('create-issue-modal')).toBeHidden()
+    await expect(page.getByTestId('create-record-modal')).toBeHidden()
     await page.getByPlaceholder('Filter records...').fill(title)
     await expect(page.getByText(title)).toBeVisible()
   })
@@ -340,11 +340,11 @@ test.describe('Photon shell', () => {
     const secondPage = await context.newPage()
     await secondPage.goto('/databases')
 
-    await page.getByTestId('open-create-issue').click()
+    await page.getByTestId('open-create-record').click()
     await page.getByLabel(/Record title/i).fill(title)
     await page.getByLabel('Description').fill('Created in the first tab and observed in the second tab')
-    await page.getByTestId('create-issue-submit').click()
-    await expect(page.getByTestId('create-issue-modal')).toBeHidden()
+    await page.getByTestId('create-record-submit').click()
+    await expect(page.getByTestId('create-record-modal')).toBeHidden()
 
     await expect(async () => {
       await secondPage.reload()
@@ -404,21 +404,21 @@ test.describe('Photon shell', () => {
     await page.getByTestId('chat-message-input').fill(`create record "${title}"`)
     await page.getByTestId('chat-send').click()
 
-    await expect(page.getByTestId('issue-tool-result').getByText('Create Record')).toBeVisible()
-    await expect(page.getByTestId('issue-tool-result').getByText(title)).toBeVisible({
+    await expect(page.getByTestId('record-tool-result').getByText('Create Record')).toBeVisible()
+    await expect(page.getByTestId('record-tool-result').getByText(title)).toBeVisible({
       timeout: 15_000,
     })
     await expect(page.getByText('Created PLT-')).toBeVisible()
-    const createResultText = await page.getByTestId('issue-tool-result').innerText()
+    const createResultText = await page.getByTestId('record-tool-result').innerText()
     const identifier = createResultText.match(/PLT-\d+/)?.[0]
     expect(identifier).toBeTruthy()
-    const issueIdentifier = identifier ?? ''
+    const recordIdentifier = identifier ?? ''
 
-    await page.getByTestId('chat-message-input').fill(`move ${issueIdentifier} to done`)
+    await page.getByTestId('chat-message-input').fill(`move ${recordIdentifier} to done`)
     await page.getByTestId('chat-send').click()
 
-    await expect(page.getByTestId('issue-tool-result').last().getByText('Move Record')).toBeVisible()
-    await expect(page.getByTestId('issue-tool-result').last().getByText('Done')).toBeVisible({
+    await expect(page.getByTestId('record-tool-result').last().getByText('Move Record')).toBeVisible()
+    await expect(page.getByTestId('record-tool-result').last().getByText('Done')).toBeVisible({
       timeout: 15_000,
     })
 
@@ -430,8 +430,8 @@ test.describe('Photon shell', () => {
     await page.getByTestId('chat-message-input').fill(`search record "${title}"`)
     await page.getByTestId('chat-send').click()
 
-    await expect(page.getByTestId('issue-tool-result').last().getByText('Database Search')).toBeVisible()
-    await expect(page.getByTestId('issue-tool-result').last().getByText(title)).toBeVisible({
+    await expect(page.getByTestId('record-tool-result').last().getByText('Database Search')).toBeVisible()
+    await expect(page.getByTestId('record-tool-result').last().getByText(title)).toBeVisible({
       timeout: 15_000,
     })
   })
@@ -443,28 +443,28 @@ test.describe('Photon shell', () => {
     await page.getByTestId('chat-message-input').fill(`create record "${title}"`)
     await page.getByTestId('chat-send').click()
 
-    await expect(page.getByTestId('issue-tool-result').getByText('Create Record')).toBeVisible()
-    await expect(page.getByTestId('issue-tool-result').getByText(title)).toBeVisible({
+    await expect(page.getByTestId('record-tool-result').getByText('Create Record')).toBeVisible()
+    await expect(page.getByTestId('record-tool-result').getByText(title)).toBeVisible({
       timeout: 15_000,
     })
 
-    const createResultText = await page.getByTestId('issue-tool-result').innerText()
+    const createResultText = await page.getByTestId('record-tool-result').innerText()
     const identifier = createResultText.match(/PLT-\d+/)?.[0]
     expect(identifier).toBeTruthy()
-    const issueIdentifier = identifier ?? ''
+    const recordIdentifier = identifier ?? ''
 
-    await page.getByTestId('chat-message-input').fill(`move ${issueIdentifier} to done`)
+    await page.getByTestId('chat-message-input').fill(`move ${recordIdentifier} to done`)
     await page.getByTestId('chat-send').click()
 
-    await expect(page.getByTestId('issue-tool-result').last().getByText('Move Record')).toBeVisible()
-    await expect(page.getByTestId('issue-tool-result').last().getByText('Done')).toBeVisible({
+    await expect(page.getByTestId('record-tool-result').last().getByText('Move Record')).toBeVisible()
+    await expect(page.getByTestId('record-tool-result').last().getByText('Done')).toBeVisible({
       timeout: 15_000,
     })
 
     await page.getByTestId('side-nav').getByRole('button', { name: /All databases/ }).click()
     await page.getByPlaceholder('Filter records...').fill(title)
     await expect(page.getByText(title).first()).toBeVisible({ timeout: 15_000 })
-    await expect(page.locator('tbody tr', { hasText: issueIdentifier }).first()).toBeVisible()
+    await expect(page.locator('tbody tr', { hasText: recordIdentifier }).first()).toBeVisible()
   })
 
   test('creates a doc and syncs Yjs blocks from a shared document URL', async ({ page, browser }) => {
@@ -590,15 +590,15 @@ test.describe('Photon shell', () => {
     }, selectedText)
 
     await expect(page.getByTestId('doc-selected-text').getByText(selectedText)).toBeVisible()
-    await page.getByTestId('doc-create-issue-from-selection').click()
+    await page.getByTestId('doc-create-record-from-selection').click()
 
-    const relatedDatabases = page.getByTestId('doc-related-issues')
+    const relatedDatabases = page.getByTestId('doc-related-records')
     await expect(relatedDatabases.getByText(/PLT-\d+/)).toBeVisible({ timeout: 15_000 })
-    const issueIdentifier = (await relatedDatabases.innerText()).match(/PLT-\d+/)?.[0]
-    expect(issueIdentifier).toBeTruthy()
+    const recordIdentifier = (await relatedDatabases.innerText()).match(/PLT-\d+/)?.[0]
+    expect(recordIdentifier).toBeTruthy()
 
-    await page.goto(`/databases/${issueIdentifier}`)
-    await expect(page.getByTestId('issue-related-docs').getByText(title)).toBeVisible({
+    await page.goto(`/databases/${recordIdentifier}`)
+    await expect(page.getByTestId('record-related-docs').getByText(title)).toBeVisible({
       timeout: 15_000,
     })
 

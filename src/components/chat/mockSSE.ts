@@ -21,9 +21,9 @@ The codebase follows a component-based architecture with clear separation of con
 
 \`\`\`typescript
 // Example: Optimistic update pattern
-const handleMoveIssue = useCallback((issueId: string, newStatus: Status) => {
-  setIssues(prev =>
-    prev.map(i => (i.id === issueId ? { ...i, status: newStatus } : i))
+const handleMoveRecord = useCallback((recordId: string, newStatus: Status) => {
+  setRecords(prev =>
+    prev.map(i => (i.id === recordId ? { ...i, status: newStatus } : i))
   )
 }, [])
 \`\`\`
@@ -183,9 +183,9 @@ function extractQuotedText(message: string) {
   return message.match(/["'「](.+?)["'」]/)?.[1]?.trim()
 }
 
-function extractIssueRef(message: string) {
+function extractRecordRef(message: string) {
   return (
-    message.match(/<issue\s+id=["']([^"']+)["'][^>]*>/i)?.[1] ??
+    message.match(/<record\s+id=["']([^"']+)["'][^>]*>/i)?.[1] ??
     message.match(/\bPLT-\d+\b/i)?.[0] ??
     message.match(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i)?.[0]
   )
@@ -206,7 +206,7 @@ function extractCreateTitle(message: string) {
   if (quoted) return quoted
 
   return message
-    .replace(/(?:please|この内容で|record|records|database|databases|issue|チケット|課題|を|で|作って|作成|create|new|add)/gi, ' ')
+    .replace(/(?:please|この内容で|record|records|database|databases|record|チケット|課題|を|で|作って|作成|create|new|add)/gi, ' ')
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 160)
@@ -215,20 +215,20 @@ function extractCreateTitle(message: string) {
 function detectToolTriggers(message: string): DetectedTool[] {
   const lower = message.toLowerCase()
   const tools: DetectedTool[] = []
-  const hasIssueIntent = /(?:record|records|database|databases|issue|issues|チケット|課題|plt-\d+|<issue)/i.test(message)
+  const hasRecordIntent = /(?:record|records|database|databases|record|records|チケット|課題|plt-\d+|<record)/i.test(message)
 
-  if (hasIssueIntent) {
-    const issueRef = extractIssueRef(message)
+  if (hasRecordIntent) {
+    const recordRef = extractRecordRef(message)
     const status = extractStatus(message)
     const isCreate = /(?:create|new|add|作成|作って)/i.test(message)
-    const isMove = Boolean(issueRef && status && /(?:move|set|update|change|to|にして|へ|変更)/i.test(message))
-    const isGet = Boolean(issueRef && /(?:get|show|open|lookup|detail|詳細|見せて)/i.test(message))
+    const isMove = Boolean(recordRef && status && /(?:move|set|update|change|to|にして|へ|変更)/i.test(message))
+    const isGet = Boolean(recordRef && /(?:get|show|open|lookup|detail|詳細|見せて)/i.test(message))
     const isList = /(?:list|show|一覧|まとめ)/i.test(message)
     const isSearch = /(?:search|find|filter|検索|探し|blocker|ブロッカー)/i.test(message)
 
     if (isCreate) {
       tools.push({
-        type: 'issue_create',
+        type: 'record_create',
         args: {
           title: extractCreateTitle(message),
           status,
@@ -239,9 +239,9 @@ function detectToolTriggers(message: string): DetectedTool[] {
 
     if (isMove) {
       tools.push({
-        type: 'issue_move',
+        type: 'record_move',
         args: {
-          issueId: issueRef,
+          recordId: recordRef,
           status,
         },
       })
@@ -249,16 +249,16 @@ function detectToolTriggers(message: string): DetectedTool[] {
     }
 
     if (isGet) {
-      tools.push({ type: 'issue_get', args: { issueId: issueRef } })
+      tools.push({ type: 'record_get', args: { recordId: recordRef } })
       return tools
     }
 
     if (isList || isSearch) {
       const query = extractQuotedText(message) ?? message
-        .replace(/(?:record|records|database|databases|issue|issues|チケット|課題|search|find|filter|検索|探し|一覧|まとめ|show|list)/gi, ' ')
+        .replace(/(?:record|records|database|databases|record|records|チケット|課題|search|find|filter|検索|探し|一覧|まとめ|show|list)/gi, ' ')
         .trim()
       tools.push({
-        type: isList && !isSearch ? 'issue_list' : 'issue_search',
+        type: isList && !isSearch ? 'record_list' : 'record_search',
         args: { query, status, limit: 8 },
       })
       return tools
@@ -341,7 +341,7 @@ async function executeToolsAndStream(
 ) {
   let hasSearch = false
   let hasApi = false
-  let hasIssue = false
+  let hasRecord = false
 
   for (const tool of tools) {
     if (signal.aborted) { onDone(); return }
@@ -352,11 +352,11 @@ async function executeToolsAndStream(
       name: tool.type === 'web_search' ? 'Web Search'
         : tool.type === 'api_call' ? 'API Call'
         : tool.type === 'code_exec' ? 'Code Execution'
-        : tool.type === 'issue_search' ? 'Database Search'
-        : tool.type === 'issue_list' ? 'Database List'
-        : tool.type === 'issue_get' ? 'Record Lookup'
-        : tool.type === 'issue_create' ? 'Create Record'
-        : tool.type === 'issue_update' ? 'Update Record'
+        : tool.type === 'record_search' ? 'Database Search'
+        : tool.type === 'record_list' ? 'Database List'
+        : tool.type === 'record_get' ? 'Record Lookup'
+        : tool.type === 'record_create' ? 'Create Record'
+        : tool.type === 'record_update' ? 'Update Record'
         : 'Move Record',
       args: tool.args,
       status: 'running',
@@ -367,7 +367,7 @@ async function executeToolsAndStream(
 
     if (tool.type === 'web_search') hasSearch = true
     if (tool.type === 'api_call') hasApi = true
-    if (tool.type.startsWith('issue_')) hasIssue = true
+    if (tool.type.startsWith('record_')) hasRecord = true
 
     let updatedToolCall: ToolCall
     try {
@@ -399,7 +399,7 @@ async function executeToolsAndStream(
 
   // Pick a follow-up response based on what tools ran
   let response: string
-  if (hasIssue) {
+  if (hasRecord) {
     response = `Done. I updated the workspace database record through the server-backed record store.`
   } else if (hasSearch) {
     response = SEARCH_FOLLOW_UP_RESPONSES[Math.floor(Math.random() * SEARCH_FOLLOW_UP_RESPONSES.length)]

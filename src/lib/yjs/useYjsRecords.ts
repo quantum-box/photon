@@ -1,20 +1,20 @@
 import { useState, useEffect, useSyncExternalStore } from 'react'
 import * as Y from 'yjs'
 import {
-  issuesArray,
+  recordsArray,
   initialSyncReady,
   connectionStatus,
   syncPresence,
   type ConnectionStatus,
   type SyncPresence,
 } from './yjsProvider'
-import type { Issue, Status, Priority } from '../../data/mock'
+import type { DatabaseRecord, Status, Priority } from '../../data/mock'
 
 // ---------------------------------------------------------------------------
-// Y.Map → Issue conversion
+// Y.Map → Record conversion
 // ---------------------------------------------------------------------------
 
-function ymapToIssue(ymap: Y.Map<string>): Issue {
+function ymapToRecord(ymap: Y.Map<string>): DatabaseRecord {
   const labelsRaw = ymap.get('labels') as string | undefined
   let labels: string[] = []
   if (labelsRaw) {
@@ -40,23 +40,23 @@ function ymapToIssue(ymap: Y.Map<string>): Issue {
   }
 }
 
-function snapshot(): Issue[] {
-  const result = new Map<string, Issue>()
-  issuesArray.forEach((ymap) => {
-    const issue = ymapToIssue(ymap)
-    if (issue.id) {
-      result.set(issue.id, issue)
+function snapshot(): DatabaseRecord[] {
+  const result = new Map<string, DatabaseRecord>()
+  recordsArray.forEach((ymap) => {
+    const record = ymapToRecord(ymap)
+    if (record.id) {
+      result.set(record.id, record)
     }
   })
   return [...result.values()]
 }
 
 // ---------------------------------------------------------------------------
-// useYjsIssues — React hook
+// useYjsRecords — React hook
 // ---------------------------------------------------------------------------
 
-export function useYjsIssues(): { issues: Issue[]; ready: boolean } {
-  const [issues, setIssues] = useState<Issue[]>([])
+export function useYjsRecords(): { records: DatabaseRecord[]; ready: boolean } {
+  const [records, setRecords] = useState<DatabaseRecord[]>([])
   const [ready, setReady] = useState(false)
 
   useEffect(() => {
@@ -69,16 +69,16 @@ export function useYjsIssues(): { issues: Issue[]; ready: boolean } {
       if (rafId !== null) cancelAnimationFrame(rafId)
       rafId = requestAnimationFrame(() => {
         rafId = null
-        if (!unmounted) setIssues(snapshot())
+        if (!unmounted) setRecords(snapshot())
       })
     }
 
     // Wait for initial sync, then take first snapshot and start observing
     initialSyncReady.then(() => {
       if (unmounted) return
-      setIssues(snapshot())
+      setRecords(snapshot())
       setReady(true)
-      issuesArray.observeDeep(debouncedSnapshot)
+      recordsArray.observeDeep(debouncedSnapshot)
       observing = true
     })
 
@@ -86,12 +86,12 @@ export function useYjsIssues(): { issues: Issue[]; ready: boolean } {
       unmounted = true
       if (rafId !== null) cancelAnimationFrame(rafId)
       if (observing) {
-        issuesArray.unobserveDeep(debouncedSnapshot)
+        recordsArray.unobserveDeep(debouncedSnapshot)
       }
     }
   }, [])
 
-  return { issues, ready }
+  return { records, ready }
 }
 
 // ---------------------------------------------------------------------------

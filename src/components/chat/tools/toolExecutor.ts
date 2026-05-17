@@ -4,15 +4,15 @@
  */
 
 import {
-  createServerIssue,
-  fetchServerIssues,
-  updateServerIssue,
-  type ServerUpdateIssueData,
-} from '../../../lib/issuesApi'
-import type { Issue, Priority, Status } from '../../../data/mock'
+  createServerRecord,
+  fetchServerRecords,
+  updateServerRecord,
+  type ServerUpdateRecordData,
+} from '../../../lib/recordsApi'
+import type { DatabaseRecord, Priority, Status } from '../../../data/mock'
 import type {
   ToolDefinition,
-  IssueToolResponse,
+  RecordToolResponse,
   ToolResult,
   ToolRuntimeContext,
   ToolType,
@@ -206,11 +206,12 @@ const statuses: Status[] = [
 ]
 const priorities: Priority[] = ['urgent', 'high', 'medium', 'low', 'none']
 
-function requireIssueRuntime(context?: ToolRuntimeContext) {
-  if (!context?.issueTools) {
+function requireRecordRuntime(context?: ToolRuntimeContext) {
+  const recordTools = context?.recordTools
+  if (!recordTools) {
     throw new Error('Database tools are not available in this chat context')
   }
-  return context.issueTools
+  return recordTools
 }
 
 function asText(value: unknown): string | undefined {
@@ -235,142 +236,142 @@ function asLabels(value: unknown): string[] | undefined {
   return text ? text.split(',').map((label) => label.trim()).filter(Boolean) : undefined
 }
 
-function matchesIssueRef(issue: Issue, ref: string) {
+function matchesRecordRef(record: DatabaseRecord, ref: string) {
   const normalized = ref.trim().toLowerCase()
   return (
-    issue.id.toLowerCase() === normalized ||
-    issue.identifier.toLowerCase() === normalized
+    record.id.toLowerCase() === normalized ||
+    record.identifier.toLowerCase() === normalized
   )
 }
 
-async function fetchCanonicalIssues(context?: ToolRuntimeContext) {
-  const runtime = requireIssueRuntime(context)
-  const issues = await fetchServerIssues()
-  runtime.syncIssues(issues)
-  return issues
+async function fetchCanonicalRecords(context?: ToolRuntimeContext) {
+  const runtime = requireRecordRuntime(context)
+  const records = await fetchServerRecords()
+  runtime.syncRecords(records)
+  return records
 }
 
-async function resolveIssue(ref: unknown, context?: ToolRuntimeContext) {
-  const issueRef = asText(ref)
-  if (!issueRef) throw new Error('Record id or identifier is required')
+async function resolveDatabaseRecord(ref: unknown, context?: ToolRuntimeContext) {
+  const recordRef = asText(ref)
+  if (!recordRef) throw new Error('Record id or identifier is required')
 
-  const issues = await fetchCanonicalIssues(context)
-  const issue = issues.find((candidate) => matchesIssueRef(candidate, issueRef))
-  if (!issue) throw new Error(`Record not found: ${issueRef}`)
-  return issue
+  const records = await fetchCanonicalRecords(context)
+  const record = records.find((candidate) => matchesRecordRef(candidate, recordRef))
+  if (!record) throw new Error(`Record not found: ${recordRef}`)
+  return record
 }
 
-function filterIssues(issues: Issue[], args: Record<string, unknown>) {
+function filterRecords(records: DatabaseRecord[], args: Record<string, unknown>) {
   const query = asText(args.query)?.toLowerCase()
   const status = asStatus(args.status)
   const priority = asPriority(args.priority)
   const assignee = asText(args.assignee)?.toLowerCase()
 
-  return issues.filter((issue) => {
-    if (status && issue.status !== status) return false
-    if (priority && issue.priority !== priority) return false
-    if (assignee && issue.assignee?.toLowerCase() !== assignee) return false
+  return records.filter((record) => {
+    if (status && record.status !== status) return false
+    if (priority && record.priority !== priority) return false
+    if (assignee && record.assignee?.toLowerCase() !== assignee) return false
     if (!query) return true
 
     const haystack = [
-      issue.id,
-      issue.identifier,
-      issue.title,
-      issue.description,
-      issue.status,
-      issue.priority,
-      issue.assignee ?? '',
-      issue.project,
-      ...issue.labels,
+      record.id,
+      record.identifier,
+      record.title,
+      record.description,
+      record.status,
+      record.priority,
+      record.assignee ?? '',
+      record.project,
+      ...record.labels,
     ].join(' ').toLowerCase()
     return haystack.includes(query)
   })
 }
 
-function limitIssues(issues: Issue[], args: Record<string, unknown>) {
+function limitRecords(records: DatabaseRecord[], args: Record<string, unknown>) {
   const rawLimit = Number(args.limit)
   const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 25) : 10
-  return issues.slice(0, limit)
+  return records.slice(0, limit)
 }
 
-function issueListMessage(action: IssueToolResponse['action'], issues: Issue[], total: number) {
+function recordListMessage(action: RecordToolResponse['action'], records: DatabaseRecord[], total: number) {
   const noun = total === 1 ? 'record' : 'records'
-  if (action === 'get') return `Found ${issues[0]?.identifier ?? 'record'}`
-  if (action === 'create') return `Created ${issues[0]?.identifier ?? 'record'}`
-  if (action === 'update') return `Updated ${issues[0]?.identifier ?? 'record'}`
-  if (action === 'move') return `Moved ${issues[0]?.identifier ?? 'record'}`
+  if (action === 'get') return `Found ${records[0]?.identifier ?? 'record'}`
+  if (action === 'create') return `Created ${records[0]?.identifier ?? 'record'}`
+  if (action === 'update') return `Updated ${records[0]?.identifier ?? 'record'}`
+  if (action === 'move') return `Moved ${records[0]?.identifier ?? 'record'}`
   return `${total} ${noun} matched`
 }
 
-async function executeIssueSearch(
+async function executeRecordSearch(
   args: Record<string, unknown>,
   signal: AbortSignal,
   context?: ToolRuntimeContext
 ): Promise<ToolResult> {
   const start = Date.now()
   if (signal.aborted) throw new DOMException('Aborted', 'AbortError')
-  const issues = filterIssues(await fetchCanonicalIssues(context), args)
+  const records = filterRecords(await fetchCanonicalRecords(context), args)
   return {
     data: {
       action: 'search',
-      issues: limitIssues(issues, args),
-      total: issues.length,
-      message: issueListMessage('search', issues, issues.length),
-    } satisfies IssueToolResponse,
+      records: limitRecords(records, args),
+      total: records.length,
+      message: recordListMessage('search', records, records.length),
+    } satisfies RecordToolResponse,
     duration: Date.now() - start,
   }
 }
 
-async function executeIssueList(
+async function executeRecordList(
   args: Record<string, unknown>,
   signal: AbortSignal,
   context?: ToolRuntimeContext
 ): Promise<ToolResult> {
   const start = Date.now()
   if (signal.aborted) throw new DOMException('Aborted', 'AbortError')
-  const issues = filterIssues(await fetchCanonicalIssues(context), args)
+  const records = filterRecords(await fetchCanonicalRecords(context), args)
   return {
     data: {
       action: 'list',
-      issues: limitIssues(issues, args),
-      total: issues.length,
-      message: issueListMessage('list', issues, issues.length),
-    } satisfies IssueToolResponse,
+      records: limitRecords(records, args),
+      total: records.length,
+      message: recordListMessage('list', records, records.length),
+    } satisfies RecordToolResponse,
     duration: Date.now() - start,
   }
 }
 
-async function executeIssueGet(
+async function executeRecordGet(
   args: Record<string, unknown>,
   signal: AbortSignal,
   context?: ToolRuntimeContext
 ): Promise<ToolResult> {
   const start = Date.now()
   if (signal.aborted) throw new DOMException('Aborted', 'AbortError')
-  const issue = await resolveIssue(args.issueId ?? args.identifier ?? args.id, context)
+  const record = await resolveDatabaseRecord(args.recordId ?? args.identifier ?? args.id, context)
   return {
     data: {
       action: 'get',
-      issues: [issue],
+      records: [record],
       total: 1,
-      message: issueListMessage('get', [issue], 1),
-    } satisfies IssueToolResponse,
+      message: recordListMessage('get', [record], 1),
+    } satisfies RecordToolResponse,
     duration: Date.now() - start,
   }
 }
 
-async function executeIssueCreate(
+async function executeRecordCreate(
   args: Record<string, unknown>,
   signal: AbortSignal,
   context?: ToolRuntimeContext
 ): Promise<ToolResult> {
-  const runtime = requireIssueRuntime(context)
+  const runtime = requireRecordRuntime(context)
   const start = Date.now()
   const title = asText(args.title)
   if (!title) throw new Error('Record title is required')
   if (signal.aborted) throw new DOMException('Aborted', 'AbortError')
 
-  const issue = await createServerIssue({
+  const record = await createServerRecord({
     title,
     description: asText(args.description) ?? '',
     status: asStatus(args.status) ?? 'todo',
@@ -379,21 +380,21 @@ async function executeIssueCreate(
     labels: asLabels(args.labels) ?? [],
     project: asText(args.project),
   })
-  runtime.syncIssue(issue)
+  runtime.syncRecord(record)
 
   return {
     data: {
       action: 'create',
-      issues: [issue],
+      records: [record],
       total: 1,
-      message: issueListMessage('create', [issue], 1),
-    } satisfies IssueToolResponse,
+      message: recordListMessage('create', [record], 1),
+    } satisfies RecordToolResponse,
     duration: Date.now() - start,
   }
 }
 
-function buildIssueUpdate(args: Record<string, unknown>): ServerUpdateIssueData {
-  const update: ServerUpdateIssueData = {}
+function buildRecordUpdate(args: Record<string, unknown>): ServerUpdateRecordData {
+  const update: ServerUpdateRecordData = {}
   const title = asText(args.title)
   const description = asText(args.description)
   const status = asStatus(args.status)
@@ -413,52 +414,52 @@ function buildIssueUpdate(args: Record<string, unknown>): ServerUpdateIssueData 
   return update
 }
 
-async function executeIssueUpdate(
+async function executeRecordUpdate(
   args: Record<string, unknown>,
   signal: AbortSignal,
   context?: ToolRuntimeContext
 ): Promise<ToolResult> {
-  const runtime = requireIssueRuntime(context)
+  const runtime = requireRecordRuntime(context)
   const start = Date.now()
-  const existing = await resolveIssue(args.issueId ?? args.identifier ?? args.id, context)
-  const update = buildIssueUpdate(args)
+  const existing = await resolveDatabaseRecord(args.recordId ?? args.identifier ?? args.id, context)
+  const update = buildRecordUpdate(args)
   if (Object.keys(update).length === 0) {
     throw new Error('No record fields were provided to update')
   }
   if (signal.aborted) throw new DOMException('Aborted', 'AbortError')
 
-  const issue = await updateServerIssue(existing.id, update)
-  runtime.syncIssue(issue)
+  const record = await updateServerRecord(existing.id, update)
+  runtime.syncRecord(record)
 
   return {
     data: {
       action: 'update',
-      issues: [issue],
+      records: [record],
       total: 1,
-      message: issueListMessage('update', [issue], 1),
-    } satisfies IssueToolResponse,
+      message: recordListMessage('update', [record], 1),
+    } satisfies RecordToolResponse,
     duration: Date.now() - start,
   }
 }
 
-async function executeIssueMove(
+async function executeRecordMove(
   args: Record<string, unknown>,
   signal: AbortSignal,
   context?: ToolRuntimeContext
 ): Promise<ToolResult> {
-  return executeIssueUpdate(
+  return executeRecordUpdate(
     { ...args, status: asStatus(args.status) ?? asStatus(args.to) },
     signal,
     context
   ).then((result) => {
-    const response = result.data as IssueToolResponse
+    const response = result.data as RecordToolResponse
     return {
       ...result,
       data: {
         ...response,
         action: 'move',
-        message: issueListMessage('move', response.issues, response.total),
-      } satisfies IssueToolResponse,
+        message: recordListMessage('move', response.records, response.total),
+      } satisfies RecordToolResponse,
     }
   })
 }
@@ -489,51 +490,51 @@ registerTool({
 })
 
 registerTool({
-  type: 'issue_search',
+  type: 'record_search',
   name: 'Database Search',
   description: 'Search Photon database records from the canonical server record store',
   icon: 'database',
-  execute: executeIssueSearch,
+  execute: executeRecordSearch,
 })
 
 registerTool({
-  type: 'issue_list',
+  type: 'record_list',
   name: 'Database List',
   description: 'List Photon database records from the canonical server record store',
   icon: 'database',
-  execute: executeIssueList,
+  execute: executeRecordList,
 })
 
 registerTool({
-  type: 'issue_get',
+  type: 'record_get',
   name: 'Record Lookup',
   description: 'Get a Photon database record by id or identifier',
   icon: 'record',
-  execute: executeIssueGet,
+  execute: executeRecordGet,
 })
 
 registerTool({
-  type: 'issue_create',
+  type: 'record_create',
   name: 'Create Record',
   description: 'Create a Photon database record through the canonical server record API',
   icon: 'record-plus',
-  execute: executeIssueCreate,
+  execute: executeRecordCreate,
 })
 
 registerTool({
-  type: 'issue_update',
+  type: 'record_update',
   name: 'Update Record',
   description: 'Update Photon database record fields through the canonical server record API',
   icon: 'record-edit',
-  execute: executeIssueUpdate,
+  execute: executeRecordUpdate,
 })
 
 registerTool({
-  type: 'issue_move',
+  type: 'record_move',
   name: 'Move Record',
   description: 'Move a Photon database record to another workflow status',
   icon: 'record-move',
-  execute: executeIssueMove,
+  execute: executeRecordMove,
 })
 
 registerTool({

@@ -35,11 +35,11 @@ Photon の同期体験は **Photon Engine** と **Photon Live** の2層で整理
 
 ## 現在実装済みの機能
 
-- **Issues (テーブルビュー)**: issue 一覧・ソート・ステータスフィルタ・インライン編集
+- **Records (テーブルビュー)**: record 一覧・ソート・ステータスフィルタ・インライン編集
 - **Board (カンバンビュー)**: ドラッグ&ドロップでステータス変更
-- **Detail パネル**: issue 詳細・編集・削除
+- **Detail パネル**: record 詳細・編集・削除
 - **Chat**: AI チャットビュー
-- **Create Issue モーダル**: 新規 issue 作成
+- **Create Record モーダル**: 新規 record 作成
 
 ## ローカル開発
 

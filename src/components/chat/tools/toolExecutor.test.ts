@@ -5,8 +5,8 @@ import {
   getAllTools,
   getTool,
 } from './toolExecutor'
-import type { IssueToolResponse, WebSearchResponse } from './types'
-import type { Issue } from '../../../data/mock'
+import type { RecordToolResponse, WebSearchResponse } from './types'
+import type { DatabaseRecord } from '../../../data/mock'
 
 describe('tool executor', () => {
   afterEach(() => {
@@ -23,12 +23,12 @@ describe('tool executor', () => {
       'web_search',
       'api_call',
       'code_exec',
-      'issue_search',
-      'issue_list',
-      'issue_get',
-      'issue_create',
-      'issue_update',
-      'issue_move',
+      'record_search',
+      'record_list',
+      'record_get',
+      'record_create',
+      'record_update',
+      'record_move',
     ]))
     expect(getAllTools()).toHaveLength(9)
   })
@@ -81,35 +81,35 @@ describe('tool executor', () => {
   })
 
   it('creates records through Photon Engine and syncs the projection', async () => {
-    const synced: Issue[] = []
+    const synced: DatabaseRecord[] = []
     const title = `Created from chat ${Date.now()}`
 
     const result = await executeTool(
-      'issue_create',
+      'record_create',
       { title, priority: 'high', labels: ['chat'], project: 'Photon Core' },
       new AbortController().signal,
       {
-        issueTools: {
-          issues: [],
-          syncIssue: (issue) => synced.push(issue),
-          syncIssues: () => {},
+        recordTools: {
+          records: [],
+          syncRecord: (record) => synced.push(record),
+          syncRecords: () => {},
         },
       }
     )
 
-    const data = result.data as IssueToolResponse
+    const data = result.data as RecordToolResponse
     expect(result.error).toBeUndefined()
     expect(data.action).toBe('create')
-    expect(data.issues[0]).toMatchObject({ title, priority: 'high', labels: ['chat'] })
+    expect(data.records[0]).toMatchObject({ title, priority: 'high', labels: ['chat'] })
     expect(synced).toHaveLength(1)
   })
 
   it('searches canonical Photon Engine records and syncs fetched results', async () => {
-    const syncedLists: Issue[][] = []
+    const syncedLists: DatabaseRecord[][] = []
     const title = `Investigate blocker ${Date.now()}`
 
     await executeTool(
-      'issue_create',
+      'record_create',
       {
         title,
         description: 'A release blocker',
@@ -121,30 +121,30 @@ describe('tool executor', () => {
       },
       new AbortController().signal,
       {
-        issueTools: {
-          issues: [],
-          syncIssue: () => {},
-          syncIssues: () => {},
+        recordTools: {
+          records: [],
+          syncRecord: () => {},
+          syncRecords: () => {},
         },
       }
     )
 
     const result = await executeTool(
-      'issue_search',
+      'record_search',
       { query: title },
       new AbortController().signal,
       {
-        issueTools: {
-          issues: [],
-          syncIssue: () => {},
-          syncIssues: (issues) => syncedLists.push(issues),
+        recordTools: {
+          records: [],
+          syncRecord: () => {},
+          syncRecords: (records) => syncedLists.push(records),
         },
       }
     )
 
-    const data = result.data as IssueToolResponse
+    const data = result.data as RecordToolResponse
     expect(data.total).toBe(1)
-    expect(data.issues[0]).toMatchObject({ title, assignee: 'Alice', labels: ['blocker'] })
+    expect(data.records[0]).toMatchObject({ title, assignee: 'Alice', labels: ['blocker'] })
     expect(syncedLists[0]).toEqual(expect.arrayContaining([
       expect.objectContaining({ title }),
     ]))

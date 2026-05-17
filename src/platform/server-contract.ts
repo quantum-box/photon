@@ -1,15 +1,15 @@
 export {
-  IssueApiError,
-  createServerIssue,
-  deleteServerIssue,
-  fetchServerIssues,
-  toIssue,
-  updateServerIssue,
-} from '../lib/issuesApi.js'
+  RecordApiError,
+  createServerRecord,
+  deleteServerRecord,
+  fetchServerRecords,
+  toRecord,
+  updateServerRecord,
+} from '../lib/recordsApi.js'
 
 export type {
-  ServerCreateIssueData,
-  ServerIssue,
-  ServerIssueListResponse,
-  ServerUpdateIssueData,
-} from '../lib/issuesApi.js'
+  ServerCreateRecordData,
+  ServerRecord,
+  ServerRecordListResponse,
+  ServerUpdateRecordData,
+} from '../lib/recordsApi.js'

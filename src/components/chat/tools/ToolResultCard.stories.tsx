@@ -15,7 +15,7 @@ export const DatabaseRecordMoveCompleted: Story = {
   args: {
     toolCall: {
       id: 'tool-move',
-      type: 'issue_move',
+      type: 'record_move',
       name: 'Move Record',
       args: {},
       status: 'completed',
@@ -25,9 +25,9 @@ export const DatabaseRecordMoveCompleted: Story = {
           action: 'move',
           total: 1,
           message: 'Moved PLT-108',
-          issues: [
+          records: [
             {
-              id: 'issue-108',
+              id: 'record-108',
               identifier: 'PLT-108',
               title: 'Chat touch database record',
               status: 'done',
@@ -57,7 +57,7 @@ export const DatabaseSearchEmpty: Story = {
   args: {
     toolCall: {
       id: 'tool-search-empty',
-      type: 'issue_search',
+      type: 'record_search',
       name: 'Database Search',
       args: {},
       status: 'completed',
@@ -67,7 +67,7 @@ export const DatabaseSearchEmpty: Story = {
           action: 'search',
           total: 0,
           message: '0 records matched',
-          issues: [],
+          records: [],
         },
       },
     },
@@ -84,7 +84,7 @@ export const Running: Story = {
   args: {
     toolCall: {
       id: 'tool-running',
-      type: 'issue_create',
+      type: 'record_create',
       name: 'Create Record',
       args: {},
       status: 'running',

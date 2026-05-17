@@ -3,11 +3,11 @@ import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { FormEvent, MouseEvent as ReactMouseEvent } from 'react'
 import type { Status } from '../data/mock'
-import { useDatabaseRecords } from '../contexts/IssuesContext'
+import { useDatabaseRecords } from '../contexts/RecordsContext'
 import { useWorkspaceDatabases } from '../contexts/DatabasesContext'
 import { useTheme } from '../contexts/ThemeContext'
 import type { ThemeMode } from '../contexts/ThemeContext'
-import { useConnectionStatus, useSyncPresence } from '../lib/yjs/useYjsIssues'
+import { useConnectionStatus, useSyncPresence } from '../lib/yjs/useYjsRecords'
 import { appKitConfig } from '../app/kitConfig'
 import {
   getDatabaseViewScopeId,

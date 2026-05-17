@@ -33,6 +33,11 @@ export interface WorkflowDefinition {
   transitions: WorkflowTransitionDefinition[]
 }
 
+export interface RecordDefaultsConfig {
+  identifierPrefix: string
+  defaultProject: string
+}
+
 export interface AppKitConfig {
   app: {
     id: string
@@ -47,10 +52,7 @@ export interface AppKitConfig {
     projects: Array<{ id: string; label: string }>
     users: string[]
   }
-  issues: {
-    identifierPrefix: string
-    defaultProject: string
-  }
+  records: RecordDefaultsConfig
   workflows: {
     defaultWorkflowId: string
     pgliteDataDir: string
@@ -96,7 +98,7 @@ export interface AppKitConfig {
      */
     backend: SyncBackend
     workspaceId: string
-    issuesRoomId: string
+    recordsRoomId: string
     yjsArrayName: string
     databasesArrayName: string
     databaseViewsArrayName: string
@@ -110,7 +112,7 @@ export interface AppKitConfig {
   server: {
     backend: AppServerBackend
     apiBaseUrl?: string
-    issuesPath: string
+    recordsPath: string
     documentsPath: string
   }
   frontendWorker: {
@@ -223,8 +225,8 @@ const appProfile = {
   storageNamespace: 'photon',
 } as const
 const DEFAULT_WORKSPACE_ID = 'photon-default'
-const issuesRoomId = buildRoomId(DEFAULT_WORKSPACE_ID, 'issues')
-const syncWebsocketPath = appendRoomQuery('/ws', issuesRoomId)
+const recordsRoomId = buildRoomId(DEFAULT_WORKSPACE_ID, 'records')
+const syncWebsocketPath = appendRoomQuery('/ws', recordsRoomId)
 const websocketBaseUrl = viteEnv.VITE_PHOTON_SYNC_WS_URL
 const chatStreamEndpoint = viteEnv.VITE_PHOTON_AGENT_STREAM_URL ?? '/api/agent/chat/stream'
 
@@ -247,7 +249,7 @@ export const appKitConfig: AppKitConfig = {
     ],
     users: ['田中太郎', '鈴木花子', '佐藤健', '山田美咲', '高橋翔'],
   },
-  issues: {
+  records: {
     identifierPrefix: 'PLT',
     defaultProject: 'Client App Kit',
   },
@@ -342,21 +344,21 @@ export const appKitConfig: AppKitConfig = {
   sync: {
     backend: syncBackend,
     workspaceId: DEFAULT_WORKSPACE_ID,
-    issuesRoomId,
-    yjsArrayName: 'issues',
+    recordsRoomId,
+    yjsArrayName: 'records',
     databasesArrayName: 'databases',
     databaseViewsArrayName: 'databaseViews',
     workflowCanvasesMapName: 'workflowCanvases',
-    persistenceKey: issuesRoomId,
-    websocketPath: buildSyncWebsocketPath(issuesRoomId),
-    websocketUrl: buildConfiguredSyncWebsocketUrl(issuesRoomId),
+    persistenceKey: recordsRoomId,
+    websocketPath: buildSyncWebsocketPath(recordsRoomId),
+    websocketUrl: buildConfiguredSyncWebsocketUrl(recordsRoomId),
     websocketBaseUrl,
     roomParam: 'room',
   },
   server: {
     backend: resolveAppServerBackend(viteEnv.VITE_PHOTON_APP_SERVER_BACKEND),
     apiBaseUrl: viteEnv.VITE_PHOTON_API_BASE_URL,
-    issuesPath: '/api/issues',
+    recordsPath: '/api/records',
     documentsPath: '/api/documents',
   },
   frontendWorker: {

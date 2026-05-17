@@ -63,7 +63,7 @@ describe('ChatMessage', () => {
     const message: Message = {
       id: 'msg-2',
       role: 'assistant',
-      content: 'Done. I updated the workspace issue data.',
+      content: 'Done. I updated the workspace record data.',
       timestamp,
     }
 
@@ -72,21 +72,21 @@ describe('ChatMessage', () => {
     fireEvent.click(screen.getByTitle('Copy message'))
 
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
-      'Done. I updated the workspace issue data.'
+      'Done. I updated the workspace record data.'
     )
   })
 
-  it('renders issue tool result cards before assistant text', () => {
+  it('renders record tool result cards before assistant text', () => {
     const message: Message = {
       id: 'msg-3',
       role: 'assistant',
-      content: 'The issue was moved.',
+      content: 'The record was moved.',
       timestamp,
       toolCalls: [
         {
           id: 'tool-1',
-          type: 'issue_move',
-          name: 'Move Issue',
+          type: 'record_move',
+          name: 'Move Record',
           args: {},
           status: 'completed',
           result: {
@@ -95,11 +95,11 @@ describe('ChatMessage', () => {
               action: 'move',
               total: 1,
               message: 'Moved PLT-108',
-              issues: [
+              records: [
                 {
-                  id: 'issue-108',
+                  id: 'record-108',
                   identifier: 'PLT-108',
-                  title: 'Chat touch issue',
+                  title: 'Chat touch record',
                   status: 'done',
                   priority: 'none',
                   assignee: null,
@@ -118,9 +118,9 @@ describe('ChatMessage', () => {
 
     renderMessage(message)
 
-    expect(screen.getByText('Move Issue')).toBeInTheDocument()
+    expect(screen.getByText('Move Record')).toBeInTheDocument()
     expect(screen.getByText('PLT-108')).toBeInTheDocument()
-    expect(screen.getByText('Chat touch issue')).toBeInTheDocument()
-    expect(screen.getByText('The issue was moved.')).toBeInTheDocument()
+    expect(screen.getByText('Chat touch record')).toBeInTheDocument()
+    expect(screen.getByText('The record was moved.')).toBeInTheDocument()
   })
 })

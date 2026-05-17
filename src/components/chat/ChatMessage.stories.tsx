@@ -13,7 +13,7 @@ const assistantToolMessage: Message = {
   toolCalls: [
     {
       id: 'tool-1',
-      type: 'issue_move',
+      type: 'record_move',
       name: 'Move Record',
       args: {},
       status: 'completed',
@@ -23,9 +23,9 @@ const assistantToolMessage: Message = {
           action: 'move',
           total: 1,
           message: 'Moved PLT-108',
-          issues: [
+          records: [
             {
-              id: 'issue-108',
+              id: 'record-108',
               identifier: 'PLT-108',
               title: 'Chat touch database record',
               status: 'done',

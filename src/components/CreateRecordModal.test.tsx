@@ -1,66 +1,66 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
-import { CreateIssueModal } from './CreateIssueModal'
+import { CreateRecordModal } from './CreateRecordModal'
 
-describe('CreateIssueModal', () => {
+describe('CreateRecordModal', () => {
   it('does not render when closed', () => {
     render(
-      <CreateIssueModal
+      <CreateRecordModal
         open={false}
         onClose={vi.fn()}
         onCreate={vi.fn()}
       />
     )
 
-    expect(screen.queryByTestId('create-issue-modal')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('create-record-modal')).not.toBeInTheDocument()
   })
 
-  it('requires a title before creating an issue', () => {
+  it('requires a title before creating a record', () => {
     render(
-      <CreateIssueModal
+      <CreateRecordModal
         open
         onClose={vi.fn()}
         onCreate={vi.fn()}
       />
     )
 
-    expect(screen.getByTestId('create-issue-submit')).toBeDisabled()
+    expect(screen.getByTestId('create-record-submit')).toBeDisabled()
 
-    fireEvent.change(screen.getByTestId('create-issue-title'), {
+    fireEvent.change(screen.getByTestId('create-record-title'), {
       target: { value: 'New client shell' },
     })
 
-    expect(screen.getByTestId('create-issue-submit')).toBeEnabled()
+    expect(screen.getByTestId('create-record-submit')).toBeEnabled()
   })
 
-  it('submits normalized create issue data and closes the modal', async () => {
+  it('submits normalized create record data and closes the modal', async () => {
     const onClose = vi.fn()
     const onCreate = vi.fn()
 
     render(
-      <CreateIssueModal
+      <CreateRecordModal
         open
         onClose={onClose}
         onCreate={onCreate}
       />
     )
 
-    fireEvent.change(screen.getByTestId('create-issue-title'), {
+    fireEvent.change(screen.getByTestId('create-record-title'), {
       target: { value: '  New client shell  ' },
     })
-    fireEvent.change(screen.getByTestId('create-issue-status'), {
+    fireEvent.change(screen.getByTestId('create-record-status'), {
       target: { value: 'in_progress' },
     })
-    fireEvent.change(screen.getByTestId('create-issue-priority'), {
+    fireEvent.change(screen.getByTestId('create-record-priority'), {
       target: { value: 'high' },
     })
-    fireEvent.change(screen.getByTestId('create-issue-assignee'), {
+    fireEvent.change(screen.getByTestId('create-record-assignee'), {
       target: { value: '佐藤健' },
     })
-    fireEvent.change(screen.getByTestId('create-issue-description'), {
+    fireEvent.change(screen.getByTestId('create-record-description'), {
       target: { value: '  Build reusable app foundation.  ' },
     })
-    fireEvent.click(screen.getByTestId('create-issue-submit'))
+    fireEvent.click(screen.getByTestId('create-record-submit'))
 
     expect(onCreate).toHaveBeenCalledWith({
       title: 'New client shell',
@@ -76,7 +76,7 @@ describe('CreateIssueModal', () => {
     const onClose = vi.fn()
 
     render(
-      <CreateIssueModal
+      <CreateRecordModal
         open
         onClose={onClose}
         onCreate={vi.fn()}
@@ -86,7 +86,7 @@ describe('CreateIssueModal', () => {
     fireEvent.keyDown(document, { key: 'Escape' })
     expect(onClose).toHaveBeenCalledTimes(1)
 
-    fireEvent.click(screen.getByTestId('create-issue-modal'))
+    fireEvent.click(screen.getByTestId('create-record-modal'))
     expect(onClose).toHaveBeenCalledTimes(2)
   })
 })

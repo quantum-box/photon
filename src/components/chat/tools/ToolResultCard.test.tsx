@@ -3,10 +3,10 @@ import { describe, expect, it } from 'vitest'
 import { ToolResultCard } from './ToolResultCard'
 import type { ToolCall } from './types'
 
-const completedIssueTool: ToolCall = {
+const completedRecordTool: ToolCall = {
   id: 'tool-1',
-  type: 'issue_move',
-  name: 'Move Issue',
+  type: 'record_move',
+  name: 'Move DatabaseRecord',
   args: {},
   status: 'completed',
   result: {
@@ -15,11 +15,11 @@ const completedIssueTool: ToolCall = {
       action: 'move',
       total: 1,
       message: 'Moved PLT-108',
-      issues: [
+      records: [
         {
-          id: 'issue-108',
+          id: 'record-108',
           identifier: 'PLT-108',
-          title: 'Chat touch issue',
+          title: 'Chat touch record',
           status: 'done',
           priority: 'none',
           assignee: null,
@@ -35,13 +35,13 @@ const completedIssueTool: ToolCall = {
 }
 
 describe('ToolResultCard', () => {
-  it('renders completed issue tool results with status and priority metadata', () => {
-    render(<ToolResultCard toolCall={completedIssueTool} />)
+  it('renders completed record tool results with status and priority metadata', () => {
+    render(<ToolResultCard toolCall={completedRecordTool} />)
 
-    expect(screen.getByText('Move Issue')).toBeInTheDocument()
+    expect(screen.getByText('Move DatabaseRecord')).toBeInTheDocument()
     expect(screen.getByText(/Moved PLT-108/)).toBeInTheDocument()
     expect(screen.getByText('PLT-108')).toBeInTheDocument()
-    expect(screen.getByText('Chat touch issue')).toBeInTheDocument()
+    expect(screen.getByText('Chat touch record')).toBeInTheDocument()
     expect(screen.getByText('Done')).toBeInTheDocument()
     expect(screen.getByText('─ None')).toBeInTheDocument()
   })
@@ -51,40 +51,40 @@ describe('ToolResultCard', () => {
       <ToolResultCard
         toolCall={{
           id: 'tool-2',
-          type: 'issue_search',
-          name: 'Issue Search',
+          type: 'record_search',
+          name: 'DatabaseRecord Search',
           args: {},
           status: 'completed',
           result: {
             data: {
               action: 'search',
               total: 0,
-              message: '0 issues matched',
-              issues: [],
+              message: '0 records matched',
+              records: [],
             },
           },
         }}
       />
     )
 
-    expect(screen.getByText('Issue Search')).toBeInTheDocument()
+    expect(screen.getByText('DatabaseRecord Search')).toBeInTheDocument()
     expect(screen.getByText('No matching records.')).toBeInTheDocument()
   })
 
-  it('renders a loading state while issue tools are running', () => {
+  it('renders a loading state while record tools are running', () => {
     render(
       <ToolResultCard
         toolCall={{
           id: 'tool-3',
-          type: 'issue_create',
-          name: 'Create Issue',
+          type: 'record_create',
+          name: 'Create DatabaseRecord',
           args: {},
           status: 'running',
         }}
       />
     )
 
-    expect(screen.getByText('Create Issue')).toBeInTheDocument()
+    expect(screen.getByText('Create DatabaseRecord')).toBeInTheDocument()
     expect(screen.getByText('Reading the database record store...')).toBeInTheDocument()
     expect(screen.getByText('Updating...')).toBeInTheDocument()
   })
@@ -101,7 +101,7 @@ describe('ToolResultCard', () => {
           result: {
             data: {
               method: 'GET',
-              endpoint: '/api/issues',
+              endpoint: '/api/records',
               statusCode: 200,
               body: { ok: true },
             },

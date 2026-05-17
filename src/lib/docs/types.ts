@@ -15,13 +15,13 @@ export interface DocMetadata {
   updatedAt: string
 }
 
-export interface DocumentIssueLink {
+export interface DocumentRecordLink {
   id: string
   docId: string
   docTitle?: string
-  issueId: string
-  issueIdentifier: string
-  issueTitle: string
+  recordId: string
+  recordIdentifier: string
+  recordTitle: string
   selectedText: string
   createdAt: string
 }
@@ -43,10 +43,10 @@ export interface UpdateDocInput {
   title?: string
 }
 
-export interface LinkDocIssueInput {
+export interface LinkDocRecordInput {
   docId: string
-  issueId: string
-  issueIdentifier: string
-  issueTitle: string
+  recordId: string
+  recordIdentifier: string
+  recordTitle: string
   selectedText?: string
 }

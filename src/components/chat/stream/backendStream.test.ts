@@ -34,7 +34,7 @@ describe('backend chat stream adapter', () => {
     expect(decoded.rest).toBe('')
   })
 
-  it('streams backend deltas and reports issue tool results through the protocol', async () => {
+  it('streams backend deltas and reports record tool results through the protocol', async () => {
     const toolUpdates: ToolCall[] = []
     const postedToolResults: unknown[] = []
     let text = ''
@@ -54,17 +54,17 @@ describe('backend chat stream adapter', () => {
           },
         })
         return sseResponse([
-          'event: message_delta\ndata: {"delta":"Looking up issues. "}\n\n',
-          'event: tool_call_request\ndata: {"id":"call-1","type":"issue_list","args":{"query":"backend","limit":1}}\n\n',
+          'event: message_delta\ndata: {"delta":"Looking up records. "}\n\n',
+          'event: tool_call_request\ndata: {"id":"call-1","type":"record_list","args":{"query":"backend","limit":1}}\n\n',
           'event: message_delta\ndata: {"delta":"Done."}\n\n',
           'event: done\ndata: {}\n\n',
         ])
       }
 
-      if (url === '/api/issues') {
+      if (url === '/api/records') {
         return Response.json({
-          issues: [{
-            id: 'issue-1',
+          records: [{
+            id: 'record-1',
             identifier: 'PLT-1185',
             title: 'Backend stream adapter',
             description: '',
@@ -91,20 +91,20 @@ describe('backend chat stream adapter', () => {
     const completion = new Promise<void>((resolve) => {
       startChatStream(
         {
-          prompt: 'list backend issues',
-          messages: [{ role: 'user', content: 'list backend issues' }],
+          prompt: 'list backend records',
+          messages: [{ role: 'user', content: 'list backend records' }],
           context: {
             documentContext: {
               docId: 'doc-1',
               title: 'Spec doc',
               url: '/documents/doc-1',
               selectedText: 'Selected text',
-              relatedIssues: [],
+              relatedRecords: [],
             },
-            issueTools: {
-              issues: [],
-              syncIssue: vi.fn(),
-              syncIssues: vi.fn(),
+            recordTools: {
+              records: [],
+              syncRecord: vi.fn(),
+              syncRecords: vi.fn(),
             },
           },
         },
@@ -135,8 +135,8 @@ describe('backend chat stream adapter', () => {
     await completion
 
     expect(done).toBe(true)
-    expect(text).toBe('Looking up issues. Done.')
-    expect(toolUpdates[0]).toMatchObject({ id: 'call-1', type: 'issue_list', status: 'running' })
+    expect(text).toBe('Looking up records. Done.')
+    expect(toolUpdates[0]).toMatchObject({ id: 'call-1', type: 'record_list', status: 'running' })
     expect(toolUpdates.at(-1)).toMatchObject({ id: 'call-1', status: 'completed' })
     expect(postedToolResults).toEqual([
       expect.objectContaining({ toolCallId: 'call-1', status: 'completed' }),
@@ -147,8 +147,8 @@ describe('backend chat stream adapter', () => {
     const toolUpdates: ToolCall[] = []
 
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(sseResponse([
-      'event: tool_call_result\ndata: {"id":"server-call-1","type":"issue_search","name":"Issue Search","args":{"query":"PLT"},"result":{"data":{"total":0},"duration":12}}\n\n',
-      'event: message_delta\ndata: {"delta":"No matching issues."}\n\n',
+      'event: tool_call_result\ndata: {"id":"server-call-1","type":"record_search","name":"Record Search","args":{"query":"PLT"},"result":{"data":{"total":0},"duration":12}}\n\n',
+      'event: message_delta\ndata: {"delta":"No matching records."}\n\n',
       'event: done\ndata: {}\n\n',
     ]))
 
@@ -176,11 +176,11 @@ describe('backend chat stream adapter', () => {
       )
     })
 
-    expect(text).toBe('No matching issues.')
+    expect(text).toBe('No matching records.')
     expect(toolUpdates).toEqual([
       expect.objectContaining({
         id: 'server-call-1',
-        type: 'issue_search',
+        type: 'record_search',
         status: 'completed',
         result: expect.objectContaining({ duration: 12 }),
       }),

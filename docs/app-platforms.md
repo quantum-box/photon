@@ -4,12 +4,12 @@ Photon ships from the same React/Tauri codebase to web, desktop, Android, and
 iOS. The repo treats each branded product as an app profile plus a deployment
 topology:
 
-- App profile: labels, navigation, issue defaults, storage keys, and sync room
+- App profile: labels, navigation, record defaults, storage keys, and sync room
   names in `src/app/kitConfig.ts`.
 - Frontend Worker: a required frontend-side edge companion for health checks,
   `/ws`, and future frontend-owned API glue.
 - Application server: the canonical Rust API server, or an external API that
-  implements the same issue contract.
+  implements the same record contract.
 - Sync backend: either the Rust server WebSocket endpoint or Cloudflare Durable
   Objects behind the frontend Worker.
 
@@ -48,7 +48,7 @@ When creating another app from Photon, start by changing only
 
 - `app.id`, `displayName`, and `storageNamespace`
 - `workspace.name`, navigation, projects, and users
-- `issues.identifierPrefix` and `defaultProject`
+- `records.identifierPrefix` and `defaultProject`
 - `chat.productName` and disclaimer copy
 - explicit storage and sync keys
 
@@ -81,7 +81,7 @@ browser / desktop / mobile
        /ws
        static assets
   -> Rust app server
-       /api/issues
+       /api/records
        optional /ws sync
   -> durable database volume or managed on-prem database
 ```

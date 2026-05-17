@@ -1,6 +1,6 @@
 import type { FileType } from '../../components/files/types'
 
-export type AttachmentSurfaceType = 'issue' | 'chat' | 'document'
+export type AttachmentSurfaceType = 'record' | 'chat' | 'document'
 export type AttachmentStorageProvider = 'web-object-storage' | 'tauri-local-file-cache'
 export type AttachmentContentStatus = 'local_cache' | 'uploaded' | 'remote_missing' | 'deleted'
 

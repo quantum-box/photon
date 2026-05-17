@@ -5,7 +5,7 @@ export {
   disconnectWs,
   idbSynced,
   initialSyncReady,
-  issuesArray,
+  recordsArray,
   persistence,
   syncPresence,
   ydoc,

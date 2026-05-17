@@ -2,11 +2,11 @@ import { DndContext } from '@dnd-kit/core'
 import { SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import type { Meta, StoryObj } from '@storybook/react-vite'
 import { expect, fn, userEvent, within } from 'storybook/test'
-import { mockIssues } from '../data/mock'
+import { mockDatabaseRecords } from '../data/mock'
 import { KanbanCard, KanbanColumn, OverlayCard } from './KanbanView'
 
-const selectedRecord = mockIssues[2]
-const todoRecords = mockIssues.filter((issue) => issue.status === 'todo').slice(0, 4)
+const selectedRecord = mockDatabaseRecords[2]
+const todoRecords = mockDatabaseRecords.filter((record) => record.status === 'todo').slice(0, 4)
 
 const meta = {
   title: 'Databases/BoardView/Parts',
@@ -28,7 +28,7 @@ export const RecordCard: Story = {
           strategy={verticalListSortingStrategy}
         >
           <KanbanCard
-            issue={selectedRecord}
+            record={selectedRecord}
             isSelected={false}
             onClick={fn()}
           />
@@ -53,7 +53,7 @@ export const SelectedRecordCard: Story = {
           strategy={verticalListSortingStrategy}
         >
           <KanbanCard
-            issue={selectedRecord}
+            record={selectedRecord}
             isSelected
             onClick={fn()}
           />
@@ -77,7 +77,7 @@ export const CompactRecordCard: Story = {
           strategy={verticalListSortingStrategy}
         >
           <KanbanCard
-            issue={selectedRecord}
+            record={selectedRecord}
             isSelected={false}
             onClick={fn()}
             compact
@@ -102,9 +102,9 @@ export const StatusColumn: Story = {
       <DndContext>
         <KanbanColumn
           status="todo"
-          issues={todoRecords}
-          selectedIssueId={todoRecords[0]?.id ?? null}
-          onSelectIssue={fn()}
+          records={todoRecords}
+          selectedRecordId={todoRecords[0]?.id ?? null}
+          onSelectRecord={fn()}
           compact={false}
         />
       </DndContext>
@@ -127,9 +127,9 @@ export const EmptyStatusColumn: Story = {
       <DndContext>
         <KanbanColumn
           status="in_review"
-          issues={[]}
-          selectedIssueId={null}
-          onSelectIssue={fn()}
+          records={[]}
+          selectedRecordId={null}
+          onSelectRecord={fn()}
           compact={false}
         />
       </DndContext>
@@ -145,7 +145,7 @@ export const EmptyStatusColumn: Story = {
 export const DragOverlayCard: Story = {
   render: () => (
     <div className="w-[300px] p-6">
-      <OverlayCard issue={selectedRecord} />
+      <OverlayCard record={selectedRecord} />
     </div>
   ),
   play: async ({ canvasElement }) => {
