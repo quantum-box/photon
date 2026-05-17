@@ -99,6 +99,14 @@ async function fetchJson<T>(path: string): Promise<T | null> {
   return response.json() as Promise<T>
 }
 
+function engineDebugPath() {
+  const params = new URLSearchParams({
+    tenant_id: appKitConfig.sync.tenantId,
+    workspace_id: appKitConfig.sync.workspaceId,
+  })
+  return `/api/engine/debug?${params.toString()}`
+}
+
 function formatTime(value: string | number): string {
   const date = typeof value === 'number' ? new Date(value) : new Date(value)
   if (Number.isNaN(date.getTime())) return 'unknown'
@@ -310,7 +318,7 @@ export function EngineSyncDashboard() {
       const [client, edge, engine] = await Promise.all([
         getClientEngineDebugState(),
         fetchJson<EdgeDebugState>('/__debug/sync'),
-        fetchJson<EngineDebugState>('/api/engine/debug'),
+        fetchJson<EngineDebugState>(engineDebugPath()),
       ])
       setState((current) => ({
         ...current,
