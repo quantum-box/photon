@@ -14,7 +14,7 @@ import {
 } from '@tanstack/react-table'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import {
-  type Issue,
+  type DatabaseRecord,
   type Status,
   type Priority,
   statusConfig,
@@ -24,11 +24,11 @@ import {
 import type { RecordPropertyKey } from '../lib/databaseViews/types'
 
 interface TableViewProps {
-  issues: Issue[]
-  selectedIssueId: string | null
-  onSelectIssue: (issue: Issue) => void
-  onUpdateIssue: (issueId: string, field: keyof Issue, value: string) => void
-  onCreateIssue: (data: { title: string }) => void
+  records: DatabaseRecord[]
+  selectedRecordId: string | null
+  onSelectRecord: (record: DatabaseRecord) => void
+  onUpdateRecord: (recordId: string, field: keyof DatabaseRecord, value: string) => void
+  onCreateRecord: (data: { title: string }) => void
   sorting?: SortingState
   onSortingChange?: OnChangeFn<SortingState>
   globalFilter?: string
@@ -36,19 +36,19 @@ interface TableViewProps {
   visibleProperties?: RecordPropertyKey[]
 }
 
-const columnHelper = createColumnHelper<Issue>()
+const columnHelper = createColumnHelper<DatabaseRecord>()
 
 // Inline editable cell (double-click to edit text fields)
 function EditableCell({
   value,
-  issueId,
+  recordId,
   field,
   onUpdate,
 }: {
   value: string
-  issueId: string
-  field: keyof Issue
-  onUpdate: (issueId: string, field: keyof Issue, value: string) => void
+  recordId: string
+  field: keyof DatabaseRecord
+  onUpdate: (recordId: string, field: keyof DatabaseRecord, value: string) => void
 }) {
   const [editing, setEditing] = useState(false)
   const [editValue, setEditValue] = useState(value)
@@ -64,9 +64,9 @@ function EditableCell({
   const commit = useCallback(() => {
     setEditing(false)
     if (editValue !== value) {
-      onUpdate(issueId, field, editValue)
+      onUpdate(recordId, field, editValue)
     }
-  }, [editValue, value, issueId, field, onUpdate])
+  }, [editValue, value, recordId, field, onUpdate])
 
   if (editing) {
     return (
@@ -189,12 +189,12 @@ function DropdownItem({
 // Status dropdown cell (single click, color badge)
 function StatusDropdownCell({
   value,
-  issueId,
+  recordId,
   onUpdate,
 }: {
   value: Status
-  issueId: string
-  onUpdate: (issueId: string, field: keyof Issue, value: string) => void
+  recordId: string
+  onUpdate: (recordId: string, field: keyof DatabaseRecord, value: string) => void
 }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
@@ -228,7 +228,7 @@ function StatusDropdownCell({
             selected={key === value}
             onClick={(e) => {
               e.stopPropagation()
-              onUpdate(issueId, 'status', key)
+              onUpdate(recordId, 'status', key)
               setOpen(false)
             }}
           >
@@ -248,12 +248,12 @@ function StatusDropdownCell({
 // Priority dropdown cell (single click)
 function PriorityDropdownCell({
   value,
-  issueId,
+  recordId,
   onUpdate,
 }: {
   value: Priority
-  issueId: string
-  onUpdate: (issueId: string, field: keyof Issue, value: string) => void
+  recordId: string
+  onUpdate: (recordId: string, field: keyof DatabaseRecord, value: string) => void
 }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
@@ -283,7 +283,7 @@ function PriorityDropdownCell({
             selected={key === value}
             onClick={(e) => {
               e.stopPropagation()
-              onUpdate(issueId, 'priority', key)
+              onUpdate(recordId, 'priority', key)
               setOpen(false)
             }}
           >
@@ -299,12 +299,12 @@ function PriorityDropdownCell({
 // Assignee dropdown cell (single click, avatar + name)
 function AssigneeDropdownCell({
   value,
-  issueId,
+  recordId,
   onUpdate,
 }: {
   value: string | null
-  issueId: string
-  onUpdate: (issueId: string, field: keyof Issue, value: string) => void
+  recordId: string
+  onUpdate: (recordId: string, field: keyof DatabaseRecord, value: string) => void
 }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
@@ -336,7 +336,7 @@ function AssigneeDropdownCell({
           selected={value === null}
           onClick={(e) => {
             e.stopPropagation()
-            onUpdate(issueId, 'assignee', '')
+            onUpdate(recordId, 'assignee', '')
             setOpen(false)
           }}
         >
@@ -350,7 +350,7 @@ function AssigneeDropdownCell({
             selected={name === value}
             onClick={(e) => {
               e.stopPropagation()
-              onUpdate(issueId, 'assignee', name)
+              onUpdate(recordId, 'assignee', name)
               setOpen(false)
             }}
           >
@@ -391,17 +391,17 @@ function useIsMobileViewport() {
   return isMobile
 }
 
-function MobileIssueCard({
-  issue,
+function MobileRecordCard({
+  record,
   isSelected,
-  onSelectIssue,
-  onUpdateIssue,
+  onSelectRecord,
+  onUpdateRecord,
   visibleProperties,
 }: {
-  issue: Issue
+  record: DatabaseRecord
   isSelected: boolean
-  onSelectIssue: (issue: Issue) => void
-  onUpdateIssue: (issueId: string, field: keyof Issue, value: string) => void
+  onSelectRecord: (record: DatabaseRecord) => void
+  onUpdateRecord: (recordId: string, field: keyof DatabaseRecord, value: string) => void
   visibleProperties?: RecordPropertyKey[]
 }) {
   const isVisible = (property: RecordPropertyKey) =>
@@ -417,55 +417,55 @@ function MobileIssueCard({
           ? 'border-accent bg-surface-hover'
           : 'border-border bg-surface hover:bg-surface-hover'
       }`}
-      onClick={() => onSelectIssue(issue)}
+      onClick={() => onSelectRecord(record)}
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault()
-          onSelectIssue(issue)
+          onSelectRecord(record)
         }
       }}
     >
       <div className="mb-2 flex min-w-0 items-center justify-between gap-2">
         {isVisible('identifier') ? (
-          <span className="font-mono text-xs text-subtle">{issue.identifier}</span>
+          <span className="font-mono text-xs text-subtle">{record.identifier}</span>
         ) : (
           <span />
         )}
         {isVisible('priority') && (
           <PriorityDropdownCell
-            value={issue.priority}
-            issueId={issue.id}
-            onUpdate={onUpdateIssue}
+            value={record.priority}
+            recordId={record.id}
+            onUpdate={onUpdateRecord}
           />
         )}
       </div>
       {isVisible('title') && (
         <div className="mb-3 line-clamp-2 text-sm font-medium leading-snug text-foreground">
-          {issue.title}
+          {record.title}
         </div>
       )}
       <div className="flex min-w-0 items-center justify-between gap-2">
         {isVisible('status') ? (
           <StatusDropdownCell
-            value={issue.status}
-            issueId={issue.id}
-            onUpdate={onUpdateIssue}
+            value={record.status}
+            recordId={record.id}
+            onUpdate={onUpdateRecord}
           />
         ) : (
           <span />
         )}
         <div className="flex min-w-0 items-center gap-2">
-          {isVisible('assignee') && issue.assignee && (
+          {isVisible('assignee') && record.assignee && (
             <span className="flex min-w-0 items-center gap-1.5 text-xs text-muted">
               <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent text-xs text-white">
-                {issue.assignee[0]}
+                {record.assignee[0]}
               </span>
-              <span className="truncate">{issue.assignee}</span>
+              <span className="truncate">{record.assignee}</span>
             </span>
           )}
           {isVisible('updatedAt') && (
             <span className="shrink-0 text-xs text-subtle">
-              {new Date(issue.updatedAt).toLocaleDateString('ja-JP', {
+              {new Date(record.updatedAt).toLocaleDateString('ja-JP', {
                 month: 'short',
                 day: 'numeric',
               })}
@@ -473,9 +473,9 @@ function MobileIssueCard({
           )}
         </div>
       </div>
-      {isVisible('labels') && issue.labels.length > 0 && (
+      {isVisible('labels') && record.labels.length > 0 && (
         <div className="mt-3 flex flex-wrap gap-1">
-          {issue.labels.slice(0, 3).map((label) => (
+          {record.labels.slice(0, 3).map((label) => (
             <span
               key={label}
               className="rounded bg-canvas px-1.5 py-0.5 text-xs text-subtle"
@@ -490,11 +490,11 @@ function MobileIssueCard({
 }
 
 export function TableView({
-  issues,
-  selectedIssueId,
-  onSelectIssue,
-  onUpdateIssue,
-  onCreateIssue,
+  records,
+  selectedRecordId,
+  onSelectRecord,
+  onUpdateRecord,
+  onCreateRecord,
   sorting: controlledSorting,
   onSortingChange: controlledOnSortingChange,
   globalFilter: controlledGlobalFilter,
@@ -508,17 +508,17 @@ export function TableView({
   const [internalGlobalFilter, setInternalGlobalFilter] = useState('')
   const globalFilter = controlledGlobalFilter ?? internalGlobalFilter
   const setGlobalFilter = controlledOnGlobalFilterChange ?? setInternalGlobalFilter
-  const [creatingIssue, setCreatingIssue] = useState(false)
-  const [newIssueTitle, setNewIssueTitle] = useState('')
+  const [creatingDatabaseRecord, setCreatingDatabaseRecord] = useState(false)
+  const [newRecordTitle, setNewRecordTitle] = useState('')
   const parentRef = useRef<HTMLDivElement>(null)
-  const newIssueInputRef = useRef<HTMLInputElement>(null)
+  const newRecordInputRef = useRef<HTMLInputElement>(null)
   const isMobileViewport = useIsMobileViewport()
 
   useEffect(() => {
-    if (creatingIssue && newIssueInputRef.current) {
-      newIssueInputRef.current.focus()
+    if (creatingDatabaseRecord && newRecordInputRef.current) {
+      newRecordInputRef.current.focus()
     }
-  }, [creatingIssue])
+  }, [creatingDatabaseRecord])
 
   const columns = useMemo(
     () => [
@@ -537,8 +537,8 @@ export function TableView({
         cell: (info) => (
           <StatusDropdownCell
             value={info.getValue()}
-            issueId={info.row.original.id}
-            onUpdate={onUpdateIssue}
+            recordId={info.row.original.id}
+            onUpdate={onUpdateRecord}
           />
         ),
         filterFn: (row, _id, filterValue: Status) =>
@@ -550,8 +550,8 @@ export function TableView({
         cell: (info) => (
           <PriorityDropdownCell
             value={info.getValue()}
-            issueId={info.row.original.id}
-            onUpdate={onUpdateIssue}
+            recordId={info.row.original.id}
+            onUpdate={onUpdateRecord}
           />
         ),
       }),
@@ -561,9 +561,9 @@ export function TableView({
         cell: (info) => (
           <EditableCell
             value={info.getValue()}
-            issueId={info.row.original.id}
+            recordId={info.row.original.id}
             field="title"
-            onUpdate={onUpdateIssue}
+            onUpdate={onUpdateRecord}
           />
         ),
       }),
@@ -573,8 +573,8 @@ export function TableView({
         cell: (info) => (
           <AssigneeDropdownCell
             value={info.getValue()}
-            issueId={info.row.original.id}
-            onUpdate={onUpdateIssue}
+            recordId={info.row.original.id}
+            onUpdate={onUpdateRecord}
           />
         ),
       }),
@@ -601,9 +601,9 @@ export function TableView({
         cell: (info) => (
           <EditableCell
             value={info.getValue()}
-            issueId={info.row.original.id}
+            recordId={info.row.original.id}
             field="project"
-            onUpdate={onUpdateIssue}
+            onUpdate={onUpdateRecord}
           />
         ),
       }),
@@ -620,7 +620,7 @@ export function TableView({
         ),
       }),
     ],
-    [onUpdateIssue]
+    [onUpdateRecord]
   )
 
   const columnVisibility: VisibilityState | undefined = useMemo(() => {
@@ -638,7 +638,7 @@ export function TableView({
   }, [visibleProperties])
 
   const table = useReactTable({
-    data: issues,
+    data: records,
     columns,
     state: { sorting, columnFilters, globalFilter, ...(columnVisibility ? { columnVisibility } : {}) },
     onSortingChange,
@@ -660,13 +660,13 @@ export function TableView({
   })
 
   const handleCreateSubmit = useCallback(() => {
-    const trimmed = newIssueTitle.trim()
+    const trimmed = newRecordTitle.trim()
     if (trimmed) {
-      onCreateIssue({ title: trimmed })
-      setNewIssueTitle('')
-      setCreatingIssue(false)
+      onCreateRecord({ title: trimmed })
+      setNewRecordTitle('')
+      setCreatingDatabaseRecord(false)
     }
-  }, [newIssueTitle, onCreateIssue])
+  }, [newRecordTitle, onCreateRecord])
 
   return (
     <div className="flex flex-col h-full">
@@ -690,32 +690,32 @@ export function TableView({
         <div className="flex-1 overflow-y-auto px-3 py-3">
           <div className="space-y-2">
             {rows.map((row) => (
-              <MobileIssueCard
+              <MobileRecordCard
                 key={row.id}
-                issue={row.original}
-                isSelected={row.original.id === selectedIssueId}
-                onSelectIssue={onSelectIssue}
-                onUpdateIssue={onUpdateIssue}
+                record={row.original}
+                isSelected={row.original.id === selectedRecordId}
+                onSelectRecord={onSelectRecord}
+                onUpdateRecord={onUpdateRecord}
                 visibleProperties={visibleProperties}
               />
             ))}
-            {creatingIssue ? (
+            {creatingDatabaseRecord ? (
               <input
-                ref={newIssueInputRef}
+                ref={newRecordInputRef}
                 type="text"
-                value={newIssueTitle}
-                onChange={(e) => setNewIssueTitle(e.target.value)}
+                value={newRecordTitle}
+                onChange={(e) => setNewRecordTitle(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') handleCreateSubmit()
                   if (e.key === 'Escape') {
-                    setCreatingIssue(false)
-                    setNewIssueTitle('')
+                    setCreatingDatabaseRecord(false)
+                    setNewRecordTitle('')
                   }
                 }}
                 onBlur={() => {
-                  if (!newIssueTitle.trim()) {
-                    setCreatingIssue(false)
-                    setNewIssueTitle('')
+                  if (!newRecordTitle.trim()) {
+                    setCreatingDatabaseRecord(false)
+                    setNewRecordTitle('')
                   }
                 }}
                 placeholder="Record title を入力して Enter..."
@@ -724,7 +724,7 @@ export function TableView({
             ) : (
               <button
                 className="flex w-full items-center justify-center gap-1 rounded-md border border-dashed border-border px-3 py-3 text-xs text-subtle transition-colors hover:border-accent hover:text-foreground"
-                onClick={() => setCreatingIssue(true)}
+                onClick={() => setCreatingDatabaseRecord(true)}
               >
                 <span>+</span>
                 <span>New Record</span>
@@ -800,12 +800,12 @@ export function TableView({
                     data-index={virtualRow.index}
                     ref={virtualizer.measureElement}
                     className={`cursor-pointer transition-colors border-b border-border ${
-                      row.original.id === selectedIssueId
+                      row.original.id === selectedRecordId
                         ? 'bg-surface-hover'
                         : 'hover:bg-surface'
                     }`}
                     style={{ height: ROW_HEIGHT }}
-                    onClick={() => onSelectIssue(row.original)}
+                    onClick={() => onSelectRecord(row.original)}
                   >
                     {row.getVisibleCells().map((cell) => (
                       <td
@@ -836,26 +836,26 @@ export function TableView({
                   />
                 </tr>
               )}
-              {/* New Issue row */}
+              {/* New DatabaseRecord row */}
               <tr className="border-b border-border" style={{ height: ROW_HEIGHT }}>
                 <td colSpan={table.getVisibleLeafColumns().length} className="px-3 py-1.5">
-                  {creatingIssue ? (
+                  {creatingDatabaseRecord ? (
                     <input
-                      ref={newIssueInputRef}
+                      ref={newRecordInputRef}
                       type="text"
-                      value={newIssueTitle}
-                      onChange={(e) => setNewIssueTitle(e.target.value)}
+                      value={newRecordTitle}
+                      onChange={(e) => setNewRecordTitle(e.target.value)}
                       onKeyDown={(e) => {
                         if (e.key === 'Enter') handleCreateSubmit()
                         if (e.key === 'Escape') {
-                          setCreatingIssue(false)
-                          setNewIssueTitle('')
+                          setCreatingDatabaseRecord(false)
+                          setNewRecordTitle('')
                         }
                       }}
                       onBlur={() => {
-                        if (!newIssueTitle.trim()) {
-                          setCreatingIssue(false)
-                          setNewIssueTitle('')
+                        if (!newRecordTitle.trim()) {
+                          setCreatingDatabaseRecord(false)
+                          setNewRecordTitle('')
                         }
                       }}
                       placeholder="Record title を入力して Enter..."
@@ -864,7 +864,7 @@ export function TableView({
                   ) : (
                     <button
                       className="flex items-center gap-1 text-xs cursor-pointer transition-colors text-subtle hover:text-foreground"
-                      onClick={() => setCreatingIssue(true)}
+                      onClick={() => setCreatingDatabaseRecord(true)}
                     >
                       <span>+</span>
                       <span>New Record</span>

@@ -768,12 +768,12 @@ export function WorkflowView({
         </div>
       </div>
       <DetailPanel
-        issue={previewRecord}
+        record={previewRecord}
         onClose={() => setPreviewRecordId(null)}
-        onUpdateIssue={onUpdateRecord}
-        onDeleteIssue={
+        onUpdateRecord={onUpdateRecord}
+        onDeleteRecord={
           onDeleteRecord
-            ? (recordId) => {
+            ? (recordId: string) => {
                 onDeleteRecord(recordId)
                 setPreviewRecordId(null)
               }

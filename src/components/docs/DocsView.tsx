@@ -5,14 +5,14 @@ import { BlockNoteView } from '@blocknote/shadcn'
 import '@blocknote/core/fonts/inter.css'
 import '@blocknote/shadcn/style.css'
 import { appKitConfig } from '../../app/kitConfig'
-import { useDatabaseRecords } from '../../contexts/IssuesContext'
-import { createServerIssue } from '../../lib/issuesApi'
+import { useDatabaseRecords } from '../../contexts/RecordsContext'
+import { createServerRecord } from '../../lib/recordsApi'
 import type { DocumentCollaboration } from '../../lib/docs/docYjs'
 import { useDocumentCollaboration } from '../../lib/docs/useDocumentCollaboration'
 import { useDocs } from '../../lib/docs/useDocs'
 import {
-  linkDocIssue,
-  listDocIssueLinks,
+  linkDocRecord,
+  listDocRecordLinks,
 } from '../../lib/docs/docsDb'
 import { toFileAttachment } from '../../lib/attachments/presentation'
 import { useWorkspaceAttachments } from '../../lib/attachments/useWorkspaceAttachments'
@@ -24,8 +24,8 @@ import {
   setCurrentDocContext,
   setCurrentDocSelectedText,
 } from '../../lib/docs/workspaceContext'
-import type { DocMetadata, DocumentIssueLink } from '../../lib/docs/types'
-import type { Issue } from '../../data/mock'
+import type { DocMetadata, DocumentRecordLink } from '../../lib/docs/types'
+import type { DatabaseRecord } from '../../data/mock'
 
 interface DocsViewProps {
   selectedDocId: string | null
@@ -105,12 +105,12 @@ export function DocsList({
 
 export function BlockNoteDocumentEditor({
   collab,
-  linkedIssue,
+  linkedRecord,
   selectedText,
   onSelectedTextChange,
 }: {
   collab: DocumentCollaboration
-  linkedIssue: Issue | null
+  linkedRecord: DatabaseRecord | null
   selectedText: string
   onSelectedTextChange: (text: string) => void
 }) {
@@ -131,13 +131,13 @@ export function BlockNoteDocumentEditor({
   }, editor)
 
   useEffect(() => {
-    if (!linkedIssue) return
+    if (!linkedRecord) return
     const currentBlock = editor.getTextCursorPosition().block
     const blocks = editor.tryParseMarkdownToBlocks(
-      `Linked record: [${linkedIssue.identifier} ${linkedIssue.title}](/databases/${linkedIssue.identifier})`
+      `Linked record: [${linkedRecord.identifier} ${linkedRecord.title}](/databases/${linkedRecord.identifier})`
     )
     editor.insertBlocks(blocks, currentBlock, 'after')
-  }, [editor, linkedIssue])
+  }, [editor, linkedRecord])
 
   return (
     <div>
@@ -191,19 +191,19 @@ export function DocumentTitleInput({
 
 export function DocumentEditor({
   doc,
-  issues,
+  records,
   links,
-  onIssueLinked,
-  onCreateIssueFromSelection,
+  onRecordLinked,
+  onCreateRecordFromSelection,
   onRename,
   attachments,
   onAttachFiles,
 }: {
   doc: DocMetadata
-  issues: Issue[]
-  links: DocumentIssueLink[]
-  onIssueLinked: (issue: Issue, selectedText: string) => Promise<void>
-  onCreateIssueFromSelection: (selectedText: string) => Promise<Issue | null>
+  records: DatabaseRecord[]
+  links: DocumentRecordLink[]
+  onRecordLinked: (record: DatabaseRecord, selectedText: string) => Promise<void>
+  onCreateRecordFromSelection: (selectedText: string) => Promise<DatabaseRecord | null>
   onRename: (title: string) => void
   attachments: FileAttachment[]
   onAttachFiles: (files: FileList | File[]) => void
@@ -211,8 +211,8 @@ export function DocumentEditor({
   const { collab, ready, syncStatus, roomId } = useDocumentCollaboration(doc.id)
   const [selectedText, setSelectedText] = useState(() => readStoredSelectedText(doc.id))
   const selectedTextRef = useRef(selectedText)
-  const [selectedIssueId, setSelectedIssueId] = useState('')
-  const [insertedIssue, setInsertedIssue] = useState<Issue | null>(null)
+  const [selectedRecordId, setSelectedRecordId] = useState('')
+  const [insertedRecord, setInsertedRecord] = useState<DatabaseRecord | null>(null)
   const [previewFile, setPreviewFile] = useState<FileAttachment | null>(null)
 
   useEffect(() => {
@@ -226,19 +226,19 @@ export function DocumentEditor({
     setCurrentDocSelectedText(doc.id, text)
   }, [doc.id])
 
-  const handleLinkSelectedIssue = async () => {
-    const issue = issues.find((candidate) => candidate.id === selectedIssueId)
-    if (!issue) return
+  const handleLinkSelectedRecord = async () => {
+    const record = records.find((candidate) => candidate.id === selectedRecordId)
+    if (!record) return
     const text = selectedTextRef.current || selectedText
-    await onIssueLinked(issue, text)
-    setInsertedIssue(issue)
-    setSelectedIssueId('')
+    await onRecordLinked(record, text)
+    setInsertedRecord(record)
+    setSelectedRecordId('')
   }
 
   const handleCreateFromSelection = async () => {
     const text = selectedTextRef.current || selectedText
-    const issue = await onCreateIssueFromSelection(text)
-    if (issue) setInsertedIssue(issue)
+    const record = await onCreateRecordFromSelection(text)
+    if (record) setInsertedRecord(record)
   }
 
   return (
@@ -268,29 +268,29 @@ export function DocumentEditor({
         </div>
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <select
-            data-testid="doc-link-issue-select"
+            data-testid="doc-link-record-select"
             aria-label="Link record to document"
             className="max-w-xs rounded border border-border bg-surface px-2 py-1.5 text-xs text-foreground"
-            value={selectedIssueId}
-            onChange={(event) => setSelectedIssueId(event.target.value)}
+            value={selectedRecordId}
+            onChange={(event) => setSelectedRecordId(event.target.value)}
           >
             <option value="">Link record...</option>
-            {issues.slice(0, 100).map((issue) => (
-              <option key={issue.id} value={issue.id}>
-                {issue.identifier} {issue.title}
+            {records.slice(0, 100).map((record) => (
+              <option key={record.id} value={record.id}>
+                {record.identifier} {record.title}
               </option>
             ))}
           </select>
           <button
-            data-testid="doc-link-issue"
+            data-testid="doc-link-record"
             className="rounded bg-surface-hover px-2.5 py-1.5 text-xs font-medium text-foreground disabled:opacity-40"
-            disabled={!selectedIssueId}
-            onClick={() => void handleLinkSelectedIssue()}
+            disabled={!selectedRecordId}
+            onClick={() => void handleLinkSelectedRecord()}
           >
             Link
           </button>
           <button
-            data-testid="doc-create-issue-from-selection"
+            data-testid="doc-create-record-from-selection"
             className="rounded bg-accent px-2.5 py-1.5 text-xs font-medium text-white disabled:opacity-40"
             disabled={!selectedText}
             onClick={() => void handleCreateFromSelection()}
@@ -313,15 +313,15 @@ export function DocumentEditor({
           </label>
         </div>
         {links.length > 0 && (
-          <div className="mt-2 flex flex-wrap gap-1.5" data-testid="doc-related-issues">
+          <div className="mt-2 flex flex-wrap gap-1.5" data-testid="doc-related-records">
             {links.map((link) => (
               <Link
                 key={link.id}
                 to="/databases/$recordId"
-                params={{ recordId: link.issueIdentifier }}
+                params={{ recordId: link.recordIdentifier }}
                 className="rounded bg-surface-hover px-2 py-1 text-xs text-muted no-underline hover:text-foreground"
               >
-                {link.issueIdentifier}
+                {link.recordIdentifier}
               </Link>
             ))}
           </div>
@@ -348,7 +348,7 @@ export function DocumentEditor({
           ) : (
             <BlockNoteDocumentEditor
               collab={collab}
-              linkedIssue={insertedIssue}
+              linkedRecord={insertedRecord}
               selectedText={selectedText}
               onSelectedTextChange={handleSelectedTextChange}
             />
@@ -367,7 +367,7 @@ export function DocsView({ selectedDocId }: DocsViewProps) {
   const { records, syncRecord } = useDatabaseRecords()
   const { createAttachment, attachmentsForSurface } = useWorkspaceAttachments()
   const navigate = useNavigate()
-  const [linksByDocId, setLinksByDocId] = useState<Record<string, DocumentIssueLink[]>>({})
+  const [linksByDocId, setLinksByDocId] = useState<Record<string, DocumentRecordLink[]>>({})
   const selectedDoc = useMemo(
     () => {
       const existingDoc = docs.find((doc) => doc.id === selectedDocId)
@@ -393,7 +393,7 @@ export function DocsView({ selectedDocId }: DocsViewProps) {
   useEffect(() => {
     if (!selectedDoc) return
     let cancelled = false
-    void listDocIssueLinks(selectedDoc.id).then((links) => {
+    void listDocRecordLinks(selectedDoc.id).then((links) => {
       if (!cancelled) {
         setLinksByDocId((prev) => ({ ...prev, [selectedDoc.id]: links }))
       }
@@ -408,13 +408,13 @@ export function DocsView({ selectedDocId }: DocsViewProps) {
     void navigate({ to: '/documents/$documentId', params: { documentId: doc.id } })
   }
 
-  const handleIssueLinked = useCallback(async (issue: Issue, selectedText: string) => {
+  const handleRecordLinked = useCallback(async (record: DatabaseRecord, selectedText: string) => {
     if (!selectedDoc) return
-    const link = await linkDocIssue({
+    const link = await linkDocRecord({
       docId: selectedDoc.id,
-      issueId: issue.id,
-      issueIdentifier: issue.identifier,
-      issueTitle: issue.title,
+      recordId: record.id,
+      recordIdentifier: record.identifier,
+      recordTitle: record.title,
       selectedText,
     })
     setLinksByDocId((prev) => ({
@@ -423,19 +423,19 @@ export function DocsView({ selectedDocId }: DocsViewProps) {
     }))
   }, [selectedDoc])
 
-  const handleCreateIssueFromSelection = useCallback(async (selectedText: string) => {
+  const handleCreateRecordFromSelection = useCallback(async (selectedText: string) => {
     if (!selectedDoc || !selectedText.trim()) return null
-    const issue = await createServerIssue({
+    const record = await createServerRecord({
       title: selectedText.trim().slice(0, 120),
       description: `Created from document "${selectedDoc.title}".\n\n> ${selectedText.trim()}`,
       status: 'todo',
       priority: 'none',
       labels: ['docs'],
     })
-    syncRecord(issue)
-    await handleIssueLinked(issue, selectedText)
-    return issue
-  }, [handleIssueLinked, selectedDoc, syncRecord])
+    syncRecord(record)
+    await handleRecordLinked(record, selectedText)
+    return record
+  }, [handleRecordLinked, selectedDoc, syncRecord])
 
   const handleAttachFiles = useCallback((files: FileList | File[]) => {
     if (!selectedDoc) return
@@ -460,10 +460,10 @@ export function DocsView({ selectedDocId }: DocsViewProps) {
           <DocumentEditor
             key={selectedDoc.id}
             doc={selectedDoc}
-            issues={records}
+            records={records}
             links={linksByDocId[selectedDoc.id] ?? []}
-            onIssueLinked={handleIssueLinked}
-            onCreateIssueFromSelection={handleCreateIssueFromSelection}
+            onRecordLinked={handleRecordLinked}
+            onCreateRecordFromSelection={handleCreateRecordFromSelection}
             onRename={(title) => {
               void renameDocument(selectedDoc.id, title)
             }}
@@ -483,7 +483,7 @@ export function DocsView({ selectedDocId }: DocsViewProps) {
             <div className="max-w-sm text-center">
               <div className="text-sm font-semibold">Start a workspace doc</div>
               <p className="mt-2 text-sm leading-6 text-muted">
-                Capture notes, specs, and issue context in one shared workspace.
+                Capture notes, specs, and record context in one shared workspace.
               </p>
               <button
                 className="mt-4 rounded bg-accent px-3 py-2 text-sm font-medium text-white"

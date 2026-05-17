@@ -47,12 +47,12 @@ In another shell, start the frontend pointed at the worker:
 npm run dev:cf-sync -- --host 127.0.0.1
 ```
 
-Open two browser tabs at `http://127.0.0.1:5173/issues`.
+Open two browser tabs at `http://127.0.0.1:5173/databases`.
 
 Expected behavior:
 
 - Sidebar shows `2 online`.
-- Creating or editing an issue in one tab appears in the other tab.
+- Creating or editing a record in one tab appears in the other tab.
 - Refreshing a tab replays stored updates from the Durable Object room.
 
 ## Deploy
@@ -93,6 +93,6 @@ application server.
 - Compact the update log by periodically materializing a Yjs snapshot.
 - Add a `workerd` on-premise package once the first customer deployment shape is
   known.
-- Decide whether durable issue metadata should live in Durable Object storage,
+- Decide whether durable record metadata should live in Durable Object storage,
   D1, or the Rust backend.
 - Add a Cloudflare-specific E2E path once a preview deployment exists.

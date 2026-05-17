@@ -7,7 +7,7 @@ export interface Env {
   PHOTON_EDGE_SERVICE_TOKEN?: string
 }
 
-const DEFAULT_ROOM_ID = 'issues'
+const DEFAULT_ROOM_ID = 'records'
 const DEFAULT_CLOUD_ENGINE_BASE_URL = 'http://127.0.0.1:3001'
 const SNAPSHOT_KEY = 'yjs:snapshot:bytes'
 const SNAPSHOT_META_KEY = 'yjs:snapshot:meta'

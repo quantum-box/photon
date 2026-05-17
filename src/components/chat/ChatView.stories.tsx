@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from '@storybook/react-vite'
 import { expect, userEvent, within } from 'storybook/test'
-import { IssuesProvider } from '../../contexts/IssuesContext'
+import { RecordsProvider } from '../../contexts/RecordsContext'
 import { AttachmentsProvider } from '../../lib/attachments/useWorkspaceAttachments'
 import { ChatView } from './ChatView'
 
@@ -13,13 +13,13 @@ const meta = {
   },
   decorators: [
     (Story) => (
-      <IssuesProvider>
+      <RecordsProvider>
         <AttachmentsProvider>
           <div className="h-[720px]">
             <Story />
           </div>
         </AttachmentsProvider>
-      </IssuesProvider>
+      </RecordsProvider>
     ),
   ],
 } satisfies Meta<typeof ChatView>

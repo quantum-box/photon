@@ -13,10 +13,10 @@ Photon treats attachment metadata as workspace domain data and file bytes as sto
 
 `attachment_links` stores references from the same attachment to workspace surfaces:
 
-- `surface_type`: `issue`, `chat`, or `document`
-- `surface_id`: the issue id, chat thread id, or document id
+- `surface_type`: `record`, `chat`, or `document`
+- `surface_id`: the record id, chat thread id, or document id
 
-One attachment can therefore appear in an issue, a chat thread, and a document without duplicating content metadata.
+One attachment can therefore appear in a record, a chat thread, and a document without duplicating content metadata.
 
 ## Storage Assumptions
 
@@ -30,12 +30,12 @@ The application server owns attachment metadata, surface links, permission check
 
 The storage provider owns file bytes. Previewers consume local `File` objects or future downloaded blobs. Preview metadata is descriptive only and stays separate from content storage.
 
-The Yjs workspace projection mirrors attachment metadata into the frontend alongside issues so surfaces can render attachment chips immediately after sync. Binary content is never written into Yjs.
+The Yjs workspace projection mirrors attachment metadata into the frontend alongside records so surfaces can render attachment chips immediately after sync. Binary content is never written into Yjs.
 
 ## API Shape
 
 - `GET /api/attachments?workspace_id=...`
-- `GET /api/attachments?workspace_id=...&surface_type=issue&surface_id=...`
+- `GET /api/attachments?workspace_id=...&surface_type=record&surface_id=...`
 - `POST /api/attachments`
 - `GET /api/attachments/:id`
 - `PUT /api/attachments/:id`
@@ -43,4 +43,4 @@ The Yjs workspace projection mirrors attachment metadata into the frontend along
 - `POST /api/attachments/:id/links`
 - `DELETE /api/attachments/:id/links/:link_id`
 
-Current local development has no auth layer, so these endpoints are workspace-scoped but not user-authorized. PLT-1189 should harden this with the same auth boundary used for issues/docs/chat before release.
+Current local development has no auth layer, so these endpoints are workspace-scoped but not user-authorized. PLT-1189 should harden this with the same auth boundary used for records/docs/chat before release.

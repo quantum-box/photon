@@ -19,7 +19,7 @@ import {
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import {
-  type Issue,
+  type DatabaseRecord,
   type Status,
   statusConfig,
   priorityConfig,
@@ -27,10 +27,10 @@ import {
 import type { RecordPropertyKey } from '../lib/databaseViews/types'
 
 interface KanbanViewProps {
-  issues: Issue[]
-  selectedIssueId: string | null
-  onSelectIssue: (issue: Issue) => void
-  onMoveIssue: (issueId: string, newStatus: Status) => void
+  records: DatabaseRecord[]
+  selectedRecordId: string | null
+  onSelectRecord: (record: DatabaseRecord) => void
+  onMoveRecord: (recordId: string, newStatus: Status) => void
   compact?: boolean
   onCompactChange?: (compact: boolean) => void
   visibleProperties?: RecordPropertyKey[]
@@ -46,13 +46,13 @@ const kanbanStatuses: Status[] = [
 
 // Compact card for kanban
 export function KanbanCard({
-  issue,
+  record,
   isSelected,
   onClick,
   compact,
   visibleProperties,
 }: {
-  issue: Issue
+  record: DatabaseRecord
   isSelected: boolean
   onClick: () => void
   compact?: boolean
@@ -65,7 +65,7 @@ export function KanbanCard({
     transform,
     transition,
     isDragging,
-  } = useSortable({ id: issue.id, data: { status: issue.status } })
+  } = useSortable({ id: record.id, data: { status: record.status } })
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -73,7 +73,7 @@ export function KanbanCard({
     opacity: isDragging ? 0.4 : 1,
   }
 
-  const priority = priorityConfig[issue.priority]
+  const priority = priorityConfig[record.priority]
   const isVisible = (property: RecordPropertyKey) =>
     !visibleProperties || visibleProperties.includes(property)
 
@@ -98,14 +98,14 @@ export function KanbanCard({
             </span>
           )}
           {isVisible('title') && (
-            <span className="text-xs truncate flex-1">{issue.title}</span>
+            <span className="text-xs truncate flex-1">{record.title}</span>
           )}
-          {isVisible('assignee') && issue.assignee && (
+          {isVisible('assignee') && record.assignee && (
             <span
               className="w-4 h-4 rounded-full flex items-center justify-center shrink-0 bg-accent text-white"
               style={{ fontSize: '9px' }}
             >
-              {issue.assignee[0]}
+              {record.assignee[0]}
             </span>
           )}
         </div>
@@ -129,7 +129,7 @@ export function KanbanCard({
       <div className="flex items-center justify-between mb-1">
         {isVisible('identifier') ? (
           <span className="font-mono text-subtle" style={{ fontSize: '10px' }}>
-            {issue.identifier}
+            {record.identifier}
           </span>
         ) : (
           <span />
@@ -140,10 +140,10 @@ export function KanbanCard({
           </span>
         )}
       </div>
-      {isVisible('title') && <p className="text-sm mb-2 leading-snug">{issue.title}</p>}
+      {isVisible('title') && <p className="text-sm mb-2 leading-snug">{record.title}</p>}
       <div className="flex items-center justify-between">
         <div className="flex gap-1">
-          {isVisible('labels') && issue.labels.slice(0, 2).map((label) => (
+          {isVisible('labels') && record.labels.slice(0, 2).map((label) => (
             <span
               key={label}
               className="px-1 py-0.5 rounded bg-canvas text-subtle"
@@ -153,9 +153,9 @@ export function KanbanCard({
             </span>
           ))}
         </div>
-        {isVisible('assignee') && issue.assignee && (
+        {isVisible('assignee') && record.assignee && (
           <span className="w-5 h-5 rounded-full flex items-center justify-center text-xs shrink-0 bg-accent text-white">
-            {issue.assignee[0]}
+            {record.assignee[0]}
           </span>
         )}
       </div>
@@ -163,8 +163,8 @@ export function KanbanCard({
   )
 }
 
-export function OverlayCard({ issue }: { issue: Issue }) {
-  const priority = priorityConfig[issue.priority]
+export function OverlayCard({ record }: { record: DatabaseRecord }) {
+  const priority = priorityConfig[record.priority]
   return (
     <div
       className="rounded-md p-3 cursor-grabbing bg-surface border border-accent"
@@ -175,29 +175,29 @@ export function OverlayCard({ issue }: { issue: Issue }) {
     >
       <div className="flex items-center justify-between mb-1">
         <span className="font-mono text-subtle" style={{ fontSize: '10px' }}>
-          {issue.identifier}
+          {record.identifier}
         </span>
         <span style={{ color: priority.color }} className="text-xs">
           {priority.icon}
         </span>
       </div>
-      <p className="text-sm leading-snug">{issue.title}</p>
+      <p className="text-sm leading-snug">{record.title}</p>
     </div>
   )
 }
 
 export function KanbanColumn({
   status,
-  issues,
-  selectedIssueId,
-  onSelectIssue,
+  records,
+  selectedRecordId,
+  onSelectRecord,
   compact,
   visibleProperties,
 }: {
   status: Status
-  issues: Issue[]
-  selectedIssueId: string | null
-  onSelectIssue: (issue: Issue) => void
+  records: DatabaseRecord[]
+  selectedRecordId: string | null
+  onSelectRecord: (record: DatabaseRecord) => void
   compact: boolean
   visibleProperties?: RecordPropertyKey[]
 }) {
@@ -213,7 +213,7 @@ export function KanbanColumn({
         <span style={{ color: config.color }}>{config.icon}</span>
         <span className="text-xs font-medium">{config.label}</span>
         <span className="text-xs px-1.5 rounded-full bg-surface-hover text-subtle">
-          {issues.length}
+          {records.length}
         </span>
       </div>
 
@@ -227,21 +227,21 @@ export function KanbanColumn({
         }}
       >
         <SortableContext
-          items={issues.map((i) => i.id)}
+          items={records.map((i) => i.id)}
           strategy={verticalListSortingStrategy}
         >
-          {issues.map((issue) => (
+          {records.map((record) => (
             <KanbanCard
-              key={issue.id}
-              issue={issue}
-              isSelected={issue.id === selectedIssueId}
-              onClick={() => onSelectIssue(issue)}
+              key={record.id}
+              record={record}
+              isSelected={record.id === selectedRecordId}
+              onClick={() => onSelectRecord(record)}
               compact={compact}
               visibleProperties={visibleProperties}
             />
           ))}
         </SortableContext>
-        {issues.length === 0 && (
+        {records.length === 0 && (
           <div className="text-center py-8 text-xs text-subtle">
             No records
           </div>
@@ -252,10 +252,10 @@ export function KanbanColumn({
 }
 
 export function KanbanView({
-  issues,
-  selectedIssueId,
-  onSelectIssue,
-  onMoveIssue,
+  records,
+  selectedRecordId,
+  onSelectRecord,
+  onMoveRecord,
   compact: controlledCompact,
   onCompactChange,
   visibleProperties,
@@ -270,16 +270,16 @@ export function KanbanView({
     useSensor(KeyboardSensor)
   )
 
-  const issuesByStatus = kanbanStatuses.reduce(
+  const recordsByStatus = kanbanStatuses.reduce(
     (acc, status) => {
-      acc[status] = issues.filter((i) => i.status === status)
+      acc[status] = records.filter((i) => i.status === status)
       return acc
     },
-    {} as Record<Status, Issue[]>
+    {} as Record<Status, DatabaseRecord[]>
   )
 
-  const activeIssue = activeId
-    ? issues.find((i) => i.id === activeId)
+  const activeDatabaseRecord = activeId
+    ? records.find((i) => i.id === activeId)
     : null
 
   function handleDragStart(event: DragStartEvent) {
@@ -290,25 +290,25 @@ export function KanbanView({
     const { active, over } = event
     if (!over) return
 
-    const activeIssueId = active.id as string
+    const activeRecordId = active.id as string
     const overId = over.id as string
 
     // Dropped over a column droppable
     if (overId.startsWith('column-')) {
       const newStatus = over.data.current?.status as Status
-      const activeIssueItem = issues.find((i) => i.id === activeIssueId)
-      if (activeIssueItem && activeIssueItem.status !== newStatus) {
-        onMoveIssue(activeIssueId, newStatus)
+      const activeRecordItem = records.find((i) => i.id === activeRecordId)
+      if (activeRecordItem && activeRecordItem.status !== newStatus) {
+        onMoveRecord(activeRecordId, newStatus)
       }
       return
     }
 
     // Dropped over another card
-    const overIssue = issues.find((i) => i.id === overId)
-    if (overIssue) {
-      const activeIssueItem = issues.find((i) => i.id === activeIssueId)
-      if (activeIssueItem && activeIssueItem.status !== overIssue.status) {
-        onMoveIssue(activeIssueId, overIssue.status)
+    const overDatabaseRecord = records.find((i) => i.id === overId)
+    if (overDatabaseRecord) {
+      const activeRecordItem = records.find((i) => i.id === activeRecordId)
+      if (activeRecordItem && activeRecordItem.status !== overDatabaseRecord.status) {
+        onMoveRecord(activeRecordId, overDatabaseRecord.status)
       }
     }
   }
@@ -319,20 +319,20 @@ export function KanbanView({
 
     if (!over) return
 
-    const activeIssueId = active.id as string
+    const activeRecordId = active.id as string
     const overId = over.id as string
 
     if (overId.startsWith('column-')) {
       const newStatus = over.data.current?.status as Status
-      onMoveIssue(activeIssueId, newStatus)
+      onMoveRecord(activeRecordId, newStatus)
       return
     }
 
-    const overIssue = issues.find((i) => i.id === overId)
-    if (overIssue) {
-      const activeIssueItem = issues.find((i) => i.id === activeIssueId)
-      if (activeIssueItem && activeIssueItem.status !== overIssue.status) {
-        onMoveIssue(activeIssueId, overIssue.status)
+    const overDatabaseRecord = records.find((i) => i.id === overId)
+    if (overDatabaseRecord) {
+      const activeRecordItem = records.find((i) => i.id === activeRecordId)
+      if (activeRecordItem && activeRecordItem.status !== overDatabaseRecord.status) {
+        onMoveRecord(activeRecordId, overDatabaseRecord.status)
       }
     }
   }
@@ -350,7 +350,7 @@ export function KanbanView({
           {compact ? 'Compact' : 'Default'}
         </button>
         <span className="min-w-0 truncate text-xs text-subtle">
-          {issues.length} records · drag to move
+          {records.length} records · drag to move
         </span>
       </div>
 
@@ -366,15 +366,15 @@ export function KanbanView({
             <KanbanColumn
               key={status}
               status={status}
-              issues={issuesByStatus[status]}
-              selectedIssueId={selectedIssueId}
-              onSelectIssue={onSelectIssue}
+              records={recordsByStatus[status]}
+              selectedRecordId={selectedRecordId}
+              onSelectRecord={onSelectRecord}
               compact={compact}
               visibleProperties={visibleProperties}
             />
           ))}
           <DragOverlay>
-            {activeIssue ? <OverlayCard issue={activeIssue} /> : null}
+            {activeDatabaseRecord ? <OverlayCard record={activeDatabaseRecord} /> : null}
           </DragOverlay>
         </DndContext>
       </div>

@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from '@storybook/react-vite'
 import { expect, fn, userEvent, waitFor, within } from 'storybook/test'
-import { mockIssues } from '../../data/mock'
+import { mockDatabaseRecords } from '../../data/mock'
 import type { DocMetadata } from '../../lib/docs/types'
 import type { FileAttachment } from '../files/types'
 import { DocumentEditor, DocumentTitleInput } from './DocsView'
@@ -67,10 +67,10 @@ export const DocumentEditorWorkspace: Story = {
   render: () => (
     <DocumentEditor
       doc={doc}
-      issues={mockIssues.slice(0, 8)}
+      records={mockDatabaseRecords.slice(0, 8)}
       links={[]}
-      onIssueLinked={async () => undefined}
-      onCreateIssueFromSelection={async () => null}
+      onRecordLinked={async () => undefined}
+      onCreateRecordFromSelection={async () => null}
       onRename={fn()}
       attachments={attachments}
       onAttachFiles={fn()}
@@ -99,10 +99,10 @@ export const DocumentEditorEmptyRelations: Story = {
         id: 'storybook-doc-empty-relations',
         title: 'Draft product spec',
       }}
-      issues={mockIssues.slice(0, 3)}
+      records={mockDatabaseRecords.slice(0, 3)}
       links={[]}
-      onIssueLinked={async () => undefined}
-      onCreateIssueFromSelection={async () => null}
+      onRecordLinked={async () => undefined}
+      onCreateRecordFromSelection={async () => null}
       onRename={fn()}
       attachments={[]}
       onAttachFiles={fn()}
@@ -113,7 +113,7 @@ export const DocumentEditorEmptyRelations: Story = {
     await expect(canvas.getByLabelText('Document title')).toHaveValue('Draft product spec')
     await expect(canvas.getByText('PGlite metadata')).toBeVisible()
     await expect(canvas.getByText('Yjs blocks')).toBeVisible()
-    await expect(canvas.queryByTestId('doc-related-issues')).not.toBeInTheDocument()
+    await expect(canvas.queryByTestId('doc-related-records')).not.toBeInTheDocument()
     await expect(canvas.queryByTestId('doc-attachments')).not.toBeInTheDocument()
   },
 }

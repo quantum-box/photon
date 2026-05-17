@@ -229,7 +229,7 @@ async function startSseFetch(
       context: chatRequest.context?.documentContext
         ? { document: chatRequest.context.documentContext }
         : undefined,
-      tools: ['issue_search', 'issue_list', 'issue_get', 'issue_create', 'issue_update', 'issue_move'],
+      tools: ['record_search', 'record_list', 'record_get', 'record_create', 'record_update', 'record_move'],
     }),
     signal: controller.signal,
   })

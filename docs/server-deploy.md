@@ -88,7 +88,7 @@ The container reads:
   Live needs the same durable snapshot/update storage as Engine.
 
 The default SQLite database is suitable for preview/demo deployments only. Cloud
-Run filesystem data is ephemeral, so production issue data needs a durable
+Run filesystem data is ephemeral, so production record data needs a durable
 database URL once Photon moves beyond preview.
 
 For production Engine deployments, prefer TiDB/MySQL. The server connects,

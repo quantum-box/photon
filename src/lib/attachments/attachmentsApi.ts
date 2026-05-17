@@ -57,7 +57,10 @@ export class AttachmentApiError extends Error {
 }
 
 function normalizeSurfaceType(value: string): AttachmentSurfaceType {
-  return value === 'issue' || value === 'chat' || value === 'document' ? value : 'chat'
+  if (value === 'record' || value === 'chat' || value === 'document') {
+    return value
+  }
+  return 'chat'
 }
 
 function normalizeStorageProvider(value: string): AttachmentStorageProvider {

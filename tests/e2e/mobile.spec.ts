@@ -10,10 +10,10 @@ test.describe('Photon mobile shell', () => {
     await expect(page.getByTestId('side-nav')).toBeHidden()
     await expect(page.getByRole('heading', { name: 'Databases' })).toBeVisible()
 
-    await page.getByTestId('open-create-issue').click()
+    await page.getByTestId('open-create-record').click()
     await page.getByLabel(/Record title/i).fill(title)
     await page.getByLabel('Description').fill('Created from mobile Playwright')
-    await page.getByTestId('create-issue-submit').click()
+    await page.getByTestId('create-record-submit').click()
 
     await page.getByPlaceholder('Filter records...').fill(title)
     await expect(page.getByTestId('mobile-record-card')).toHaveCount(1)

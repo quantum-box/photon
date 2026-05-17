@@ -2,15 +2,15 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { Link } from '@tanstack/react-router'
 import {
-  type Issue,
+  type DatabaseRecord,
   type Status,
   type Priority,
   statusConfig,
   priorityConfig,
   mockUsers,
 } from '../data/mock'
-import { listIssueDocLinks } from '../lib/docs/docsDb'
-import type { DocumentIssueLink } from '../lib/docs/types'
+import { listRecordDocLinks } from '../lib/docs/docsDb'
+import type { DocumentRecordLink } from '../lib/docs/types'
 import { useWorkspaceAttachments } from '../lib/attachments/useWorkspaceAttachments'
 import { toFileAttachment } from '../lib/attachments/presentation'
 import { appKitConfig } from '../app/kitConfig'
@@ -19,60 +19,60 @@ import { FilePreviewModal } from './files/FilePreviewModal'
 import type { FileAttachment } from './files/types'
 
 interface DetailPanelProps {
-  issue: Issue | null
+  record: DatabaseRecord | null
   onClose: () => void
-  onUpdateIssue?: (issueId: string, field: keyof Issue, value: string) => void
-  onDeleteIssue?: (issueId: string) => void
+  onUpdateRecord?: (recordId: string, field: keyof DatabaseRecord, value: string) => void
+  onDeleteRecord?: (recordId: string) => void
 }
 
-export function DetailPanel({ issue, onClose, onUpdateIssue, onDeleteIssue }: DetailPanelProps) {
+export function DetailPanel({ record, onClose, onUpdateRecord, onDeleteRecord }: DetailPanelProps) {
   const [deleteConfirm, setDeleteConfirm] = useState(false)
-  const [relatedDocs, setRelatedDocs] = useState<DocumentIssueLink[]>([])
+  const [relatedDocs, setRelatedDocs] = useState<DocumentRecordLink[]>([])
   const [previewFile, setPreviewFile] = useState<FileAttachment | null>(null)
   const { createAttachment, attachmentsForSurface } = useWorkspaceAttachments()
 
-  // Reset confirm dialog when issue changes
+  // Reset confirm dialog when record changes
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- A new selected issue must not inherit the previous delete confirmation.
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- A new selected record must not inherit the previous delete confirmation.
     setDeleteConfirm(false)
-  }, [issue?.id])
+  }, [record?.id])
 
   useEffect(() => {
-    if (!issue) return
+    if (!record) return
 
     let cancelled = false
-    void listIssueDocLinks(issue.id, issue.identifier).then((links) => {
+    void listRecordDocLinks(record.id, record.identifier).then((links) => {
       if (!cancelled) setRelatedDocs(links)
     })
     return () => {
       cancelled = true
     }
-  }, [issue])
+  }, [record])
 
-  if (!issue) return null
+  if (!record) return null
 
-  const status = statusConfig[issue.status]
-  const priority = priorityConfig[issue.priority]
+  const status = statusConfig[record.status]
+  const priority = priorityConfig[record.priority]
 
   const handleDelete = () => {
-    if (onDeleteIssue) {
-      onDeleteIssue(issue.id)
+    if (onDeleteRecord) {
+      onDeleteRecord(record.id)
       onClose()
     }
   }
 
-  const issueAttachments = attachmentsForSurface({ surfaceType: 'issue', surfaceId: issue.id }).map(toFileAttachment)
+  const recordAttachments = attachmentsForSurface({ surfaceType: 'record', surfaceId: record.id }).map(toFileAttachment)
 
   const handleAttachFiles = (files: FileList | File[]) => {
     void Promise.all(
       Array.from(files).map((file) =>
         createAttachment({
           file,
-          links: [{ surfaceType: 'issue', surfaceId: issue.id }],
+          links: [{ surfaceType: 'record', surfaceId: record.id }],
         })
       )
     ).catch((error: unknown) => {
-      console.warn('Failed to persist issue attachment metadata', error)
+      console.warn('Failed to persist record attachment metadata', error)
     })
   }
 
@@ -93,10 +93,10 @@ export function DetailPanel({ issue, onClose, onUpdateIssue, onDeleteIssue }: De
         style={{ borderColor: 'var(--border-color)' }}
       >
         <span className="text-xs font-mono" style={{ color: 'var(--text-muted)' }}>
-          {issue.identifier}
+          {record.identifier}
         </span>
         <div className="flex items-center gap-1">
-          {onDeleteIssue && (
+          {onDeleteRecord && (
             <button
               onClick={() => setDeleteConfirm(true)}
               className="w-6 h-6 flex items-center justify-center rounded transition-colors text-sm"
@@ -109,7 +109,7 @@ export function DetailPanel({ issue, onClose, onUpdateIssue, onDeleteIssue }: De
                 e.currentTarget.style.background = ''
                 e.currentTarget.style.color = 'var(--text-muted)'
               }}
-              title="Delete issue"
+              title="Delete record"
             >
               🗑
             </button>
@@ -130,21 +130,21 @@ export function DetailPanel({ issue, onClose, onUpdateIssue, onDeleteIssue }: De
       {/* Content */}
       <div className="flex-1 overflow-y-auto p-3 md:p-4">
         {/* Editable Title */}
-        {onUpdateIssue ? (
+        {onUpdateRecord ? (
           <EditableTitle
-            value={issue.title}
-            onCommit={(v) => onUpdateIssue(issue.id, 'title', v)}
+            value={record.title}
+            onCommit={(v) => onUpdateRecord(record.id, 'title', v)}
           />
         ) : (
-          <h2 className="text-base font-semibold mb-4">{issue.title}</h2>
+          <h2 className="text-base font-semibold mb-4">{record.title}</h2>
         )}
 
         {/* Properties */}
         <div className="space-y-3 mb-6">
           <PropertyRow label="Status">
-            {onUpdateIssue ? (
+            {onUpdateRecord ? (
               <InlineDropdown
-                value={issue.status}
+                value={record.status}
                 options={(Object.entries(statusConfig) as [Status, typeof statusConfig[Status]][]).map(
                   ([key, sc]) => ({
                     key,
@@ -159,7 +159,7 @@ export function DetailPanel({ issue, onClose, onUpdateIssue, onDeleteIssue }: De
                     {status.label}
                   </span>
                 )}
-                onSelect={(key) => onUpdateIssue(issue.id, 'status', key)}
+                onSelect={(key) => onUpdateRecord(record.id, 'status', key)}
               />
             ) : (
               <span className="flex items-center gap-1.5 text-sm">
@@ -170,9 +170,9 @@ export function DetailPanel({ issue, onClose, onUpdateIssue, onDeleteIssue }: De
           </PropertyRow>
 
           <PropertyRow label="Priority">
-            {onUpdateIssue ? (
+            {onUpdateRecord ? (
               <InlineDropdown
-                value={issue.priority}
+                value={record.priority}
                 options={(Object.entries(priorityConfig) as [Priority, typeof priorityConfig[Priority]][]).map(
                   ([key, pc]) => ({
                     key,
@@ -187,7 +187,7 @@ export function DetailPanel({ issue, onClose, onUpdateIssue, onDeleteIssue }: De
                     {priority.label}
                   </span>
                 )}
-                onSelect={(key) => onUpdateIssue(issue.id, 'priority', key)}
+                onSelect={(key) => onUpdateRecord(record.id, 'priority', key)}
               />
             ) : (
               <span className="flex items-center gap-1.5 text-sm">
@@ -198,9 +198,9 @@ export function DetailPanel({ issue, onClose, onUpdateIssue, onDeleteIssue }: De
           </PropertyRow>
 
           <PropertyRow label="Assignee">
-            {onUpdateIssue ? (
+            {onUpdateRecord ? (
               <InlineDropdown
-                value={issue.assignee ?? ''}
+                value={record.assignee ?? ''}
                 options={[
                   { key: '', label: 'Unassigned', icon: '', color: 'var(--text-muted)' },
                   ...mockUsers.map((name) => ({
@@ -212,34 +212,34 @@ export function DetailPanel({ issue, onClose, onUpdateIssue, onDeleteIssue }: De
                 ]}
                 renderValue={(
                   <span className="text-sm">
-                    {issue.assignee ? (
+                    {record.assignee ? (
                       <span className="flex items-center gap-1.5">
                         <span
                           className="w-5 h-5 rounded-full flex items-center justify-center text-xs"
                           style={{ background: 'var(--accent)', color: '#fff' }}
                         >
-                          {issue.assignee[0]}
+                          {record.assignee[0]}
                         </span>
-                        {issue.assignee}
+                        {record.assignee}
                       </span>
                     ) : (
                       <span style={{ color: 'var(--text-muted)' }}>Unassigned</span>
                     )}
                   </span>
                 )}
-                onSelect={(key) => onUpdateIssue(issue.id, 'assignee', key)}
+                onSelect={(key) => onUpdateRecord(record.id, 'assignee', key)}
               />
             ) : (
               <span className="text-sm">
-                {issue.assignee ? (
+                {record.assignee ? (
                   <span className="flex items-center gap-1.5">
                     <span
                       className="w-5 h-5 rounded-full flex items-center justify-center text-xs"
                       style={{ background: 'var(--accent)', color: '#fff' }}
                     >
-                      {issue.assignee[0]}
+                      {record.assignee[0]}
                     </span>
-                    {issue.assignee}
+                    {record.assignee}
                   </span>
                 ) : (
                   <span style={{ color: 'var(--text-muted)' }}>Unassigned</span>
@@ -249,10 +249,10 @@ export function DetailPanel({ issue, onClose, onUpdateIssue, onDeleteIssue }: De
           </PropertyRow>
 
           <PropertyRow label="Project">
-            {onUpdateIssue ? (
+            {onUpdateRecord ? (
               <EditableText
-                value={issue.project}
-                onCommit={(v) => onUpdateIssue(issue.id, 'project', v)}
+                value={record.project}
+                onCommit={(v) => onUpdateRecord(record.id, 'project', v)}
               />
             ) : (
               <span className="text-sm flex items-center gap-1.5">
@@ -260,22 +260,22 @@ export function DetailPanel({ issue, onClose, onUpdateIssue, onDeleteIssue }: De
                   className="w-2 h-2 rounded-full"
                   style={{ background: 'var(--accent)' }}
                 />
-                {issue.project}
+                {record.project}
               </span>
             )}
           </PropertyRow>
 
           <PropertyRow label="Labels">
-            {onUpdateIssue ? (
+            {onUpdateRecord ? (
               <EditableLabels
-                labels={issue.labels}
+                labels={record.labels}
                 onCommit={(labels) =>
-                  onUpdateIssue(issue.id, 'labels', JSON.stringify(labels))
+                  onUpdateRecord(record.id, 'labels', JSON.stringify(labels))
                 }
               />
             ) : (
               <div className="flex flex-wrap gap-1">
-                {issue.labels.map((label) => (
+                {record.labels.map((label) => (
                   <span
                     key={label}
                     className="px-1.5 py-0.5 rounded text-xs"
@@ -293,13 +293,13 @@ export function DetailPanel({ issue, onClose, onUpdateIssue, onDeleteIssue }: De
 
           <PropertyRow label="Created">
             <span className="text-sm" style={{ color: 'var(--text-secondary)' }}>
-              {new Date(issue.createdAt).toLocaleDateString('ja-JP')}
+              {new Date(record.createdAt).toLocaleDateString('ja-JP')}
             </span>
           </PropertyRow>
 
           <PropertyRow label="Updated">
             <span className="text-sm" style={{ color: 'var(--text-secondary)' }}>
-              {new Date(issue.updatedAt).toLocaleDateString('ja-JP')}
+              {new Date(record.updatedAt).toLocaleDateString('ja-JP')}
             </span>
           </PropertyRow>
         </div>
@@ -315,17 +315,17 @@ export function DetailPanel({ issue, onClose, onUpdateIssue, onDeleteIssue }: De
           >
             Description
           </h3>
-          {onUpdateIssue ? (
+          {onUpdateRecord ? (
             <EditableDescription
-              value={issue.description}
-              onCommit={(v) => onUpdateIssue(issue.id, 'description', v)}
+              value={record.description}
+              onCommit={(v) => onUpdateRecord(record.id, 'description', v)}
             />
           ) : (
             <div
               className="text-sm leading-relaxed whitespace-pre-wrap"
               style={{ color: 'var(--text-secondary)' }}
             >
-              {issue.description}
+              {record.description}
             </div>
           )}
         </div>
@@ -344,7 +344,7 @@ export function DetailPanel({ issue, onClose, onUpdateIssue, onDeleteIssue }: De
             <label className="cursor-pointer rounded px-2 py-1 text-xs" style={{ background: 'var(--bg-hover)' }}>
               Attach
               <input
-                data-testid="issue-attach-file"
+                data-testid="record-attach-file"
                 type="file"
                 multiple
                 accept={appKitConfig.attachments.acceptedTypes}
@@ -356,9 +356,9 @@ export function DetailPanel({ issue, onClose, onUpdateIssue, onDeleteIssue }: De
               />
             </label>
           </div>
-          {issueAttachments.length > 0 ? (
-            <div className="mb-4 flex flex-wrap gap-2" data-testid="issue-attachments">
-              {issueAttachments.map((attachment) => (
+          {recordAttachments.length > 0 ? (
+            <div className="mb-4 flex flex-wrap gap-2" data-testid="record-attachments">
+              {recordAttachments.map((attachment) => (
                 <FileChip
                   key={attachment.id}
                   file={attachment}
@@ -384,7 +384,7 @@ export function DetailPanel({ issue, onClose, onUpdateIssue, onDeleteIssue }: De
             Related docs
           </h3>
           {relatedDocs.length > 0 ? (
-            <div className="space-y-2" data-testid="issue-related-docs">
+            <div className="space-y-2" data-testid="record-related-docs">
               {relatedDocs.map((link) => (
                 <Link
                   key={link.id}
@@ -414,8 +414,8 @@ export function DetailPanel({ issue, onClose, onUpdateIssue, onDeleteIssue }: De
       {/* Delete confirmation dialog */}
       {deleteConfirm && (
         <DeleteConfirmDialog
-          identifier={issue.identifier}
-          title={issue.title}
+          identifier={record.identifier}
+          title={record.title}
           onConfirm={handleDelete}
           onCancel={() => setDeleteConfirm(false)}
         />

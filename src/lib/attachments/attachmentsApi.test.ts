@@ -24,8 +24,8 @@ describe('attachment metadata API mapping', () => {
         {
           id: 'link-1',
           attachment_id: 'att-1',
-          surface_type: 'issue',
-          surface_id: 'issue-1',
+          surface_type: 'record',
+          surface_id: 'record-1',
           created_at: '2026-05-14T00:00:00.000Z',
         },
         {
@@ -45,7 +45,7 @@ describe('attachment metadata API mapping', () => {
       previewMetadata: { fileType: 'pdf', previewStatus: 'available' },
     })
     expect(attachment.links.map((link) => `${link.surfaceType}:${link.surfaceId}`)).toEqual([
-      'issue:issue-1',
+      'record:record-1',
       'document:doc-1',
     ])
   })

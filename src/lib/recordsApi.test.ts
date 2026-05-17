@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import { appKitConfig } from '../app/kitConfig'
-import { toIssue, type ServerIssue } from './issuesApi'
+import { toRecord, type ServerRecord } from './recordsApi'
 
-describe('issuesApi', () => {
-  it('normalizes server issue projections for the Yjs issue cache', () => {
-    const serverIssue: ServerIssue = {
+describe('recordsApi', () => {
+  it('normalizes server record projections for the Yjs record cache', () => {
+    const serverRecord: ServerRecord = {
       id: 'f3cc94d8-cc78-4fd3-a407-4793ea2f537c',
       identifier: 'PLT-1200',
-      title: 'Persist issue writes',
+      title: 'Persist record writes',
       description: 'Route frontend writes through the server.',
       status: 'in_progress',
       priority: 'high',
@@ -18,10 +18,10 @@ describe('issuesApi', () => {
       updated_at: '2026-05-08 03:31:00',
     }
 
-    expect(toIssue(serverIssue)).toEqual({
+    expect(toRecord(serverRecord)).toEqual({
       id: 'f3cc94d8-cc78-4fd3-a407-4793ea2f537c',
       identifier: 'PLT-1200',
-      title: 'Persist issue writes',
+      title: 'Persist record writes',
       description: 'Route frontend writes through the server.',
       status: 'in_progress',
       priority: 'high',
@@ -35,18 +35,18 @@ describe('issuesApi', () => {
 
   it('keeps older server rows renderable during migration', () => {
     expect(
-      toIssue({
-        id: 'legacy-issue',
+      toRecord({
+        id: 'legacy-record',
         title: 'Legacy row',
         labels: '["legacy"]',
       })
     ).toMatchObject({
-      id: 'legacy-issue',
-      identifier: 'legacy-issue',
+      id: 'legacy-record',
+      identifier: 'legacy-record',
       status: 'backlog',
       priority: 'none',
       labels: ['legacy'],
-      project: appKitConfig.issues.defaultProject,
+      project: appKitConfig.records.defaultProject,
     })
   })
 })

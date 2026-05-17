@@ -1,4 +1,4 @@
-import type { DocumentIssueLink } from './types'
+import type { DocumentRecordLink } from './types'
 
 const CURRENT_DOC_KEY = 'photon:docs:current-document'
 const SELECTED_TEXT_KEY = 'photon:docs:selected-text'
@@ -8,7 +8,7 @@ export interface WorkspaceDocContext {
   title: string
   url: string
   selectedText: string
-  relatedIssues: DocumentIssueLink[]
+  relatedRecords: DocumentRecordLink[]
 }
 
 interface StoredDocContext {

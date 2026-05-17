@@ -28,12 +28,12 @@ describe('appKitConfig', () => {
     expect(appKitConfig.storage.themeKey).toBe('photon-theme')
     expect(appKitConfig.sync.backend).toBe('rust-server')
     expect(appKitConfig.sync.workspaceId).toBe('photon-default')
-    expect(appKitConfig.sync.issuesRoomId).toBe('workspace:photon-default:issues')
-    expect(appKitConfig.sync.persistenceKey).toBe('workspace:photon-default:issues')
-    expect(appKitConfig.sync.yjsArrayName).toBe('issues')
+    expect(appKitConfig.sync.recordsRoomId).toBe('workspace:photon-default:records')
+    expect(appKitConfig.sync.persistenceKey).toBe('workspace:photon-default:records')
+    expect(appKitConfig.sync.yjsArrayName).toBe('records')
     expect(appKitConfig.sync.databasesArrayName).toBe('databases')
     expect(appKitConfig.sync.workflowCanvasesMapName).toBe('workflowCanvases')
-    expect(appKitConfig.sync.websocketPath).toBe('/ws?room=workspace:photon-default:issues')
+    expect(appKitConfig.sync.websocketPath).toBe('/ws?room=workspace:photon-default:records')
     expect(appKitConfig.workflows.pgliteDataDir).toBe('idb://photon-workflows')
     expect(appKitConfig.docs.pgliteDataDir).toBe('idb://photon-docs')
     expect(appKitConfig.engine.pgliteDataDir).toBe('idb://photon-engine')
@@ -44,7 +44,7 @@ describe('appKitConfig', () => {
     expect(appKitConfig.attachments.endpoint).toBe('/api/attachments')
     expect(appKitConfig.attachments.webStorageProvider).toBe('web-object-storage')
     expect(appKitConfig.sync.roomParam).toBe('room')
-    expect(appKitConfig.server.issuesPath).toBe('/api/issues')
+    expect(appKitConfig.server.recordsPath).toBe('/api/records')
     expect(appKitConfig.chat.stream.mode).toBe('mock')
     expect(appKitConfig.chat.stream.transport).toBe('sse')
     expect(appKitConfig.chat.stream.endpoint).toBe('/api/agent/chat/stream')
@@ -94,9 +94,9 @@ describe('appKitConfig', () => {
     )
   })
 
-  it('configures issue defaults without hardcoding them in UI components', () => {
-    expect(appKitConfig.issues.identifierPrefix).toMatch(/^[A-Z]+$/)
-    expect(appKitConfig.issues.defaultProject).toBeTruthy()
+  it('configures record defaults without hardcoding them in UI components', () => {
+    expect(appKitConfig.records.identifierPrefix).toMatch(/^[A-Z]+$/)
+    expect(appKitConfig.records.defaultProject).toBeTruthy()
   })
 
   it('defines a configurable business workflow for records', () => {
@@ -118,8 +118,8 @@ describe('appKitConfig', () => {
 })
 
 describe('buildRoomId', () => {
-  it('encodes the issue room as workspace:<id>:issues per ADR-0001', () => {
-    expect(buildRoomId('photon-default', 'issues')).toBe('workspace:photon-default:issues')
+  it('encodes the record room as workspace:<id>:records per ADR-0001', () => {
+    expect(buildRoomId('photon-default', 'records')).toBe('workspace:photon-default:records')
   })
 
   it('supports composite surfaces such as docs and chat threads', () => {

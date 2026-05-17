@@ -2,7 +2,7 @@ import { useState, useEffect, useSyncExternalStore } from 'react'
 
 /**
  * A tiny external store for the streaming animation state.
- * This avoids React compiler issues with refs-in-render and setState-in-effects.
+ * This avoids React compiler warnings with refs-in-render and setState-in-effects.
  */
 class StreamingStore {
   private target = ''

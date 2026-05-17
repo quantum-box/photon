@@ -1,11 +1,11 @@
 import type { Meta, StoryObj } from '@storybook/react-vite'
 import { expect, fn, userEvent, within } from 'storybook/test'
-import { mockIssues } from '../data/mock'
+import { mockDatabaseRecords } from '../data/mock'
 import { AttachmentsProvider } from '../lib/attachments/useWorkspaceAttachments'
 import { DetailPanel } from './DetailPanel'
 
-const editableIssue = {
-  ...mockIssues[10],
+const editableDatabaseRecord = {
+  ...mockDatabaseRecords[10],
   title: 'Storybook database record detail',
   description: 'This record exercises editable database detail panel controls.',
 }
@@ -15,10 +15,10 @@ const meta = {
   component: DetailPanel,
   tags: ['autodocs'],
   args: {
-    issue: editableIssue,
+    record: editableDatabaseRecord,
     onClose: fn(),
-    onUpdateIssue: fn(),
-    onDeleteIssue: fn(),
+    onUpdateRecord: fn(),
+    onDeleteRecord: fn(),
   },
   decorators: [
     (Story) => (
@@ -43,19 +43,19 @@ export const Editable: Story = {
 
     await userEvent.click(canvas.getByText('In Progress'))
     await userEvent.click(canvas.getByRole('button', { name: /done/i }))
-    await expect(args.onUpdateIssue).toHaveBeenCalledWith(editableIssue.id, 'status', 'done')
+    await expect(args.onUpdateRecord).toHaveBeenCalledWith(editableDatabaseRecord.id, 'status', 'done')
   },
 }
 
 export const ReadOnly: Story = {
   args: {
-    onUpdateIssue: undefined,
-    onDeleteIssue: undefined,
+    onUpdateRecord: undefined,
+    onDeleteRecord: undefined,
   },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement)
     await expect(canvas.getByText('Storybook database record detail')).toBeVisible()
-    await expect(canvas.queryByTitle('Delete issue')).not.toBeInTheDocument()
+    await expect(canvas.queryByTitle('Delete record')).not.toBeInTheDocument()
     await expect(canvas.getByText('This record exercises editable database detail panel controls.')).toBeVisible()
   },
 }

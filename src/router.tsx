@@ -16,15 +16,15 @@ import { WorkflowView } from './components/WorkflowView'
 import { DatabaseViewTabs } from './components/DatabaseViewTabs'
 import { DatabaseViewSettingsPanel } from './components/DatabaseViewSettingsPanel'
 import { DetailPanel } from './components/DetailPanel'
-import { CreateIssueModal } from './components/CreateIssueModal'
+import { CreateRecordModal } from './components/CreateRecordModal'
 import { ChatView } from './components/chat/ChatView'
 import { DocsView } from './components/docs/DocsView'
 import { EngineSyncDashboard } from './components/sync/EngineSyncDashboard'
-import { DatabaseRecordsProvider, useDatabaseRecords } from './contexts/IssuesContext'
+import { DatabaseRecordsProvider, useDatabaseRecords } from './contexts/RecordsContext'
 import { DatabasesProvider, type WorkspaceDatabase, useWorkspaceDatabases } from './contexts/DatabasesContext'
 import { DatabaseViewsProvider, useDatabaseViews } from './contexts/DatabaseViewsContext'
 import { AttachmentsProvider } from './lib/attachments/useWorkspaceAttachments'
-import { fetchServerIssues } from './lib/issuesApi'
+import { fetchServerRecords } from './lib/recordsApi'
 import { statusConfig, type Status, type DatabaseRecord } from './data/mock'
 import type { SortingState } from '@tanstack/react-table'
 import {
@@ -45,7 +45,7 @@ import type { DatabaseViewDefinition, DatabaseViewType } from './lib/databaseVie
 
 // ── Search params ──────────────────────────────────────────────
 
-interface IssueSearchParams {
+interface RecordSearchParams {
   database?: string
   view?: string
   status?: Status
@@ -53,7 +53,7 @@ interface IssueSearchParams {
   desc?: boolean
 }
 
-function validateIssueSearch(search: Record<string, unknown>): IssueSearchParams {
+function validateRecordSearch(search: Record<string, unknown>): RecordSearchParams {
   return {
     database: typeof search.database === 'string' ? search.database : undefined,
     view: typeof search.view === 'string' ? search.view : undefined,
@@ -76,7 +76,7 @@ function filterRecordsByDatabase(
   return database ? records.filter((record) => record.project === database.label) : records
 }
 
-// ── Create Issue Modal context ─────────────────────────────────
+// ── Create DatabaseRecord Modal context ─────────────────────────────────
 
 const CreateModalContext = createContext<{
   open: boolean
@@ -168,7 +168,7 @@ function DatabaseHeader({
           )}
           {onCreate && (
             <button
-              data-testid="open-create-issue"
+              data-testid="open-create-record"
               className="whitespace-nowrap rounded px-2.5 py-1.5 text-xs font-medium md:px-3"
               style={{ background: 'var(--accent)', color: '#fff' }}
               onClick={onCreate}
@@ -233,7 +233,7 @@ const indexRoute = createRoute({
 const databasesRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: 'databases',
-  validateSearch: validateIssueSearch,
+  validateSearch: validateRecordSearch,
   component: DatabasesLayout,
 })
 
@@ -273,15 +273,15 @@ function DatabasesLayout() {
     [databaseScopeId, scopedViews, viewId]
   )
 
-  // Get selected issue ID from child detail route
+  // Get selected record ID from child detail route
   const detailMatch = useMatch({
-    from: issueDetailRoute.id,
+    from: recordDetailRoute.id,
     shouldThrow: false,
   })
   const selectedIdentifier = (detailMatch?.params as { recordId?: string })?.recordId ?? null
 
   const navigateWithinDatabase = useCallback(
-    (search: IssueSearchParams, replace = false) => {
+    (search: RecordSearchParams, replace = false) => {
       if (selectedIdentifier) {
         void navigate({
           to: '/databases/$recordId',
@@ -535,11 +535,11 @@ function DatabasesLayout() {
         <div className="flex-1 min-h-0 mt-1">
           {effectiveView.type === 'table' && (
             <TableView
-              issues={filteredRecords}
-              selectedIssueId={selectedRecord?.id ?? null}
-              onSelectIssue={handleSelectRecord}
-              onUpdateIssue={handleUpdateRecord}
-              onCreateIssue={handleCreateRecordInDatabase}
+              records={filteredRecords}
+              selectedRecordId={selectedRecord?.id ?? null}
+              onSelectRecord={handleSelectRecord}
+              onUpdateRecord={handleUpdateRecord}
+              onCreateRecord={handleCreateRecordInDatabase}
               sorting={sorting}
               onSortingChange={handleSortingChange}
               globalFilter={effectiveView.filters.search}
@@ -554,10 +554,10 @@ function DatabasesLayout() {
           )}
           {effectiveView.type === 'board' && (
             <KanbanView
-              issues={sortedRecords}
-              selectedIssueId={selectedRecord?.id ?? null}
-              onSelectIssue={handleSelectRecord}
-              onMoveIssue={handleMoveRecord}
+              records={sortedRecords}
+              selectedRecordId={selectedRecord?.id ?? null}
+              onSelectRecord={handleSelectRecord}
+              onMoveRecord={handleMoveRecord}
               compact={effectiveView.board.compact}
               onCompactChange={(compact) =>
                 updateDraftView((current) => ({
@@ -586,7 +586,7 @@ function DatabasesLayout() {
       />
       </div>
       <Outlet />
-      <CreateIssueModal
+      <CreateRecordModal
         open={createModalOpen}
         onClose={() => setCreateModalOpen(false)}
         onCreate={handleCreateRecordInDatabase}
@@ -597,7 +597,7 @@ function DatabasesLayout() {
 
 // ── Databases Index Route (no detail panel) ───────────────────
 
-const issuesIndexRoute = createRoute({
+const recordsIndexRoute = createRoute({
   getParentRoute: () => databasesRoute,
   path: '/',
   component: () => null,
@@ -605,14 +605,14 @@ const issuesIndexRoute = createRoute({
 
 // ── Record Detail Route (/databases/$recordId) ────────────────
 
-const issueDetailRoute = createRoute({
+const recordDetailRoute = createRoute({
   getParentRoute: () => databasesRoute,
   path: '$recordId',
   component: RecordDetailPanel,
 })
 
 function RecordDetailPanel() {
-  const { recordId } = issueDetailRoute.useParams()
+  const { recordId } = recordDetailRoute.useParams()
   const { database, view } = databasesRoute.useSearch()
   const { records, handleUpdateRecord, handleDeleteRecord, syncRecords } = useDatabaseRecords()
   const { databases } = useWorkspaceDatabases()
@@ -630,7 +630,7 @@ function RecordDetailPanel() {
   useEffect(() => {
     if (record) return
     let cancelled = false
-    void fetchServerIssues()
+    void fetchServerRecords()
       .then((serverRecords) => {
         if (!cancelled) syncRecords(serverRecords)
       })
@@ -644,12 +644,12 @@ function RecordDetailPanel() {
 
   return (
     <DetailPanel
-      issue={record}
+      record={record}
       onClose={() =>
         void navigate({ to: '/databases', search: { database, view } })
       }
-      onUpdateIssue={handleUpdateRecord}
-      onDeleteIssue={handleDeleteRecord}
+      onUpdateRecord={handleUpdateRecord}
+      onDeleteRecord={handleDeleteRecord}
     />
   )
 }
@@ -749,25 +749,6 @@ const documentDetailRoute = createRoute({
 
 // ── Legacy Route Redirects ────────────────────────────────────
 
-const legacyIssuesRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: 'issues',
-  beforeLoad: () => {
-    throw redirect({ to: '/databases' })
-  },
-})
-
-const legacyIssueDetailRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: 'issues/$issueId',
-  beforeLoad: ({ params }) => {
-    throw redirect({
-      to: '/databases/$recordId',
-      params: { recordId: params.issueId },
-    })
-  },
-})
-
 const legacyKanbanRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: 'kanban',
@@ -795,11 +776,9 @@ function DocsPage() {
 
 const routeTree = rootRoute.addChildren([
   indexRoute,
-  databasesRoute.addChildren([issuesIndexRoute, issueDetailRoute]),
+  databasesRoute.addChildren([recordsIndexRoute, recordDetailRoute]),
   kanbanRoute,
   workflowRoute,
-  legacyIssuesRoute,
-  legacyIssueDetailRoute,
   legacyKanbanRoute,
   chatRoute,
   syncRoute,

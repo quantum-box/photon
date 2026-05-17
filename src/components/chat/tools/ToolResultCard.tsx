@@ -1,5 +1,5 @@
 import { memo, useState } from 'react'
-import type { ToolCall, ApiCallResponse, IssueToolResponse } from './types'
+import type { ToolCall, ApiCallResponse, RecordToolResponse } from './types'
 import { statusConfig, priorityConfig } from '../../../data/mock'
 import { WebSearchCard } from './WebSearchCard'
 
@@ -40,7 +40,7 @@ const CodeIcon = (
   </svg>
 )
 
-const IssueIcon = (
+const RecordIcon = (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <circle cx="12" cy="12" r="9" />
     <path d="M9 12l2 2 4-5" />
@@ -174,17 +174,17 @@ function CodeExecCard({ toolCall }: { toolCall: ToolCall }) {
   )
 }
 
-// --- Issue Tool Card ---
+// --- DatabaseRecord Tool Card ---
 
-function IssueToolCard({ toolCall }: { toolCall: ToolCall }) {
-  const result = toolCall.result?.data as IssueToolResponse | undefined
+function RecordToolCard({ toolCall }: { toolCall: ToolCall }) {
+  const result = toolCall.result?.data as RecordToolResponse | undefined
   const isLoading = toolCall.status === 'pending' || toolCall.status === 'running'
   const actionLabel = toolCall.name
 
   return (
-    <div className="my-2 overflow-hidden rounded-xl border border-border bg-surface" data-testid="issue-tool-result">
+    <div className="my-2 overflow-hidden rounded-xl border border-border bg-surface" data-testid="record-tool-result">
       <div className="flex items-center gap-2 border-b border-border px-3 py-2">
-        <span className="shrink-0 text-accent">{IssueIcon}</span>
+        <span className="shrink-0 text-accent">{RecordIcon}</span>
         <span className="min-w-0 flex-1 text-left text-xs font-medium text-foreground">
           {actionLabel}
         </span>
@@ -205,20 +205,20 @@ function IssueToolCard({ toolCall }: { toolCall: ToolCall }) {
 
       {toolCall.status === 'completed' && result && (
         <div className="divide-y divide-border">
-          {result.issues.length === 0 ? (
+          {result.records.length === 0 ? (
             <div className="px-3 py-3 text-xs text-subtle">No matching records.</div>
           ) : (
-            result.issues.map((issue) => {
-              const status = statusConfig[issue.status]
-              const priority = priorityConfig[issue.priority]
+            result.records.map((record) => {
+              const status = statusConfig[record.status]
+              const priority = priorityConfig[record.priority]
               return (
-                <div key={issue.id} className="px-3 py-2.5">
+                <div key={record.id} className="px-3 py-2.5">
                   <div className="mb-1 flex min-w-0 items-center gap-2">
                     <span className="shrink-0 font-mono text-[10px] text-subtle">
-                      {issue.identifier}
+                      {record.identifier}
                     </span>
                     <span className="truncate text-sm font-medium text-foreground">
-                      {issue.title}
+                      {record.title}
                     </span>
                   </div>
                   <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
@@ -227,8 +227,8 @@ function IssueToolCard({ toolCall }: { toolCall: ToolCall }) {
                       {status.label}
                     </span>
                     <span style={{ color: priority.color }}>{priority.icon} {priority.label}</span>
-                    {issue.assignee && <span>{issue.assignee}</span>}
-                    {issue.labels.slice(0, 3).map((label) => (
+                    {record.assignee && <span>{record.assignee}</span>}
+                    {record.labels.slice(0, 3).map((label) => (
                       <span key={label} className="rounded bg-canvas px-1.5 py-0.5 text-subtle">
                         {label}
                       </span>
@@ -264,13 +264,13 @@ export const ToolResultCard = memo(function ToolResultCard({ toolCall }: ToolRes
       return <ApiCallCard toolCall={toolCall} />
     case 'code_exec':
       return <CodeExecCard toolCall={toolCall} />
-    case 'issue_search':
-    case 'issue_list':
-    case 'issue_get':
-    case 'issue_create':
-    case 'issue_update':
-    case 'issue_move':
-      return <IssueToolCard toolCall={toolCall} />
+    case 'record_search':
+    case 'record_list':
+    case 'record_get':
+    case 'record_create':
+    case 'record_update':
+    case 'record_move':
+      return <RecordToolCard toolCall={toolCall} />
     default:
       return (
         <div className="my-2 px-3 py-2 rounded-xl text-xs border border-border text-subtle">
