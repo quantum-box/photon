@@ -171,7 +171,7 @@ export function createDocumentCollaboration(
   onStatus?: (status: DocumentSyncStatus) => void
 ): DocumentCollaboration {
   const doc = new Y.Doc()
-  const roomId = buildRoomId(appKitConfig.workspace.id, `doc:${docId}`)
+  const roomId = buildRoomId(appKitConfig.workspace.scope, `doc:${docId}`)
   const blocks = doc.getArray<Y.Map<string | boolean>>(appKitConfig.docs.yjsArrayName)
   const fragment = doc.getXmlFragment('document-store')
   const awareness = new Awareness(doc)

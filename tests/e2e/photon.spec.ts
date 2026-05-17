@@ -53,6 +53,44 @@ test.describe('Photon shell', () => {
     await expect(page.getByText('Photon Chat')).toBeVisible()
   })
 
+  test('supports global keyboard shortcuts for fast navigation and creation', async ({ page }) => {
+    await page.goto('/databases')
+
+    await expect(page.getByTestId('open-create-record').locator('kbd').filter({ hasText: 'C' })).toBeVisible()
+    await expect(page.locator('kbd').filter({ hasText: '/' }).first()).toBeVisible()
+
+    await page.keyboard.press('ControlOrMeta+F')
+    await expect(page.getByTestId('records-global-filter')).toBeFocused()
+
+    await page.keyboard.press('Escape')
+    await page.keyboard.press('ControlOrMeta+B')
+    await expect(page).toHaveURL(/view=.*board/)
+    await expect(page.getByText('drag to move')).toBeVisible()
+
+    await page.keyboard.press('g')
+    await page.keyboard.press('c')
+    await expect(page).toHaveURL(/\/chat$/)
+    await expect(page.getByRole('heading', { name: 'Chat', exact: true })).toBeVisible()
+
+    await page.keyboard.press('c')
+    await expect(page).toHaveURL(/\/databases/)
+    await expect(page.getByTestId('create-record-modal')).toBeVisible()
+    await page.keyboard.press('Escape')
+    await expect(page.getByTestId('create-record-modal')).toHaveCount(0)
+
+    await page.keyboard.press('ControlOrMeta+K')
+    await expect(page.getByTestId('keyboard-shortcuts-panel')).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Command Menu' })).toBeVisible()
+    await expect(page.getByTestId('keyboard-shortcuts-panel').locator('kbd').filter({ hasText: 'G' }).first()).toBeVisible()
+    await page.keyboard.press('Escape')
+    await expect(page.getByTestId('keyboard-shortcuts-panel')).toHaveCount(0)
+
+    await page.keyboard.press('Shift+/')
+    await expect(page.getByTestId('keyboard-shortcuts-panel')).toBeVisible()
+    await page.keyboard.press('Escape')
+    await expect(page.getByTestId('keyboard-shortcuts-panel')).toHaveCount(0)
+  })
+
   test('adds database items to the workflow canvas', async ({ page }) => {
     test.setTimeout(90_000)
 

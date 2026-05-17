@@ -1,6 +1,7 @@
 export {
   appKitConfig,
   buildRoomId,
+  buildWorkspaceScope,
   namespacedKey,
   resolveAppServerBackend,
   resolveDeploymentMode,

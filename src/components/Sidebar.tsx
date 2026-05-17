@@ -1,14 +1,15 @@
 import { useNavigate, useRouterState, Link } from '@tanstack/react-router'
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
-import type { FormEvent, MouseEvent as ReactMouseEvent } from 'react'
+import type { ChangeEvent, FormEvent, MouseEvent as ReactMouseEvent } from 'react'
 import type { Status } from '../data/mock'
 import { useDatabaseRecords } from '../contexts/RecordsContext'
 import { useWorkspaceDatabases } from '../contexts/DatabasesContext'
 import { useTheme } from '../contexts/ThemeContext'
 import type { ThemeMode } from '../contexts/ThemeContext'
 import { useConnectionStatus, useSyncPresence } from '../lib/yjs/useYjsRecords'
-import { appKitConfig } from '../app/kitConfig'
+import { appKitConfig, switchTenantWorkspace } from '../app/kitConfig'
+import type { TenantWorkspaceOption } from '../app/kitConfig'
 import {
   getDatabaseViewScopeId,
   getDefaultDatabaseViewId,
@@ -93,6 +94,50 @@ const statusLabels: Record<string, string> = {
   connected: 'Synced',
   connecting: 'Connecting...',
   disconnected: 'Offline',
+}
+
+function tenantWorkspaceValue(option: TenantWorkspaceOption) {
+  return `${option.tenantId}::${option.workspaceId}`
+}
+
+function TenantWorkspaceSwitcher() {
+  const options = appKitConfig.tenancy.availableWorkspaces
+  if (options.length <= 1) return null
+
+  const currentValue = tenantWorkspaceValue({
+    tenantId: appKitConfig.tenant.id,
+    tenantName: appKitConfig.tenant.name,
+    workspaceId: appKitConfig.workspace.id,
+    workspaceName: appKitConfig.workspace.name,
+    workspaceInitial: appKitConfig.workspace.initial,
+  })
+
+  const handleChange = (event: ChangeEvent<HTMLSelectElement>) => {
+    const next = options.find((option) => tenantWorkspaceValue(option) === event.target.value)
+    if (next && tenantWorkspaceValue(next) !== currentValue) {
+      switchTenantWorkspace(next)
+    }
+  }
+
+  return (
+    <div className="border-b border-border px-3 py-2">
+      <label className="block text-[10px] font-semibold uppercase tracking-wider text-subtle">
+        Tenant
+      </label>
+      <select
+        data-testid="tenant-workspace-switcher"
+        className="mt-1 w-full rounded border border-border bg-surface px-2 py-1.5 text-xs text-foreground outline-none focus:border-accent"
+        value={currentValue}
+        onChange={handleChange}
+      >
+        {options.map((option) => (
+          <option key={tenantWorkspaceValue(option)} value={tenantWorkspaceValue(option)}>
+            {option.tenantName} / {option.workspaceName}
+          </option>
+        ))}
+      </select>
+    </div>
+  )
 }
 
 export function Sidebar() {
@@ -340,6 +385,7 @@ export function Sidebar() {
     <>
       <div className="flex shrink-0 flex-col border-b border-border bg-panel md:hidden">
         {workspaceHeader('sync-presence-status-mobile')}
+        <TenantWorkspaceSwitcher />
         <div className="flex gap-1 overflow-x-auto border-b border-border px-2 py-2">
           {databaseFilters}
         </div>
@@ -393,6 +439,7 @@ export function Sidebar() {
             ‹
           </button>
         </div>
+        <TenantWorkspaceSwitcher />
 
       {/* Navigation */}
       <div className="px-2 py-3">

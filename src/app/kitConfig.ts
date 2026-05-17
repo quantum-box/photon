@@ -38,14 +38,31 @@ export interface RecordDefaultsConfig {
   defaultProject: string
 }
 
+export interface TenantWorkspaceOption {
+  tenantId: string
+  tenantName: string
+  workspaceId: string
+  workspaceName: string
+  workspaceInitial: string
+}
+
 export interface AppKitConfig {
   app: {
     id: string
     displayName: string
     storageNamespace: string
   }
+  tenant: {
+    id: string
+    name: string
+  }
+  tenancy: {
+    availableWorkspaces: TenantWorkspaceOption[]
+    selectionStorageKey: string
+  }
   workspace: {
     id: string
+    scope: string
     name: string
     initial: string
     primaryNav: Array<{ id: string; label: string; icon: string }>
@@ -97,7 +114,9 @@ export interface AppKitConfig {
      * It is intentionally separate from Photon Engine durable mutation sync.
      */
     backend: SyncBackend
+    tenantId: string
     workspaceId: string
+    workspaceScope: string
     recordsRoomId: string
     yjsArrayName: string
     databasesArrayName: string
@@ -188,20 +207,122 @@ export function namespacedKey(namespace: string, suffix: string): string {
 }
 
 /**
- * Build a sync relay room id following the convention recorded in
- * ADR-0001: `workspace:{workspaceId}:{surface}`.
+ * Build a tenant-scoped workspace id for durable Photon Engine records and
+ * realtime Photon Live rooms.
+ */
+export function buildWorkspaceScope(tenantId: string, workspaceId: string): string {
+  return `tenant:${tenantId}:workspace:${workspaceId}`
+}
+
+function namespacedDataDir(base: string, workspaceScope: string): string {
+  return `${base}-${workspaceScope.replace(/[^a-zA-Z0-9_-]/g, '-')}`
+}
+
+/**
+ * Build a sync relay room id following the multi-tenant convention
+ * `tenant:{tenantId}:workspace:{workspaceId}:{surface}`.
  *
  * `surface` is the in-workspace collection name. For composite surfaces such
  * as `doc:{docId}` or `chat:{threadId}`, callers pass the full segment, e.g.
- * `buildRoomId(ws, 'doc:42')`.
+ * `buildRoomId(scope, 'doc:42')`.
  */
-export function buildRoomId(workspaceId: string, surface: string): string {
-  return `workspace:${workspaceId}:${surface}`
+export function buildRoomId(workspaceScope: string, surface: string): string {
+  return `${workspaceScope}:${surface}`
 }
 
 function appendRoomQuery(base: string, roomId: string): string {
   const separator = base.includes('?') ? '&' : '?'
   return `${base}${separator}room=${roomId}`
+}
+
+function normalizeInitial(value: string | undefined, fallback: string): string {
+  const trimmed = value?.trim()
+  if (trimmed) return trimmed.slice(0, 1).toUpperCase()
+  return fallback.slice(0, 1).toUpperCase() || 'P'
+}
+
+function normalizeTenantWorkspaceOption(
+  value: Partial<TenantWorkspaceOption>,
+  fallback: TenantWorkspaceOption
+): TenantWorkspaceOption {
+  const tenantId = value.tenantId?.trim() || fallback.tenantId
+  const workspaceId = value.workspaceId?.trim() || fallback.workspaceId
+  const tenantName = value.tenantName?.trim() || tenantId
+  const workspaceName = value.workspaceName?.trim() || workspaceId
+  return {
+    tenantId,
+    tenantName,
+    workspaceId,
+    workspaceName,
+    workspaceInitial: normalizeInitial(value.workspaceInitial, workspaceName),
+  }
+}
+
+export function resolveTenantWorkspaceOptions(
+  rawValue: string | undefined,
+  fallback: TenantWorkspaceOption
+): TenantWorkspaceOption[] {
+  if (!rawValue?.trim()) return [fallback]
+
+  try {
+    const parsed = JSON.parse(rawValue) as unknown
+    if (!Array.isArray(parsed)) return [fallback]
+    const options = parsed
+      .filter((value): value is Partial<TenantWorkspaceOption> =>
+        Boolean(value && typeof value === 'object')
+      )
+      .map((value) => normalizeTenantWorkspaceOption(value, fallback))
+    return options.length > 0 ? options : [fallback]
+  } catch {
+    return [fallback]
+  }
+}
+
+export function resolveTenantWorkspaceSelection(
+  options: TenantWorkspaceOption[],
+  tenantId: string | undefined,
+  workspaceId: string | undefined
+): TenantWorkspaceOption {
+  const fallback = options[0]
+  return options.find((option) =>
+    option.tenantId === tenantId && option.workspaceId === workspaceId
+  ) ?? fallback
+}
+
+function browserSelection(storageKey: string): { tenantId?: string; workspaceId?: string } {
+  if (typeof window === 'undefined') return {}
+
+  const url = new URL(window.location.href)
+  const fromUrl = {
+    tenantId: url.searchParams.get('tenant_id') ?? undefined,
+    workspaceId: url.searchParams.get('workspace_id') ?? undefined,
+  }
+  if (fromUrl.tenantId || fromUrl.workspaceId) return fromUrl
+
+  try {
+    const stored = window.localStorage.getItem(storageKey)
+    if (!stored) return {}
+    const parsed = JSON.parse(stored) as { tenantId?: string; workspaceId?: string }
+    return {
+      tenantId: parsed.tenantId,
+      workspaceId: parsed.workspaceId,
+    }
+  } catch {
+    return {}
+  }
+}
+
+export function switchTenantWorkspace(option: TenantWorkspaceOption): void {
+  if (typeof window === 'undefined') return
+
+  window.localStorage.setItem(
+    appKitConfig.tenancy.selectionStorageKey,
+    JSON.stringify({ tenantId: option.tenantId, workspaceId: option.workspaceId })
+  )
+  const url = new URL(window.location.href)
+  url.searchParams.set('tenant_id', option.tenantId)
+  url.searchParams.set('workspace_id', option.workspaceId)
+  window.location.assign(url)
 }
 
 export function buildSyncWebsocketPath(roomId: string): string {
@@ -224,18 +345,60 @@ const appProfile = {
   displayName: 'Photon',
   storageNamespace: 'photon',
 } as const
+const DEFAULT_TENANT_ID = 'photon'
 const DEFAULT_WORKSPACE_ID = 'photon-default'
-const recordsRoomId = buildRoomId(DEFAULT_WORKSPACE_ID, 'records')
+const tenantSelectionStorageKey = namespacedKey(appProfile.storageNamespace, 'tenant-workspace')
+const defaultTenantWorkspace = normalizeTenantWorkspaceOption(
+  {
+    tenantId: viteEnv.VITE_PHOTON_TENANT_ID ?? DEFAULT_TENANT_ID,
+    tenantName: viteEnv.VITE_PHOTON_TENANT_NAME ?? 'Photon',
+    workspaceId: viteEnv.VITE_PHOTON_WORKSPACE_ID ?? DEFAULT_WORKSPACE_ID,
+    workspaceName: viteEnv.VITE_PHOTON_WORKSPACE_NAME ?? 'Photon',
+    workspaceInitial: viteEnv.VITE_PHOTON_WORKSPACE_INITIAL,
+  },
+  {
+    tenantId: DEFAULT_TENANT_ID,
+    tenantName: 'Photon',
+    workspaceId: DEFAULT_WORKSPACE_ID,
+    workspaceName: 'Photon',
+    workspaceInitial: 'P',
+  }
+)
+const availableTenantWorkspaces = resolveTenantWorkspaceOptions(
+  viteEnv.VITE_PHOTON_TENANT_WORKSPACES,
+  defaultTenantWorkspace
+)
+const requestedTenantWorkspace = browserSelection(tenantSelectionStorageKey)
+const selectedTenantWorkspace = resolveTenantWorkspaceSelection(
+  availableTenantWorkspaces,
+  requestedTenantWorkspace.tenantId,
+  requestedTenantWorkspace.workspaceId
+)
+const tenantId = selectedTenantWorkspace.tenantId
+const tenantName = selectedTenantWorkspace.tenantName
+const workspaceId = selectedTenantWorkspace.workspaceId
+const workspaceName = selectedTenantWorkspace.workspaceName
+const workspaceScope = buildWorkspaceScope(tenantId, workspaceId)
+const recordsRoomId = buildRoomId(workspaceScope, 'records')
 const syncWebsocketPath = appendRoomQuery('/ws', recordsRoomId)
 const websocketBaseUrl = viteEnv.VITE_PHOTON_SYNC_WS_URL
 const chatStreamEndpoint = viteEnv.VITE_PHOTON_AGENT_STREAM_URL ?? '/api/agent/chat/stream'
 
 export const appKitConfig: AppKitConfig = {
   app: appProfile,
+  tenant: {
+    id: tenantId,
+    name: tenantName,
+  },
+  tenancy: {
+    availableWorkspaces: availableTenantWorkspaces,
+    selectionStorageKey: tenantSelectionStorageKey,
+  },
   workspace: {
-    id: DEFAULT_WORKSPACE_ID,
-    name: 'Photon',
-    initial: 'P',
+    id: workspaceId,
+    scope: workspaceScope,
+    name: workspaceName,
+    initial: selectedTenantWorkspace.workspaceInitial,
     primaryNav: [
       { id: 'my-records', label: 'My Records', icon: '👤' },
       { id: 'all-records', label: 'All Records', icon: '📋' },
@@ -255,7 +418,7 @@ export const appKitConfig: AppKitConfig = {
   },
   workflows: {
     defaultWorkflowId: 'default-record-workflow',
-    pgliteDataDir: 'idb://photon-workflows',
+    pgliteDataDir: namespacedDataDir('idb://photon-workflows', workspaceScope),
     definitions: [
       {
         id: 'default-record-workflow',
@@ -324,12 +487,12 @@ export const appKitConfig: AppKitConfig = {
     },
   },
   docs: {
-    pgliteDataDir: 'idb://photon-docs',
+    pgliteDataDir: namespacedDataDir('idb://photon-docs', workspaceScope),
     defaultTitle: 'Untitled doc',
     yjsArrayName: 'blocks',
   },
   engine: {
-    pgliteDataDir: 'idb://photon-engine',
+    pgliteDataDir: namespacedDataDir('idb://photon-engine', workspaceScope),
     pushPath: '/api/engine/push',
     pullPath: '/api/engine/pull',
   },
@@ -343,7 +506,9 @@ export const appKitConfig: AppKitConfig = {
   },
   sync: {
     backend: syncBackend,
-    workspaceId: DEFAULT_WORKSPACE_ID,
+    tenantId,
+    workspaceId,
+    workspaceScope,
     recordsRoomId,
     yjsArrayName: 'records',
     databasesArrayName: 'databases',

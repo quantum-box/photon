@@ -150,7 +150,7 @@ describe('RecordsProvider server-accepted projection', () => {
     mocks.deleteServerRecord.mockReset()
   })
 
-  it('does not write created records into Yjs until the server accepts them', async () => {
+  it('writes created records optimistically and replaces them with the server version', async () => {
     const create = deferred<DatabaseRecord>()
     mocks.createServerRecord.mockReturnValue(create.promise)
     const createData: CreateRecordData = {
@@ -165,17 +165,43 @@ describe('RecordsProvider server-accepted projection', () => {
     )
 
     await waitFor(() => expect(mocks.createServerRecord).toHaveBeenCalled())
-    expect(mocks.transact).not.toHaveBeenCalled()
-    expect(mocks.recordsArray.length).toBe(0)
+    expect(mocks.recordsArray.length).toBe(1)
+    expect(mocks.recordsArray.get(0).get('id')).toContain('optimistic-record-')
+    expect(mocks.recordsArray.get(0).get('title')).toBe(createData.title)
 
     await act(async () => {
       create.resolve(serverDatabaseRecord)
       await create.promise
     })
 
-    expect(mocks.transact).toHaveBeenCalledTimes(1)
+    expect(mocks.transact).toHaveBeenCalledTimes(2)
     expect(mocks.recordsArray.length).toBe(1)
     expect(mocks.recordsArray.get(0).get('id')).toBe(serverDatabaseRecord.id)
+  })
+
+  it('removes the optimistic created record when persistence fails', async () => {
+    const create = deferred<DatabaseRecord>()
+    mocks.createServerRecord.mockReturnValue(create.promise)
+
+    render(
+      <RecordsProvider>
+        <Probe
+          action={(context) => {
+            void context.handleCreateRecord({ title: 'Rejected record' }).catch(() => undefined)
+          }}
+        />
+      </RecordsProvider>
+    )
+
+    await waitFor(() => expect(mocks.createServerRecord).toHaveBeenCalled())
+    expect(mocks.recordsArray.length).toBe(1)
+
+    await act(async () => {
+      create.reject(new Error('failed'))
+      await create.promise.catch(() => undefined)
+    })
+
+    expect(mocks.recordsArray.length).toBe(0)
   })
 
   it('does not patch Yjs until the server returns the accepted record version', async () => {

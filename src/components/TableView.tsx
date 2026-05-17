@@ -21,6 +21,7 @@ import {
   priorityConfig,
   mockUsers,
 } from '../data/mock'
+import { Kbd, KbdGroup } from './Kbd'
 import type { RecordPropertyKey } from '../lib/databaseViews/types'
 
 interface TableViewProps {
@@ -674,12 +675,20 @@ export function TableView({
       <div className="flex items-center gap-2 px-3 py-2 md:gap-3 md:px-4 border-b border-border shrink-0">
         <div className="relative flex-1 min-w-0 md:max-w-xs">
           <input
+            data-testid="records-global-filter"
             type="text"
             placeholder="Filter records..."
             value={globalFilter}
             onChange={(e) => setGlobalFilter(e.target.value)}
-            className="w-full px-3 py-1.5 rounded text-sm outline-none bg-surface border border-border text-foreground"
+            className="w-full rounded border border-border bg-surface py-1.5 pl-3 pr-24 text-sm text-foreground outline-none"
           />
+          <div className="pointer-events-none absolute inset-y-0 right-2 flex items-center gap-1">
+            <Kbd>/</Kbd>
+            <KbdGroup className="hidden sm:inline-flex">
+              <Kbd>{/Mac|iPhone|iPad|iPod/.test(navigator.platform) ? '⌘' : 'Ctrl'}</Kbd>
+              <Kbd>F</Kbd>
+            </KbdGroup>
+          </div>
         </div>
         <span className="shrink-0 text-xs text-subtle">
           {rows.length} records
