@@ -34,6 +34,10 @@ describe('client Photon Engine', () => {
 
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
       const body = JSON.parse(String(init?.body))
+      expect(body.scope).toBe('tenant:photon:workspace:photon-default')
+      expect(body.operations.every((operation: { key: { scope: string } }) =>
+        operation.key.scope === body.scope
+      )).toBe(true)
       return new Response(JSON.stringify({
         decisions: body.operations.map((operation: { id: string }, index: number) => ({
           type: 'accepted',

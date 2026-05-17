@@ -416,6 +416,7 @@ pub struct HealthResponse {
 pub struct ListParams {
     pub limit: Option<i64>,
     pub offset: Option<i64>,
+    pub tenant_id: Option<String>,
     pub workspace_id: Option<String>,
     pub surface_type: Option<String>,
     pub surface_id: Option<String>,
@@ -458,8 +459,8 @@ fn parse_preview_metadata(raw: &str) -> serde_json::Value {
 }
 
 const DEFAULT_WORKSPACE_ID: &str = "photon-default";
+const DEFAULT_TENANT_ID: &str = "photon";
 const DEFAULT_CHAT_THREAD_ID: &str = "general";
-const ENGINE_SCOPE_ID: &str = "workspace:photon-default";
 const ENGINE_ACTOR_ID: &str = "photon-server";
 const ENGINE_YJS_COLLECTION: &str = "yjs_documents";
 const ENGINE_YJS_UPDATE_FORMAT: &str = "yjs-update-v1";
@@ -475,16 +476,36 @@ enum EngineRecordMutation {
     Delete,
 }
 
+fn default_workspace_scope() -> ScopeId {
+    workspace_scope(DEFAULT_TENANT_ID, DEFAULT_WORKSPACE_ID)
+}
+
+fn workspace_scope(tenant_id: &str, workspace_id: &str) -> ScopeId {
+    ScopeId::from(format!("tenant:{tenant_id}:workspace:{workspace_id}"))
+}
+
+fn normalized_tenant_id(value: Option<String>) -> String {
+    normalize_optional_text(value).unwrap_or_else(|| DEFAULT_TENANT_ID.into())
+}
+
+fn normalized_workspace_id(value: Option<String>) -> String {
+    normalize_optional_text(value).unwrap_or_else(|| DEFAULT_WORKSPACE_ID.into())
+}
+
+fn engine_record_key_for_scope(
+    scope: impl Into<ScopeId>,
+    collection: &str,
+    record_id: &str,
+) -> RecordKey {
+    RecordKey::new(scope, CollectionName::from(collection), record_id)
+}
+
 fn engine_record_key(collection: &str, record_id: &str) -> RecordKey {
-    RecordKey::new(
-        ScopeId::from(ENGINE_SCOPE_ID),
-        CollectionName::from(collection),
-        record_id,
-    )
+    engine_record_key_for_scope(default_workspace_scope(), collection, record_id)
 }
 
 fn engine_yjs_snapshot_key(room_id: &str) -> RecordKey {
-    engine_record_key(ENGINE_YJS_COLLECTION, room_id)
+    engine_record_key_for_scope(default_workspace_scope(), ENGINE_YJS_COLLECTION, room_id)
 }
 
 fn value_to_patch_fields(
@@ -498,10 +519,12 @@ fn value_to_patch_fields(
 
 async fn apply_engine_record_operation(
     state: &AppState,
+    scope: impl Into<ScopeId>,
     collection: &str,
     record_id: &str,
     mutation: EngineRecordMutation,
 ) -> Result<(), AppError> {
+    let scope = scope.into();
     let kind = match mutation {
         EngineRecordMutation::Upsert(value) => OperationKind::Upsert { value },
         EngineRecordMutation::Patch(value) => OperationKind::Patch {
@@ -511,7 +534,7 @@ async fn apply_engine_record_operation(
     };
     let actor_id = ActorId::from(ENGINE_ACTOR_ID);
     let operation = Operation::new(
-        engine_record_key(collection, record_id),
+        engine_record_key_for_scope(scope.clone(), collection, record_id),
         actor_id.clone(),
         kind,
     )
@@ -523,7 +546,7 @@ async fn apply_engine_record_operation(
         .engine
         .apply_remote_operation(operation.clone(), remote_sequence)
         .await?;
-    mirror_operation_to_mock_tachyon(operation);
+    mirror_operation_to_mock_tachyon(scope, operation);
 
     Ok(())
 }
@@ -545,13 +568,13 @@ fn mock_tachyon_sync_url() -> Option<String> {
     }
 }
 
-fn mirror_operation_to_mock_tachyon(operation: Operation) {
+fn mirror_operation_to_mock_tachyon(scope: ScopeId, operation: Operation) {
     let Some(base_url) = mock_tachyon_sync_url() else {
         return;
     };
 
     tokio::spawn(async move {
-        if let Err(error) = post_mock_tachyon_push(&base_url, operation).await {
+        if let Err(error) = post_mock_tachyon_push(&base_url, scope, operation).await {
             tracing::debug!(%error, %base_url, "mock Tachyon mirror sync skipped");
         }
     });
@@ -559,6 +582,7 @@ fn mirror_operation_to_mock_tachyon(operation: Operation) {
 
 async fn post_mock_tachyon_push(
     base_url: &str,
+    scope: ScopeId,
     operation: Operation,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let host = base_url
@@ -568,7 +592,7 @@ async fn post_mock_tachyon_push(
         .ok_or("PHOTON_MOCK_TACHYON_SYNC_URL must be an http:// URL")?;
     let host = host.split('/').next().unwrap_or(host);
     let body = serde_json::to_vec(&serde_json::json!({
-        "scope": ENGINE_SCOPE_ID,
+        "scope": scope,
         "operations": [operation],
         "cursor": null
     }))?;
@@ -601,6 +625,7 @@ fn issue_to_engine_value(issue: &Issue) -> Result<serde_json::Value, AppError> {
 async fn upsert_issue_engine_projection(state: &AppState, issue: &Issue) -> Result<(), AppError> {
     apply_engine_record_operation(
         state,
+        default_workspace_scope(),
         "issues",
         &issue.id,
         EngineRecordMutation::Upsert(issue_to_engine_value(issue)?),
@@ -611,6 +636,7 @@ async fn upsert_issue_engine_projection(state: &AppState, issue: &Issue) -> Resu
 async fn patch_issue_engine_projection(state: &AppState, issue: &Issue) -> Result<(), AppError> {
     apply_engine_record_operation(
         state,
+        default_workspace_scope(),
         "issues",
         &issue.id,
         EngineRecordMutation::Patch(issue_to_engine_value(issue)?),
@@ -619,7 +645,14 @@ async fn patch_issue_engine_projection(state: &AppState, issue: &Issue) -> Resul
 }
 
 async fn delete_issue_engine_projection(state: &AppState, issue_id: &str) -> Result<(), AppError> {
-    apply_engine_record_operation(state, "issues", issue_id, EngineRecordMutation::Delete).await
+    apply_engine_record_operation(
+        state,
+        default_workspace_scope(),
+        "issues",
+        issue_id,
+        EngineRecordMutation::Delete,
+    )
+    .await
 }
 
 fn default_document_title() -> String {
@@ -660,13 +693,14 @@ async fn fetch_document_from_engine(
 
 async fn list_documents_from_engine(
     state: &AppState,
+    tenant_id: &str,
     workspace_id: &str,
 ) -> Result<Vec<DocumentMetadata>, AppError> {
     let mut documents = state
         .engine
         .storage()
         .list_records(
-            &ScopeId::from(ENGINE_SCOPE_ID),
+            &workspace_scope(tenant_id, workspace_id),
             &CollectionName::from("documents"),
         )
         .await?
@@ -692,6 +726,7 @@ async fn upsert_document_engine_projection(
 ) -> Result<(), AppError> {
     apply_engine_record_operation(
         state,
+        workspace_scope(DEFAULT_TENANT_ID, &document.workspace_id),
         "documents",
         &document.id,
         EngineRecordMutation::Upsert(document_to_engine_value(document)?),
@@ -705,6 +740,7 @@ async fn patch_document_engine_projection(
 ) -> Result<(), AppError> {
     apply_engine_record_operation(
         state,
+        workspace_scope(DEFAULT_TENANT_ID, &document.workspace_id),
         "documents",
         &document.id,
         EngineRecordMutation::Patch(document_to_engine_value(document)?),
@@ -718,6 +754,7 @@ async fn delete_document_engine_projection(
 ) -> Result<(), AppError> {
     apply_engine_record_operation(
         state,
+        default_workspace_scope(),
         "documents",
         document_id,
         EngineRecordMutation::Delete,
@@ -831,6 +868,7 @@ async fn upsert_attachment_link_engine_projection(
 ) -> Result<(), AppError> {
     apply_engine_record_operation(
         state,
+        default_workspace_scope(),
         "attachment_links",
         &link.id,
         EngineRecordMutation::Upsert(attachment_link_to_engine_value(link)?),
@@ -844,6 +882,7 @@ async fn delete_attachment_link_engine_projection(
 ) -> Result<(), AppError> {
     apply_engine_record_operation(
         state,
+        default_workspace_scope(),
         "attachment_links",
         link_id,
         EngineRecordMutation::Delete,
@@ -857,6 +896,7 @@ async fn upsert_attachment_engine_projection(
 ) -> Result<(), AppError> {
     apply_engine_record_operation(
         state,
+        workspace_scope(DEFAULT_TENANT_ID, &attachment.workspace_id),
         "attachments",
         &attachment.id,
         EngineRecordMutation::Upsert(attachment_to_engine_value(attachment)?),
@@ -876,6 +916,7 @@ async fn patch_attachment_engine_projection(
 ) -> Result<(), AppError> {
     apply_engine_record_operation(
         state,
+        workspace_scope(DEFAULT_TENANT_ID, &attachment.workspace_id),
         "attachments",
         &attachment.id,
         EngineRecordMutation::Patch(attachment_to_engine_value(attachment)?),
@@ -895,6 +936,7 @@ async fn delete_attachment_engine_projection(
 ) -> Result<(), AppError> {
     apply_engine_record_operation(
         state,
+        workspace_scope(DEFAULT_TENANT_ID, &attachment.workspace_id),
         "attachments",
         &attachment.id,
         EngineRecordMutation::Delete,
@@ -958,6 +1000,7 @@ async fn fetch_chat_message_from_engine(
 
 async fn list_chat_messages_from_engine(
     state: &AppState,
+    tenant_id: &str,
     workspace_id: &str,
     thread_id: &str,
 ) -> Result<Vec<ChatMessageRecord>, AppError> {
@@ -965,7 +1008,7 @@ async fn list_chat_messages_from_engine(
         .engine
         .storage()
         .list_records(
-            &ScopeId::from(ENGINE_SCOPE_ID),
+            &workspace_scope(tenant_id, workspace_id),
             &CollectionName::from("chat_messages"),
         )
         .await?
@@ -989,6 +1032,7 @@ async fn upsert_chat_message_engine_projection(
 ) -> Result<(), AppError> {
     apply_engine_record_operation(
         state,
+        workspace_scope(DEFAULT_TENANT_ID, &message.workspace_id),
         "chat_messages",
         &message.id,
         EngineRecordMutation::Upsert(chat_message_to_engine_value(message)?),
@@ -1002,6 +1046,7 @@ async fn patch_chat_message_engine_projection(
 ) -> Result<(), AppError> {
     apply_engine_record_operation(
         state,
+        workspace_scope(DEFAULT_TENANT_ID, &message.workspace_id),
         "chat_messages",
         &message.id,
         EngineRecordMutation::Patch(chat_message_to_engine_value(message)?),
@@ -1015,6 +1060,7 @@ async fn delete_chat_message_engine_projection(
 ) -> Result<(), AppError> {
     apply_engine_record_operation(
         state,
+        default_workspace_scope(),
         "chat_messages",
         message_id,
         EngineRecordMutation::Delete,
@@ -1052,6 +1098,7 @@ async fn fetch_tool_call_from_engine(
 
 async fn list_tool_calls_from_engine(
     state: &AppState,
+    tenant_id: &str,
     workspace_id: &str,
     thread_id: Option<&str>,
     message_id: Option<&str>,
@@ -1060,7 +1107,7 @@ async fn list_tool_calls_from_engine(
         .engine
         .storage()
         .list_records(
-            &ScopeId::from(ENGINE_SCOPE_ID),
+            &workspace_scope(tenant_id, workspace_id),
             &CollectionName::from("tool_calls"),
         )
         .await?
@@ -1091,6 +1138,7 @@ async fn upsert_tool_call_engine_projection(
 ) -> Result<(), AppError> {
     apply_engine_record_operation(
         state,
+        workspace_scope(DEFAULT_TENANT_ID, &tool_call.workspace_id),
         "tool_calls",
         &tool_call.id,
         EngineRecordMutation::Upsert(tool_call_to_engine_value(tool_call)?),
@@ -1104,6 +1152,7 @@ async fn patch_tool_call_engine_projection(
 ) -> Result<(), AppError> {
     apply_engine_record_operation(
         state,
+        workspace_scope(DEFAULT_TENANT_ID, &tool_call.workspace_id),
         "tool_calls",
         &tool_call.id,
         EngineRecordMutation::Patch(tool_call_to_engine_value(tool_call)?),
@@ -1117,6 +1166,7 @@ async fn delete_tool_call_engine_projection(
 ) -> Result<(), AppError> {
     apply_engine_record_operation(
         state,
+        default_workspace_scope(),
         "tool_calls",
         tool_call_id,
         EngineRecordMutation::Delete,
@@ -1778,8 +1828,11 @@ fn count_status(counts: &mut EngineOperationCounts, status: &OperationStatus) {
 )]
 async fn engine_debug_state(
     State(state): State<Arc<AppState>>,
+    Query(params): Query<ListParams>,
 ) -> Result<Json<EngineDebugState>, AppError> {
-    let scope = ScopeId::from(ENGINE_SCOPE_ID);
+    let tenant_id = normalized_tenant_id(params.tenant_id);
+    let workspace_id = normalized_workspace_id(params.workspace_id);
+    let scope = workspace_scope(&tenant_id, &workspace_id);
     let operations = state
         .engine
         .storage()
@@ -1845,7 +1898,7 @@ async fn engine_debug_state(
 
     Ok(Json(EngineDebugState {
         role: "photon-engine-authority".to_owned(),
-        scope: ENGINE_SCOPE_ID.to_owned(),
+        scope: scope.to_string(),
         remote: ENGINE_ACTOR_ID.to_owned(),
         next_remote_sequence: state.engine_next_seq.load(Ordering::SeqCst) + 1,
         cursor_position: cursor.map(|cursor| cursor.position),
@@ -2081,8 +2134,9 @@ async fn list_documents(
     let workspace_id = params
         .workspace_id
         .unwrap_or_else(|| DEFAULT_WORKSPACE_ID.into());
+    let tenant_id = normalized_tenant_id(params.tenant_id);
 
-    let documents = list_documents_from_engine(&state, &workspace_id).await?;
+    let documents = list_documents_from_engine(&state, &tenant_id, &workspace_id).await?;
     let total = documents.len() as i64;
     let documents = documents.into_iter().skip(offset).take(limit).collect();
 
@@ -2555,8 +2609,10 @@ async fn list_chat_messages(
     let workspace_id = params
         .workspace_id
         .unwrap_or_else(|| DEFAULT_WORKSPACE_ID.into());
+    let tenant_id = normalized_tenant_id(params.tenant_id);
     let thread_id = normalize_thread_id(params.thread_id);
-    let messages = list_chat_messages_from_engine(&state, &workspace_id, &thread_id).await?;
+    let messages =
+        list_chat_messages_from_engine(&state, &tenant_id, &workspace_id, &thread_id).await?;
     let total = messages.len() as i64;
     let messages = messages.into_iter().skip(offset).take(limit).collect();
     Ok(Json(ChatMessageListResponse { messages, total }))
@@ -2660,6 +2716,7 @@ async fn delete_chat_message(
         .ok_or(AppError::NotFound)?;
     let tool_calls = list_tool_calls_from_engine(
         &state,
+        DEFAULT_TENANT_ID,
         &message.workspace_id,
         Some(&message.thread_id),
         Some(&message.id),
@@ -2695,10 +2752,12 @@ async fn list_tool_calls(
     let workspace_id = params
         .workspace_id
         .unwrap_or_else(|| DEFAULT_WORKSPACE_ID.into());
+    let tenant_id = normalized_tenant_id(params.tenant_id);
     let thread_id = params.thread_id.as_deref();
     let message_id = params.message_id.as_deref();
     let tool_calls =
-        list_tool_calls_from_engine(&state, &workspace_id, thread_id, message_id).await?;
+        list_tool_calls_from_engine(&state, &tenant_id, &workspace_id, thread_id, message_id)
+            .await?;
     let total = tool_calls.len() as i64;
     let tool_calls = tool_calls.into_iter().skip(offset).take(limit).collect();
     Ok(Json(ToolCallListResponse { tool_calls, total }))
@@ -3692,7 +3751,7 @@ mod tests {
                     .header("content-type", "application/json")
                     .body(Body::from(
                         serde_json::to_string(&PushRequest {
-                            scope: ScopeId::from(ENGINE_SCOPE_ID),
+                            scope: default_workspace_scope(),
                             operations: vec![operation.clone()],
                             cursor: None,
                         })
@@ -3724,7 +3783,7 @@ mod tests {
                     .header("content-type", "application/json")
                     .body(Body::from(
                         serde_json::to_string(&PullRequest {
-                            scope: ScopeId::from(ENGINE_SCOPE_ID),
+                            scope: default_workspace_scope(),
                             cursor: None,
                         })
                         .unwrap(),
@@ -3767,7 +3826,7 @@ mod tests {
                     .header("content-type", "application/json")
                     .body(Body::from(
                         serde_json::to_string(&PushRequest {
-                            scope: ScopeId::from(ENGINE_SCOPE_ID),
+                            scope: default_workspace_scope(),
                             operations: vec![operation.clone()],
                             cursor: None,
                         })
@@ -3801,6 +3860,74 @@ mod tests {
             operation.id.to_string()
         );
         assert_eq!(debug.recent_operations[0].remote_sequence, Some(1));
+    }
+
+    #[tokio::test]
+    async fn test_engine_debug_endpoint_is_tenant_workspace_scoped() {
+        let (app, _) = engine_test_app().await;
+        let acme_scope = workspace_scope("acme", "roadmap");
+        let globex_scope = workspace_scope("globex", "roadmap");
+        let acme_operation = Operation::new(
+            engine_record_key_for_scope(acme_scope.clone(), "issues", "issue-acme-1"),
+            ActorId::from("client-acme"),
+            OperationKind::Upsert {
+                value: serde_json::json!({ "id": "issue-acme-1", "title": "Acme roadmap" }),
+            },
+        );
+        let globex_operation = Operation::new(
+            engine_record_key_for_scope(globex_scope, "issues", "issue-globex-1"),
+            ActorId::from("client-globex"),
+            OperationKind::Upsert {
+                value: serde_json::json!({ "id": "issue-globex-1", "title": "Globex roadmap" }),
+            },
+        );
+
+        for (scope, operation) in [
+            (acme_scope.clone(), acme_operation.clone()),
+            (workspace_scope("globex", "roadmap"), globex_operation),
+        ] {
+            let resp = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/engine/push")
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            serde_json::to_string(&PushRequest {
+                                scope,
+                                operations: vec![operation],
+                                cursor: None,
+                            })
+                            .unwrap(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::OK);
+        }
+
+        let debug_resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/engine/debug?tenant_id=acme&workspace_id=roadmap")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(debug_resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(debug_resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let debug: EngineDebugState = serde_json::from_slice(&body).unwrap();
+        assert_eq!(debug.scope, acme_scope.to_string());
+        assert_eq!(debug.counts.accepted, 1);
+        assert_eq!(
+            debug.recent_operations[0].operation_id,
+            acme_operation.id.to_string()
+        );
     }
 
     #[test]
@@ -3902,7 +4029,7 @@ mod tests {
             .engine
             .storage()
             .list_operations(photon_engine::OperationFilter {
-                scope: Some(ScopeId::from(ENGINE_SCOPE_ID)),
+                scope: Some(default_workspace_scope()),
                 collection: Some(CollectionName::from("issues")),
                 status: Some(photon_engine::OperationStatus::Accepted),
                 ..photon_engine::OperationFilter::default()
@@ -3942,6 +4069,7 @@ mod tests {
 
         apply_engine_record_operation(
             &state,
+            default_workspace_scope(),
             "documents",
             "doc-1",
             EngineRecordMutation::Upsert(serde_json::json!({
@@ -3953,6 +4081,7 @@ mod tests {
         .unwrap();
         apply_engine_record_operation(
             &state,
+            default_workspace_scope(),
             "documents",
             "doc-1",
             EngineRecordMutation::Patch(serde_json::json!({
@@ -4060,7 +4189,7 @@ mod tests {
             .engine
             .storage()
             .list_operations(photon_engine::OperationFilter {
-                scope: Some(ScopeId::from(ENGINE_SCOPE_ID)),
+                scope: Some(default_workspace_scope()),
                 collection: Some(CollectionName::from("documents")),
                 status: Some(photon_engine::OperationStatus::Accepted),
                 ..photon_engine::OperationFilter::default()

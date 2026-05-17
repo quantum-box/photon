@@ -44,8 +44,13 @@ export interface AppKitConfig {
     displayName: string
     storageNamespace: string
   }
+  tenant: {
+    id: string
+    name: string
+  }
   workspace: {
     id: string
+    scope: string
     name: string
     initial: string
     primaryNav: Array<{ id: string; label: string; icon: string }>
@@ -97,7 +102,9 @@ export interface AppKitConfig {
      * It is intentionally separate from Photon Engine durable mutation sync.
      */
     backend: SyncBackend
+    tenantId: string
     workspaceId: string
+    workspaceScope: string
     recordsRoomId: string
     yjsArrayName: string
     databasesArrayName: string
@@ -188,15 +195,27 @@ export function namespacedKey(namespace: string, suffix: string): string {
 }
 
 /**
- * Build a sync relay room id following the convention recorded in
- * ADR-0001: `workspace:{workspaceId}:{surface}`.
+ * Build a tenant-scoped workspace id for durable Photon Engine records and
+ * realtime Photon Live rooms.
+ */
+export function buildWorkspaceScope(tenantId: string, workspaceId: string): string {
+  return `tenant:${tenantId}:workspace:${workspaceId}`
+}
+
+function namespacedDataDir(base: string, workspaceScope: string): string {
+  return `${base}-${workspaceScope.replace(/[^a-zA-Z0-9_-]/g, '-')}`
+}
+
+/**
+ * Build a sync relay room id following the multi-tenant convention
+ * `tenant:{tenantId}:workspace:{workspaceId}:{surface}`.
  *
  * `surface` is the in-workspace collection name. For composite surfaces such
  * as `doc:{docId}` or `chat:{threadId}`, callers pass the full segment, e.g.
- * `buildRoomId(ws, 'doc:42')`.
+ * `buildRoomId(scope, 'doc:42')`.
  */
-export function buildRoomId(workspaceId: string, surface: string): string {
-  return `workspace:${workspaceId}:${surface}`
+export function buildRoomId(workspaceScope: string, surface: string): string {
+  return `${workspaceScope}:${surface}`
 }
 
 function appendRoomQuery(base: string, roomId: string): string {
@@ -224,17 +243,28 @@ const appProfile = {
   displayName: 'Photon',
   storageNamespace: 'photon',
 } as const
+const DEFAULT_TENANT_ID = 'photon'
 const DEFAULT_WORKSPACE_ID = 'photon-default'
-const recordsRoomId = buildRoomId(DEFAULT_WORKSPACE_ID, 'records')
+const tenantId = viteEnv.VITE_PHOTON_TENANT_ID ?? DEFAULT_TENANT_ID
+const tenantName = viteEnv.VITE_PHOTON_TENANT_NAME ?? 'Photon'
+const workspaceId = viteEnv.VITE_PHOTON_WORKSPACE_ID ?? DEFAULT_WORKSPACE_ID
+const workspaceName = viteEnv.VITE_PHOTON_WORKSPACE_NAME ?? 'Photon'
+const workspaceScope = buildWorkspaceScope(tenantId, workspaceId)
+const recordsRoomId = buildRoomId(workspaceScope, 'records')
 const syncWebsocketPath = appendRoomQuery('/ws', recordsRoomId)
 const websocketBaseUrl = viteEnv.VITE_PHOTON_SYNC_WS_URL
 const chatStreamEndpoint = viteEnv.VITE_PHOTON_AGENT_STREAM_URL ?? '/api/agent/chat/stream'
 
 export const appKitConfig: AppKitConfig = {
   app: appProfile,
+  tenant: {
+    id: tenantId,
+    name: tenantName,
+  },
   workspace: {
-    id: DEFAULT_WORKSPACE_ID,
-    name: 'Photon',
+    id: workspaceId,
+    scope: workspaceScope,
+    name: workspaceName,
     initial: 'P',
     primaryNav: [
       { id: 'my-records', label: 'My Records', icon: '👤' },
@@ -255,7 +285,7 @@ export const appKitConfig: AppKitConfig = {
   },
   workflows: {
     defaultWorkflowId: 'default-record-workflow',
-    pgliteDataDir: 'idb://photon-workflows',
+    pgliteDataDir: namespacedDataDir('idb://photon-workflows', workspaceScope),
     definitions: [
       {
         id: 'default-record-workflow',
@@ -324,12 +354,12 @@ export const appKitConfig: AppKitConfig = {
     },
   },
   docs: {
-    pgliteDataDir: 'idb://photon-docs',
+    pgliteDataDir: namespacedDataDir('idb://photon-docs', workspaceScope),
     defaultTitle: 'Untitled doc',
     yjsArrayName: 'blocks',
   },
   engine: {
-    pgliteDataDir: 'idb://photon-engine',
+    pgliteDataDir: namespacedDataDir('idb://photon-engine', workspaceScope),
     pushPath: '/api/engine/push',
     pullPath: '/api/engine/pull',
   },
@@ -343,7 +373,9 @@ export const appKitConfig: AppKitConfig = {
   },
   sync: {
     backend: syncBackend,
-    workspaceId: DEFAULT_WORKSPACE_ID,
+    tenantId,
+    workspaceId,
+    workspaceScope,
     recordsRoomId,
     yjsArrayName: 'records',
     databasesArrayName: 'databases',

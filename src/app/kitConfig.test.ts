@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   appKitConfig,
   buildRoomId,
+  buildWorkspaceScope,
   buildSyncWebsocketPath,
   namespacedKey,
   resolveAppServerBackend,
@@ -16,9 +17,11 @@ describe('appKitConfig', () => {
   it('defines the project-specific extension points for the client app kit', () => {
     expect(appKitConfig.app.id).toBe('photon')
     expect(appKitConfig.app.storageNamespace).toBe('photon')
+    expect(appKitConfig.tenant.id).toBe('photon')
     expect(appKitConfig.workspace.name).toBe('Photon')
     expect(appKitConfig.workspace.initial).toHaveLength(1)
     expect(appKitConfig.workspace.id).toBe('photon-default')
+    expect(appKitConfig.workspace.scope).toBe('tenant:photon:workspace:photon-default')
     expect(appKitConfig.workspace.primaryNav.length).toBeGreaterThan(0)
     expect(appKitConfig.workspace.projects.length).toBeGreaterThan(0)
     expect(appKitConfig.workspace.users.length).toBeGreaterThan(0)
@@ -27,16 +30,26 @@ describe('appKitConfig', () => {
   it('keeps runtime storage and sync keys explicit', () => {
     expect(appKitConfig.storage.themeKey).toBe('photon-theme')
     expect(appKitConfig.sync.backend).toBe('rust-server')
+    expect(appKitConfig.sync.tenantId).toBe('photon')
     expect(appKitConfig.sync.workspaceId).toBe('photon-default')
-    expect(appKitConfig.sync.recordsRoomId).toBe('workspace:photon-default:records')
-    expect(appKitConfig.sync.persistenceKey).toBe('workspace:photon-default:records')
+    expect(appKitConfig.sync.workspaceScope).toBe('tenant:photon:workspace:photon-default')
+    expect(appKitConfig.sync.recordsRoomId).toBe('tenant:photon:workspace:photon-default:records')
+    expect(appKitConfig.sync.persistenceKey).toBe('tenant:photon:workspace:photon-default:records')
     expect(appKitConfig.sync.yjsArrayName).toBe('records')
     expect(appKitConfig.sync.databasesArrayName).toBe('databases')
     expect(appKitConfig.sync.workflowCanvasesMapName).toBe('workflowCanvases')
-    expect(appKitConfig.sync.websocketPath).toBe('/ws?room=workspace:photon-default:records')
-    expect(appKitConfig.workflows.pgliteDataDir).toBe('idb://photon-workflows')
-    expect(appKitConfig.docs.pgliteDataDir).toBe('idb://photon-docs')
-    expect(appKitConfig.engine.pgliteDataDir).toBe('idb://photon-engine')
+    expect(appKitConfig.sync.websocketPath).toBe(
+      '/ws?room=tenant:photon:workspace:photon-default:records'
+    )
+    expect(appKitConfig.workflows.pgliteDataDir).toBe(
+      'idb://photon-workflows-tenant-photon-workspace-photon-default'
+    )
+    expect(appKitConfig.docs.pgliteDataDir).toBe(
+      'idb://photon-docs-tenant-photon-workspace-photon-default'
+    )
+    expect(appKitConfig.engine.pgliteDataDir).toBe(
+      'idb://photon-engine-tenant-photon-workspace-photon-default'
+    )
     expect(appKitConfig.engine.pushPath).toBe('/api/engine/push')
     expect(appKitConfig.engine.pullPath).toBe('/api/engine/pull')
     expect(appKitConfig.docs.yjsArrayName).toBe('blocks')
@@ -118,16 +131,29 @@ describe('appKitConfig', () => {
 })
 
 describe('buildRoomId', () => {
-  it('encodes the record room as workspace:<id>:records per ADR-0001', () => {
-    expect(buildRoomId('photon-default', 'records')).toBe('workspace:photon-default:records')
+  it('encodes workspace scope with tenant and workspace boundaries', () => {
+    expect(buildWorkspaceScope('photon', 'photon-default')).toBe(
+      'tenant:photon:workspace:photon-default'
+    )
+  })
+
+  it('encodes the record room as tenant:<id>:workspace:<id>:records', () => {
+    expect(buildRoomId('tenant:photon:workspace:photon-default', 'records')).toBe(
+      'tenant:photon:workspace:photon-default:records'
+    )
   })
 
   it('supports composite surfaces such as docs and chat threads', () => {
-    expect(buildRoomId('acme', 'doc:42')).toBe('workspace:acme:doc:42')
-    expect(buildRoomId('acme', 'chat:general')).toBe('workspace:acme:chat:general')
+    const scope = buildWorkspaceScope('acme-corp', 'acme')
+    expect(buildRoomId(scope, 'doc:42')).toBe('tenant:acme-corp:workspace:acme:doc:42')
+    expect(buildRoomId(scope, 'chat:general')).toBe(
+      'tenant:acme-corp:workspace:acme:chat:general'
+    )
   })
 
   it('builds room-scoped websocket paths', () => {
-    expect(buildSyncWebsocketPath('workspace:acme:doc:42')).toBe('/ws?room=workspace:acme:doc:42')
+    expect(buildSyncWebsocketPath('tenant:acme-corp:workspace:acme:doc:42')).toBe(
+      '/ws?room=tenant:acme-corp:workspace:acme:doc:42'
+    )
   })
 })

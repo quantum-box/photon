@@ -74,8 +74,8 @@ export interface ClientEngineDebugState {
   }>
 }
 
-const engineScope = `workspace:${appKitConfig.workspace.id}`
-const engineActorId = `${appKitConfig.app.id}-client`
+const engineScope = appKitConfig.workspace.scope
+const engineActorId = `${appKitConfig.tenant.id}:${appKitConfig.workspace.id}:${appKitConfig.app.id}-client`
 
 const engineDataDir =
   typeof globalThis.indexedDB === 'undefined' ? undefined : appKitConfig.engine.pgliteDataDir
