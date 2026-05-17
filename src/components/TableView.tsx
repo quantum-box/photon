@@ -674,6 +674,7 @@ export function TableView({
       <div className="flex items-center gap-2 px-3 py-2 md:gap-3 md:px-4 border-b border-border shrink-0">
         <div className="relative flex-1 min-w-0 md:max-w-xs">
           <input
+            data-testid="records-global-filter"
             type="text"
             placeholder="Filter records..."
             value={globalFilter}
