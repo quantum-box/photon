@@ -38,6 +38,14 @@ export interface RecordDefaultsConfig {
   defaultProject: string
 }
 
+export interface TenantWorkspaceOption {
+  tenantId: string
+  tenantName: string
+  workspaceId: string
+  workspaceName: string
+  workspaceInitial: string
+}
+
 export interface AppKitConfig {
   app: {
     id: string
@@ -47,6 +55,10 @@ export interface AppKitConfig {
   tenant: {
     id: string
     name: string
+  }
+  tenancy: {
+    availableWorkspaces: TenantWorkspaceOption[]
+    selectionStorageKey: string
   }
   workspace: {
     id: string
@@ -223,6 +235,96 @@ function appendRoomQuery(base: string, roomId: string): string {
   return `${base}${separator}room=${roomId}`
 }
 
+function normalizeInitial(value: string | undefined, fallback: string): string {
+  const trimmed = value?.trim()
+  if (trimmed) return trimmed.slice(0, 1).toUpperCase()
+  return fallback.slice(0, 1).toUpperCase() || 'P'
+}
+
+function normalizeTenantWorkspaceOption(
+  value: Partial<TenantWorkspaceOption>,
+  fallback: TenantWorkspaceOption
+): TenantWorkspaceOption {
+  const tenantId = value.tenantId?.trim() || fallback.tenantId
+  const workspaceId = value.workspaceId?.trim() || fallback.workspaceId
+  const tenantName = value.tenantName?.trim() || tenantId
+  const workspaceName = value.workspaceName?.trim() || workspaceId
+  return {
+    tenantId,
+    tenantName,
+    workspaceId,
+    workspaceName,
+    workspaceInitial: normalizeInitial(value.workspaceInitial, workspaceName),
+  }
+}
+
+export function resolveTenantWorkspaceOptions(
+  rawValue: string | undefined,
+  fallback: TenantWorkspaceOption
+): TenantWorkspaceOption[] {
+  if (!rawValue?.trim()) return [fallback]
+
+  try {
+    const parsed = JSON.parse(rawValue) as unknown
+    if (!Array.isArray(parsed)) return [fallback]
+    const options = parsed
+      .filter((value): value is Partial<TenantWorkspaceOption> =>
+        Boolean(value && typeof value === 'object')
+      )
+      .map((value) => normalizeTenantWorkspaceOption(value, fallback))
+    return options.length > 0 ? options : [fallback]
+  } catch {
+    return [fallback]
+  }
+}
+
+export function resolveTenantWorkspaceSelection(
+  options: TenantWorkspaceOption[],
+  tenantId: string | undefined,
+  workspaceId: string | undefined
+): TenantWorkspaceOption {
+  const fallback = options[0]
+  return options.find((option) =>
+    option.tenantId === tenantId && option.workspaceId === workspaceId
+  ) ?? fallback
+}
+
+function browserSelection(storageKey: string): { tenantId?: string; workspaceId?: string } {
+  if (typeof window === 'undefined') return {}
+
+  const url = new URL(window.location.href)
+  const fromUrl = {
+    tenantId: url.searchParams.get('tenant_id') ?? undefined,
+    workspaceId: url.searchParams.get('workspace_id') ?? undefined,
+  }
+  if (fromUrl.tenantId || fromUrl.workspaceId) return fromUrl
+
+  try {
+    const stored = window.localStorage.getItem(storageKey)
+    if (!stored) return {}
+    const parsed = JSON.parse(stored) as { tenantId?: string; workspaceId?: string }
+    return {
+      tenantId: parsed.tenantId,
+      workspaceId: parsed.workspaceId,
+    }
+  } catch {
+    return {}
+  }
+}
+
+export function switchTenantWorkspace(option: TenantWorkspaceOption): void {
+  if (typeof window === 'undefined') return
+
+  window.localStorage.setItem(
+    appKitConfig.tenancy.selectionStorageKey,
+    JSON.stringify({ tenantId: option.tenantId, workspaceId: option.workspaceId })
+  )
+  const url = new URL(window.location.href)
+  url.searchParams.set('tenant_id', option.tenantId)
+  url.searchParams.set('workspace_id', option.workspaceId)
+  window.location.assign(url)
+}
+
 export function buildSyncWebsocketPath(roomId: string): string {
   return appendRoomQuery('/ws', roomId)
 }
@@ -245,10 +347,37 @@ const appProfile = {
 } as const
 const DEFAULT_TENANT_ID = 'photon'
 const DEFAULT_WORKSPACE_ID = 'photon-default'
-const tenantId = viteEnv.VITE_PHOTON_TENANT_ID ?? DEFAULT_TENANT_ID
-const tenantName = viteEnv.VITE_PHOTON_TENANT_NAME ?? 'Photon'
-const workspaceId = viteEnv.VITE_PHOTON_WORKSPACE_ID ?? DEFAULT_WORKSPACE_ID
-const workspaceName = viteEnv.VITE_PHOTON_WORKSPACE_NAME ?? 'Photon'
+const tenantSelectionStorageKey = namespacedKey(appProfile.storageNamespace, 'tenant-workspace')
+const defaultTenantWorkspace = normalizeTenantWorkspaceOption(
+  {
+    tenantId: viteEnv.VITE_PHOTON_TENANT_ID ?? DEFAULT_TENANT_ID,
+    tenantName: viteEnv.VITE_PHOTON_TENANT_NAME ?? 'Photon',
+    workspaceId: viteEnv.VITE_PHOTON_WORKSPACE_ID ?? DEFAULT_WORKSPACE_ID,
+    workspaceName: viteEnv.VITE_PHOTON_WORKSPACE_NAME ?? 'Photon',
+    workspaceInitial: viteEnv.VITE_PHOTON_WORKSPACE_INITIAL,
+  },
+  {
+    tenantId: DEFAULT_TENANT_ID,
+    tenantName: 'Photon',
+    workspaceId: DEFAULT_WORKSPACE_ID,
+    workspaceName: 'Photon',
+    workspaceInitial: 'P',
+  }
+)
+const availableTenantWorkspaces = resolveTenantWorkspaceOptions(
+  viteEnv.VITE_PHOTON_TENANT_WORKSPACES,
+  defaultTenantWorkspace
+)
+const requestedTenantWorkspace = browserSelection(tenantSelectionStorageKey)
+const selectedTenantWorkspace = resolveTenantWorkspaceSelection(
+  availableTenantWorkspaces,
+  requestedTenantWorkspace.tenantId,
+  requestedTenantWorkspace.workspaceId
+)
+const tenantId = selectedTenantWorkspace.tenantId
+const tenantName = selectedTenantWorkspace.tenantName
+const workspaceId = selectedTenantWorkspace.workspaceId
+const workspaceName = selectedTenantWorkspace.workspaceName
 const workspaceScope = buildWorkspaceScope(tenantId, workspaceId)
 const recordsRoomId = buildRoomId(workspaceScope, 'records')
 const syncWebsocketPath = appendRoomQuery('/ws', recordsRoomId)
@@ -261,11 +390,15 @@ export const appKitConfig: AppKitConfig = {
     id: tenantId,
     name: tenantName,
   },
+  tenancy: {
+    availableWorkspaces: availableTenantWorkspaces,
+    selectionStorageKey: tenantSelectionStorageKey,
+  },
   workspace: {
     id: workspaceId,
     scope: workspaceScope,
     name: workspaceName,
-    initial: 'P',
+    initial: selectedTenantWorkspace.workspaceInitial,
     primaryNav: [
       { id: 'my-records', label: 'My Records', icon: '👤' },
       { id: 'all-records', label: 'All Records', icon: '📋' },

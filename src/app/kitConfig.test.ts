@@ -11,6 +11,8 @@ import {
   resolveDeploymentMode,
   resolveFrontendWorkerRuntime,
   resolveSyncBackend,
+  resolveTenantWorkspaceOptions,
+  resolveTenantWorkspaceSelection,
 } from './kitConfig'
 
 describe('appKitConfig', () => {
@@ -18,6 +20,16 @@ describe('appKitConfig', () => {
     expect(appKitConfig.app.id).toBe('photon')
     expect(appKitConfig.app.storageNamespace).toBe('photon')
     expect(appKitConfig.tenant.id).toBe('photon')
+    expect(appKitConfig.tenancy.availableWorkspaces).toEqual([
+      {
+        tenantId: 'photon',
+        tenantName: 'Photon',
+        workspaceId: 'photon-default',
+        workspaceName: 'Photon',
+        workspaceInitial: 'P',
+      },
+    ])
+    expect(appKitConfig.tenancy.selectionStorageKey).toBe('photon-tenant-workspace')
     expect(appKitConfig.workspace.name).toBe('Photon')
     expect(appKitConfig.workspace.initial).toHaveLength(1)
     expect(appKitConfig.workspace.id).toBe('photon-default')
@@ -127,6 +139,59 @@ describe('appKitConfig', () => {
       'cancelled',
     ])
     expect(workflow?.transitions.some((transition) => transition.kind === 'exception')).toBe(true)
+  })
+})
+
+describe('tenant workspace selection', () => {
+  const fallback = {
+    tenantId: 'photon',
+    tenantName: 'Photon',
+    workspaceId: 'photon-default',
+    workspaceName: 'Photon',
+    workspaceInitial: 'P',
+  }
+
+  it('parses available tenant workspaces from JSON config', () => {
+    expect(resolveTenantWorkspaceOptions(JSON.stringify([
+      {
+        tenantId: 'acme',
+        tenantName: 'Acme',
+        workspaceId: 'roadmap',
+        workspaceName: 'Roadmap',
+        workspaceInitial: 'R',
+      },
+      {
+        tenantId: 'globex',
+        tenantName: 'Globex',
+        workspaceId: 'ops',
+        workspaceName: 'Operations',
+      },
+    ]), fallback)).toEqual([
+      {
+        tenantId: 'acme',
+        tenantName: 'Acme',
+        workspaceId: 'roadmap',
+        workspaceName: 'Roadmap',
+        workspaceInitial: 'R',
+      },
+      {
+        tenantId: 'globex',
+        tenantName: 'Globex',
+        workspaceId: 'ops',
+        workspaceName: 'Operations',
+        workspaceInitial: 'O',
+      },
+    ])
+  })
+
+  it('selects the requested tenant/workspace and falls back safely', () => {
+    const options = resolveTenantWorkspaceOptions(JSON.stringify([
+      { tenantId: 'acme', tenantName: 'Acme', workspaceId: 'roadmap', workspaceName: 'Roadmap' },
+      { tenantId: 'globex', tenantName: 'Globex', workspaceId: 'ops', workspaceName: 'Operations' },
+    ]), fallback)
+
+    expect(resolveTenantWorkspaceSelection(options, 'globex', 'ops').workspaceName).toBe('Operations')
+    expect(resolveTenantWorkspaceSelection(options, 'missing', 'ops')).toBe(options[0])
   })
 })
 
