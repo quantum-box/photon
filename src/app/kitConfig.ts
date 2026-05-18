@@ -70,6 +70,10 @@ export interface AppKitConfig {
     users: string[]
   }
   records: RecordDefaultsConfig
+  library: {
+    apiBaseUrl?: string
+    serviceToken?: string
+  }
   workflows: {
     defaultWorkflowId: string
     pgliteDataDir: string
@@ -535,5 +539,9 @@ export const appKitConfig: AppKitConfig = {
   },
   storage: {
     themeKey: namespacedKey(appProfile.storageNamespace, 'theme'),
+  },
+  library: {
+    apiBaseUrl: viteEnv.VITE_LIBRARY_API_URL,
+    serviceToken: viteEnv.VITE_LIBRARY_SERVICE_TOKEN,
   },
 }
