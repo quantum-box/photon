@@ -72,47 +72,45 @@ export interface LibraryClient {
   getDataMarkdown(org: string, repo: string, dataId: string): Promise<string>
 }
 
-// ── Implementation ─────────────────────────────────────────────
+// ── Factory ────────────────────────────────────────────────────
 
-class LibraryClientImpl implements LibraryClient {
-  constructor(
-    private readonly baseUrl: string,
-    private readonly serviceToken?: string,
-  ) {}
+/**
+ * Create a LibraryClient.
+ *
+ * If `baseUrl` is empty or undefined, every method call will throw a clear
+ * configuration error (graceful degradation — the UI shows an error message
+ * rather than crashing at construction time).
+ */
+export function createLibraryClient(baseUrl: string | undefined, serviceToken?: string): LibraryClient {
+  const resolvedBase = baseUrl ?? ''
 
-  private headers(): HeadersInit {
-    const headers: Record<string, string> = {
-      'Accept': 'application/json',
-    }
-    if (this.serviceToken) {
-      headers['Authorization'] = `Bearer ${this.serviceToken}`
-    }
-    return headers
-  }
-
-  private assertConfigured(): void {
-    if (!this.baseUrl) {
+  const assertConfigured = () => {
+    if (!resolvedBase) {
       throw new Error('Library API base URL is not configured. Set VITE_LIBRARY_API_URL.')
     }
   }
 
-  private async fetchJson<T>(path: string): Promise<T> {
-    this.assertConfigured()
-    const url = `${this.baseUrl.replace(/\/$/, '')}${path}`
-    const response = await fetch(url, { headers: this.headers() })
+  const authHeaders = (): Record<string, string> => {
+    const headers: Record<string, string> = { Accept: 'application/json' }
+    if (serviceToken) headers['Authorization'] = `Bearer ${serviceToken}`
+    return headers
+  }
+
+  const fetchJson = async <T>(path: string): Promise<T> => {
+    assertConfigured()
+    const url = `${resolvedBase.replace(/\/$/, '')}${path}`
+    const response = await fetch(url, { headers: authHeaders() })
     if (!response.ok) {
       throw new Error(`Library API error ${response.status}: ${response.statusText} (${url})`)
     }
     return response.json() as Promise<T>
   }
 
-  private async fetchText(path: string): Promise<string> {
-    this.assertConfigured()
-    const url = `${this.baseUrl.replace(/\/$/, '')}${path}`
+  const fetchText = async (path: string): Promise<string> => {
+    assertConfigured()
+    const url = `${resolvedBase.replace(/\/$/, '')}${path}`
     const headers: Record<string, string> = {}
-    if (this.serviceToken) {
-      headers['Authorization'] = `Bearer ${this.serviceToken}`
-    }
+    if (serviceToken) headers['Authorization'] = `Bearer ${serviceToken}`
     const response = await fetch(url, { headers })
     if (!response.ok) {
       throw new Error(`Library API error ${response.status}: ${response.statusText} (${url})`)
@@ -120,36 +118,16 @@ class LibraryClientImpl implements LibraryClient {
     return response.text()
   }
 
-  listRepos(): Promise<RepoResponse[]> {
-    return this.fetchJson<RepoResponse[]>('/v1beta/repos')
+  return {
+    listRepos: () => fetchJson<RepoResponse[]>('/v1beta/repos'),
+    getOrg: (org) => fetchJson<OrganizationResponse>(`/v1beta/orgs/${encodeURIComponent(org)}`),
+    listData: (org, repo) =>
+      fetchJson<DataResponse[]>(
+        `/v1beta/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/data-list`,
+      ),
+    getDataMarkdown: (org, repo, dataId) =>
+      fetchText(
+        `/v1beta/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/data/${encodeURIComponent(dataId)}/md`,
+      ),
   }
-
-  getOrg(org: string): Promise<OrganizationResponse> {
-    return this.fetchJson<OrganizationResponse>(`/v1beta/orgs/${encodeURIComponent(org)}`)
-  }
-
-  listData(org: string, repo: string): Promise<DataResponse[]> {
-    return this.fetchJson<DataResponse[]>(
-      `/v1beta/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/data-list`
-    )
-  }
-
-  getDataMarkdown(org: string, repo: string, dataId: string): Promise<string> {
-    return this.fetchText(
-      `/v1beta/repos/${encodeURIComponent(org)}/${encodeURIComponent(repo)}/data/${encodeURIComponent(dataId)}/md`
-    )
-  }
-}
-
-// ── Factory ────────────────────────────────────────────────────
-
-/**
- * Create a LibraryClient.
- *
- * If `baseUrl` is empty or undefined, the client is constructed but every
- * method call will throw a clear configuration error (graceful degradation —
- * the UI shows an error message rather than crashing).
- */
-export function createLibraryClient(baseUrl: string | undefined, serviceToken?: string): LibraryClient {
-  return new LibraryClientImpl(baseUrl ?? '', serviceToken)
 }
