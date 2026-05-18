@@ -6,7 +6,7 @@ build:
   installCommand: npm ci
   command: npm run pages:build
   outputDirectory: dist
-  nodeVersion: "20"
+  nodeVersion: "22"
 platforms:
   web:
     deploymentTarget: cloudflare_pages
