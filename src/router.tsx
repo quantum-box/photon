@@ -1081,15 +1081,19 @@ function LibraryPage() {
 
   useEffect(() => {
     if (!apiBaseUrl) return
-    setLoading(true)
-    setError(null)
-    client
-      .listRepos()
-      .then(setRepos)
-      .catch((err: unknown) => {
+    const loadData = async () => {
+      setLoading(true)
+      setError(null)
+      try {
+        const repos = await client.listRepos()
+        setRepos(repos)
+      } catch (err: unknown) {
         setError(err instanceof Error ? err.message : String(err))
-      })
-      .finally(() => setLoading(false))
+      } finally {
+        setLoading(false)
+      }
+    }
+    void loadData()
   }, [apiBaseUrl]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
@@ -1163,15 +1167,19 @@ function LibraryRepoPage() {
 
   useEffect(() => {
     if (!apiBaseUrl) return
-    setLoading(true)
-    setError(null)
-    client
-      .listData(org, repo)
-      .then(setDataList)
-      .catch((err: unknown) => {
+    const loadData = async () => {
+      setLoading(true)
+      setError(null)
+      try {
+        const data = await client.listData(org, repo)
+        setDataList(data)
+      } catch (err: unknown) {
         setError(err instanceof Error ? err.message : String(err))
-      })
-      .finally(() => setLoading(false))
+      } finally {
+        setLoading(false)
+      }
+    }
+    void loadData()
   }, [apiBaseUrl, org, repo]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
@@ -1248,15 +1256,19 @@ function LibraryDataPage() {
 
   useEffect(() => {
     if (!apiBaseUrl) return
-    setLoading(true)
-    setError(null)
-    client
-      .getDataMarkdown(org, repo, dataId)
-      .then(setMarkdown)
-      .catch((err: unknown) => {
+    const loadData = async () => {
+      setLoading(true)
+      setError(null)
+      try {
+        const md = await client.getDataMarkdown(org, repo, dataId)
+        setMarkdown(md)
+      } catch (err: unknown) {
         setError(err instanceof Error ? err.message : String(err))
-      })
-      .finally(() => setLoading(false))
+      } finally {
+        setLoading(false)
+      }
+    }
+    void loadData()
   }, [apiBaseUrl, org, repo, dataId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
