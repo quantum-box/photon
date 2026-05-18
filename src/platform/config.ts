@@ -4,6 +4,7 @@ export {
   buildWorkspaceScope,
   namespacedKey,
   resolveAppServerBackend,
+  resolveAuthTransport,
   resolveDeploymentMode,
   resolveFrontendWorkerRuntime,
   resolveSyncBackend,
@@ -12,6 +13,7 @@ export {
 export type {
   AppKitConfig,
   AppServerBackend,
+  AuthTransport,
   DeploymentMode,
   FrontendWorkerRuntime,
   SyncBackend,

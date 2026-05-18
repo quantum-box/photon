@@ -8,6 +8,7 @@ import type {
 } from './types'
 import type { ToolCall, ToolResult } from '../tools/types'
 import { executeTool, generateToolCallId, getTool } from '../tools/toolExecutor'
+import { photonApiFetch } from '../../../lib/apiClient'
 
 interface StreamEvent {
   event: string
@@ -108,7 +109,7 @@ async function postToolResult(
   const headers: HeadersInit = { 'content-type': 'application/json' }
   if (config.authToken) headers.authorization = `Bearer ${config.authToken}`
 
-  await fetch(config.toolResultPath, {
+  await photonApiFetch(config.toolResultPath, {
     method: 'POST',
     headers,
     body: JSON.stringify(envelope),
@@ -220,7 +221,7 @@ async function startSseFetch(
   }
   if (config.authToken) headers.authorization = `Bearer ${config.authToken}`
 
-  const response = await fetch(config.endpoint, {
+  const response = await photonApiFetch(config.endpoint, {
     method: 'POST',
     headers,
     body: JSON.stringify({

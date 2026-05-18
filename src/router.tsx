@@ -22,6 +22,7 @@ import { Kbd, KbdGroup } from './components/Kbd'
 import { ChatView } from './components/chat/ChatView'
 import { DocsView } from './components/docs/DocsView'
 import { EngineSyncDashboard } from './components/sync/EngineSyncDashboard'
+import { LoginPage } from './components/auth/LoginPage'
 import { appKitConfig } from './app/kitConfig'
 import { createLibraryClient } from './lib/libraryClient'
 import type { RepoResponse, DataResponse } from './lib/libraryClient'
@@ -31,6 +32,7 @@ import { DatabaseRecordsProvider, useDatabaseRecords } from './contexts/RecordsC
 import { DatabasesProvider, type WorkspaceDatabase, useWorkspaceDatabases } from './contexts/DatabasesContext'
 import { DatabaseViewsProvider, useDatabaseViews } from './contexts/DatabaseViewsContext'
 import { AttachmentsProvider } from './lib/attachments/useWorkspaceAttachments'
+import { useAuth } from './contexts/AuthContext'
 import { fetchServerRecords } from './lib/recordsApi'
 import { statusConfig, type Status, type DatabaseRecord } from './data/mock'
 import type { SortingState } from '@tanstack/react-table'
@@ -485,6 +487,12 @@ const rootRoute = createRootRoute({
   component: function RootLayout() {
     const [createModalOpen, setCreateModalOpen] = useState(false)
     const { shortcutsOpen, closeShortcuts } = useGlobalKeyboardShortcuts(setCreateModalOpen)
+    const auth = useAuth()
+    const pathname = useRouterState({ select: (s) => s.location.pathname })
+    const navigate = useNavigate()
+    if (auth.enabled && !auth.isAuthenticated && pathname !== '/login') {
+      return <LoginPage onSignedIn={() => void navigate({ to: '/databases' })} />
+    }
     return (
       <DatabaseRecordsProvider>
         <DatabasesProvider>
@@ -502,6 +510,15 @@ const rootRoute = createRootRoute({
         </DatabasesProvider>
       </DatabaseRecordsProvider>
     )
+  },
+})
+
+const loginRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: 'login',
+  component: function LoginRoute() {
+    const navigate = useNavigate()
+    return <LoginPage onSignedIn={() => void navigate({ to: '/databases' })} />
   },
 })
 
@@ -1317,6 +1334,7 @@ function LibraryDataPage() {
 
 const routeTree = rootRoute.addChildren([
   indexRoute,
+  loginRoute,
   databasesRoute.addChildren([recordsIndexRoute, recordDetailRoute]),
   kanbanRoute,
   workflowRoute,
