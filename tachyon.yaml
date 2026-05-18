@@ -1,0 +1,40 @@
+kind: CloudApp
+name: erp-client
+deploymentTarget: cloudflare_pages
+customDomain: field.txcloud.app
+framework: vite
+build:
+  installCommand: npm ci
+  command: npm run pages:build
+  outputDirectory: dist
+  nodeVersion: "20"
+platforms:
+  web:
+    deploymentTarget: cloudflare_pages
+  desktop:
+    enabled: true
+    framework: tauri_v2
+    buildCommand: npm run tauri:build
+    configPath: src-tauri/tauri.conf.json
+envVars:
+  VITE_PHOTON_DEPLOYMENT_MODE: cloud
+  VITE_PHOTON_APP_ID: erp-client
+  VITE_PHOTON_APP_DISPLAY_NAME: TACHYON Field ERP
+  VITE_PHOTON_STORAGE_NAMESPACE: tachyon-field-erp
+  VITE_PHOTON_TENANT_ID: tn_01hjjn348rn3t49zz6hvmfq67p
+  VITE_PHOTON_TENANT_NAME: TACHYON Field
+  VITE_PHOTON_WORKSPACE_ID: tachyon-field-erp
+  VITE_PHOTON_WORKSPACE_NAME: TACHYON Field ERP
+  VITE_PHOTON_WORKSPACE_INITIAL: T
+  VITE_PHOTON_APP_SERVER_BACKEND: external-api
+  VITE_PHOTON_API_BASE_URL: https://bakuure.api.n1.tachy.one
+  VITE_PHOTON_ENGINE_PUSH_PATH: https://bakuure.api.n1.tachy.one/api/engine/push
+  VITE_PHOTON_ENGINE_PULL_PATH: https://bakuure.api.n1.tachy.one/api/engine/pull
+  VITE_PHOTON_SYNC_BACKEND: cloudflare-durable-object
+  VITE_PHOTON_SYNC_WS_URL: wss://bakuure.api.n1.tachy.one/ws
+  VITE_PHOTON_RECORD_IDENTIFIER_PREFIX: ERP
+  VITE_PHOTON_DEFAULT_PROJECT: 受注
+  VITE_PHOTON_WORKSPACE_PROJECTS: '[{"id":"orders","label":"受注"},{"id":"inventory","label":"在庫"},{"id":"purchasing","label":"仕入"},{"id":"accounting","label":"会計"}]'
+  VITE_PHOTON_PRIMARY_NAV: '[{"id":"orders","label":"受注","icon":"🧾","databaseId":"orders"},{"id":"inventory","label":"在庫","icon":"📦","databaseId":"inventory"},{"id":"purchasing","label":"仕入","icon":"🛒","databaseId":"purchasing"},{"id":"accounting","label":"会計","icon":"💹","databaseId":"accounting"}]'
+  VITE_TACHYON_FIELD_API_URL: https://bakuure.api.n1.tachy.one
+  VITE_BACKEND_API_URL: https://bakuure.api.n1.tachy.one
