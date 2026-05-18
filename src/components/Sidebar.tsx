@@ -6,6 +6,7 @@ import type { Status } from '../data/mock'
 import { useDatabaseRecords } from '../contexts/RecordsContext'
 import { useWorkspaceDatabases } from '../contexts/DatabasesContext'
 import { useTheme } from '../contexts/ThemeContext'
+import { useAuth } from '../contexts/AuthContext'
 import type { ThemeMode } from '../contexts/ThemeContext'
 import { useConnectionStatus, useSyncPresence } from '../lib/yjs/useYjsRecords'
 import { appKitConfig, switchTenantWorkspace } from '../app/kitConfig'
@@ -147,6 +148,7 @@ export function Sidebar() {
   const navigate = useNavigate()
   const connStatus = useConnectionStatus()
   const { onlineCount } = useSyncPresence()
+  const auth = useAuth()
   const [newDatabaseName, setNewDatabaseName] = useState('')
   const [sideNavOpen, setSideNavOpen] = useState(true)
   const [contextMenu, setContextMenu] = useState<{
@@ -384,6 +386,23 @@ export function Sidebar() {
     </div>
   )
 
+  const authControls = auth.enabled ? (
+    <div className="border-t border-border px-3 py-2">
+      <div className="min-w-0 text-[11px] text-subtle">
+        <span className="block truncate">
+          {auth.session?.user?.email ?? 'Authenticated'}
+        </span>
+      </div>
+      <button
+        type="button"
+        className="mt-1 w-full rounded bg-surface-hover px-2 py-1.5 text-xs font-medium text-muted hover:text-foreground"
+        onClick={auth.signOut}
+      >
+        Sign out
+      </button>
+    </div>
+  ) : null
+
   return (
     <>
       <div className="flex shrink-0 flex-col border-b border-border bg-panel md:hidden">
@@ -395,6 +414,7 @@ export function Sidebar() {
         <div className="px-2 py-2">
           {workspaceNavigation('-mobile')}
         </div>
+        {authControls}
       </div>
 
       {!sideNavOpen && (
@@ -480,6 +500,7 @@ export function Sidebar() {
       </div>
 
       {/* Theme Toggle */}
+      {authControls}
       <ThemeToggle />
       </aside>
       )}

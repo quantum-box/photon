@@ -5,6 +5,7 @@ export type FrontendWorkerRuntime = 'cloudflare-workers' | 'workerd'
 // Photon Engine and are synced through REST/RPC push/pull endpoints.
 export type SyncBackend = 'rust-server' | 'cloudflare-durable-object'
 export type AppServerBackend = 'rust-server' | 'external-api'
+export type AuthTransport = 'rest' | 'graphql'
 export type ChatStreamMode = 'mock' | 'backend'
 export type ChatStreamTransport = 'sse' | 'websocket'
 export type WorkflowStageKind = 'start' | 'work' | 'review' | 'end' | 'terminal'
@@ -138,6 +139,20 @@ export interface AppKitConfig {
     recordsPath: string
     documentsPath: string
   }
+  auth: {
+    enabled: boolean
+    transport: AuthTransport
+    apiBaseUrl?: string
+    restPath: string
+    graphqlPath: string
+    mutationName: string
+    graphqlSelection: string
+    platformId?: string
+    providerId?: string
+    tenantId?: string
+    operatorId?: string
+    tokenStorageKey: string
+  }
   frontendWorker: {
     enabled: true
     runtime: FrontendWorkerRuntime
@@ -160,6 +175,10 @@ function isSyncBackend(value: string | undefined): value is SyncBackend {
 
 function isAppServerBackend(value: string | undefined): value is AppServerBackend {
   return value === 'rust-server' || value === 'external-api'
+}
+
+function isAuthTransport(value: string | undefined): value is AuthTransport {
+  return value === 'rest' || value === 'graphql'
 }
 
 function isChatStreamMode(value: string | undefined): value is ChatStreamMode {
@@ -192,6 +211,10 @@ export function resolveSyncBackend(
 
 export function resolveAppServerBackend(value: string | undefined): AppServerBackend {
   return isAppServerBackend(value) ? value : 'rust-server'
+}
+
+export function resolveAuthTransport(value: string | undefined): AuthTransport {
+  return isAuthTransport(value) ? value : 'rest'
 }
 
 export function resolveChatStreamMode(
@@ -387,6 +410,7 @@ const recordsRoomId = buildRoomId(workspaceScope, 'records')
 const syncWebsocketPath = appendRoomQuery('/ws', recordsRoomId)
 const websocketBaseUrl = viteEnv.VITE_PHOTON_SYNC_WS_URL
 const chatStreamEndpoint = viteEnv.VITE_PHOTON_AGENT_STREAM_URL ?? '/api/agent/chat/stream'
+const photonApiBaseUrl = viteEnv.VITE_PHOTON_API_BASE_URL
 
 export const appKitConfig: AppKitConfig = {
   app: appProfile,
@@ -526,9 +550,25 @@ export const appKitConfig: AppKitConfig = {
   },
   server: {
     backend: resolveAppServerBackend(viteEnv.VITE_PHOTON_APP_SERVER_BACKEND),
-    apiBaseUrl: viteEnv.VITE_PHOTON_API_BASE_URL,
+    apiBaseUrl: photonApiBaseUrl,
     recordsPath: '/api/records',
     documentsPath: '/api/documents',
+  },
+  auth: {
+    enabled: viteEnv.VITE_PHOTON_AUTH_ENABLED === 'true',
+    transport: resolveAuthTransport(viteEnv.VITE_PHOTON_AUTH_TRANSPORT),
+    apiBaseUrl: viteEnv.VITE_PHOTON_AUTH_API_BASE_URL ?? photonApiBaseUrl,
+    restPath: viteEnv.VITE_PHOTON_AUTH_REST_PATH ?? '/auth/v1beta/sign-in-with-platform',
+    graphqlPath: viteEnv.VITE_PHOTON_AUTH_GRAPHQL_PATH ?? '/graphql',
+    mutationName: viteEnv.VITE_PHOTON_AUTH_GRAPHQL_MUTATION ?? 'sign_in_with_platform',
+    graphqlSelection: viteEnv.VITE_PHOTON_AUTH_GRAPHQL_SELECTION
+      ?? 'token expires_at user { id email name }',
+    platformId: viteEnv.VITE_PHOTON_AUTH_PLATFORM_ID,
+    providerId: viteEnv.VITE_PHOTON_AUTH_PROVIDER_ID,
+    tenantId: viteEnv.VITE_PHOTON_AUTH_TENANT_ID ?? tenantId,
+    operatorId: viteEnv.VITE_PHOTON_OPERATOR_ID,
+    tokenStorageKey: viteEnv.VITE_PHOTON_AUTH_TOKEN_STORAGE_KEY
+      ?? namespacedKey(appProfile.storageNamespace, 'auth-session'),
   },
   frontendWorker: {
     enabled: true,

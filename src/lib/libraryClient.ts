@@ -10,6 +10,7 @@
  *
  * Auth: Authorization: Bearer {serviceToken} when serviceToken is present.
  */
+import { photonApiFetch } from './apiClient'
 
 // ── Types from OpenAPI spec ────────────────────────────────────
 
@@ -99,7 +100,7 @@ export function createLibraryClient(baseUrl: string | undefined, serviceToken?: 
   const fetchJson = async <T>(path: string): Promise<T> => {
     assertConfigured()
     const url = `${resolvedBase.replace(/\/$/, '')}${path}`
-    const response = await fetch(url, { headers: authHeaders() })
+    const response = await photonApiFetch(url, { headers: authHeaders() })
     if (!response.ok) {
       throw new Error(`Library API error ${response.status}: ${response.statusText} (${url})`)
     }
@@ -111,7 +112,7 @@ export function createLibraryClient(baseUrl: string | undefined, serviceToken?: 
     const url = `${resolvedBase.replace(/\/$/, '')}${path}`
     const headers: Record<string, string> = {}
     if (serviceToken) headers['Authorization'] = `Bearer ${serviceToken}`
-    const response = await fetch(url, { headers })
+    const response = await photonApiFetch(url, { headers })
     if (!response.ok) {
       throw new Error(`Library API error ${response.status}: ${response.statusText} (${url})`)
     }

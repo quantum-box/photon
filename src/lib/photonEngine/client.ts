@@ -1,6 +1,7 @@
 import { PGlite } from '@electric-sql/pglite'
 import { invoke } from '@tauri-apps/api/core'
 import { appKitConfig } from '../../app/kitConfig'
+import { photonApiFetch } from '../apiClient'
 
 export type PhotonEngineMutationKind = 'upsert' | 'patch' | 'delete'
 
@@ -618,7 +619,7 @@ export async function syncClientEngineOperations(
     operation: normalizeEngineOperation(row.operation_json),
   }))
 
-  const response = await fetch(`${apiBaseUrl}${appKitConfig.engine.pushPath}`, {
+  const response = await photonApiFetch(`${apiBaseUrl}${appKitConfig.engine.pushPath}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
