@@ -1,7 +1,6 @@
 kind: CloudApp
-name: erp-client
+name: tachyonfield
 deploymentTarget: cloudflare_pages
-customDomain: field.txcloud.app
 framework: vite
 build:
   installCommand: npm ci
@@ -18,7 +17,8 @@ platforms:
     configPath: src-tauri/tauri.conf.json
 envVars:
   VITE_PHOTON_DEPLOYMENT_MODE: cloud
-  VITE_PHOTON_APP_ID: erp-client
+  VITE_TACHYON_APP_ID: tachyonfield
+  VITE_PHOTON_APP_ID: tachyonfield
   VITE_PHOTON_APP_DISPLAY_NAME: TACHYON Field ERP
   VITE_PHOTON_STORAGE_NAMESPACE: tachyon-field-erp
   VITE_PHOTON_TENANT_ID: tn_01hjjn348rn3t49zz6hvmfq67p
