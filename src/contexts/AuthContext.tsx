@@ -4,8 +4,8 @@ import type { ReactNode } from 'react'
 import { appKitConfig } from '../app/kitConfig'
 import {
   type PhotonAuthSession,
-  type SignInWithPlatformInput,
-  signInWithPlatform,
+  type SignInWithPasswordInput,
+  signInWithPassword,
 } from '../lib/auth/authClient'
 import {
   authSessionChangedEvent,
@@ -18,7 +18,7 @@ interface AuthContextValue {
   enabled: boolean
   session: PhotonAuthSession | null
   isAuthenticated: boolean
-  signIn: (input: SignInWithPlatformInput) => Promise<void>
+  signIn: (input: SignInWithPasswordInput) => Promise<void>
   signOut: () => void
 }
 
@@ -37,8 +37,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
-  const signIn = useCallback(async (input: SignInWithPlatformInput) => {
-    const nextSession = await signInWithPlatform(input)
+  const signIn = useCallback(async (input: SignInWithPasswordInput) => {
+    const nextSession = await signInWithPassword(input)
     saveAuthSession(nextSession)
     setSession(nextSession)
   }, [])

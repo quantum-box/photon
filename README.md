@@ -60,22 +60,21 @@ npm run type-check
 npm run test
 ```
 
-## txcloud auth platform 接続
+## txcloud auth 接続
 
-Photon can require txcloud auth platform sign-in before the shell loads. Enable it with env vars instead of committing credentials:
+Photon can require txcloud auth email/password sign-in before the shell loads. Enable it with env vars instead of committing credentials:
 
 ```bash
 VITE_PHOTON_API_BASE_URL=https://api.n1.tachy.one
 VITE_PHOTON_AUTH_ENABLED=true
 VITE_PHOTON_AUTH_TRANSPORT=rest
-VITE_PHOTON_AUTH_REST_PATH=/auth/v1beta/sign-in-with-platform
+VITE_PHOTON_AUTH_PASSWORD_PATH=/auth/v1beta/sign-in-with-password
 VITE_PHOTON_AUTH_TENANT_ID=tn_01hjjn348rn3t49zz6hvmfq67p
-VITE_PHOTON_AUTH_PROVIDER_ID=<provider-id>
 VITE_PHOTON_OPERATOR_ID=<operator-id-if-required>
 npm run dev -- --host 127.0.0.1
 ```
 
-`VITE_PHOTON_AUTH_TRANSPORT=graphql` switches the sign-in call to `VITE_PHOTON_AUTH_GRAPHQL_PATH` with the `sign_in_with_platform` mutation. Use `VITE_PHOTON_AUTH_GRAPHQL_SELECTION` if the auth gateway exposes different token field names. The acquired access token is stored in localStorage under `VITE_PHOTON_AUTH_TOKEN_STORAGE_KEY` or the default Photon namespaced key, then attached as `Authorization: Bearer <token>` to Photon API requests.
+`VITE_PHOTON_AUTH_PASSWORD_PATH` defaults to `/auth/v1beta/sign-in-with-password`. The acquired access token is stored in localStorage under `VITE_PHOTON_AUTH_TOKEN_STORAGE_KEY` or the default Photon namespaced key, then attached as `Authorization: Bearer <token>` to Photon API requests.
 
 PLT-1038 enforces normalized global auth emails. Photon trims and ASCII-lowercases the submitted email and treats duplicate/conflict responses as sign-in errors instead of assuming a second user can be created.
 

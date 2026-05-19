@@ -7,7 +7,7 @@ import { useAuth } from '../../contexts/AuthContext'
 export function LoginPage({ onSignedIn }: { onSignedIn?: () => void }) {
   const { signIn } = useAuth()
   const [email, setEmail] = useState('')
-  const [platformToken, setPlatformToken] = useState('')
+  const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
@@ -16,7 +16,7 @@ export function LoginPage({ onSignedIn }: { onSignedIn?: () => void }) {
     setSubmitting(true)
     setError(null)
     try {
-      await signIn({ email, platformToken })
+      await signIn({ email, password })
       onSignedIn?.()
     } catch (err: unknown) {
       if (err instanceof PhotonAuthError) {
@@ -36,7 +36,7 @@ export function LoginPage({ onSignedIn }: { onSignedIn?: () => void }) {
         style={{ borderColor: 'var(--border-color)' }}
       >
         <div className="mb-5">
-          <p className="text-xs font-medium uppercase tracking-wide text-muted">txcloud auth platform</p>
+          <p className="text-xs font-medium uppercase tracking-wide text-muted">txcloud auth</p>
           <h1 className="mt-1 text-xl font-semibold">Sign in to Photon</h1>
         </div>
 
@@ -55,14 +55,14 @@ export function LoginPage({ onSignedIn }: { onSignedIn?: () => void }) {
           </label>
 
           <label className="block">
-            <span className="text-xs font-medium text-muted">Platform token</span>
-            <textarea
-              className="mt-1 min-h-24 w-full resize-y rounded border bg-canvas px-3 py-2 font-mono text-xs outline-none focus:ring-2 focus:ring-ring"
+            <span className="text-xs font-medium text-muted">Password</span>
+            <input
+              className="mt-1 w-full rounded border bg-canvas px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring"
               style={{ borderColor: 'var(--border-color)' }}
-              autoComplete="off"
-              value={platformToken}
-              onChange={(event) => setPlatformToken(event.target.value)}
-              placeholder="Paste an OAuth/platform credential for this environment"
+              type="password"
+              autoComplete="current-password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
               required
             />
           </label>
@@ -73,8 +73,8 @@ export function LoginPage({ onSignedIn }: { onSignedIn?: () => void }) {
               <span className="block truncate">{appKitConfig.auth.tenantId ?? appKitConfig.tenant.id}</span>
             </div>
             <div className="min-w-0">
-              <span className="block text-subtle">Provider</span>
-              <span className="block truncate">{appKitConfig.auth.providerId ?? 'env unset'}</span>
+              <span className="block text-subtle">Auth</span>
+              <span className="block truncate">Email and password</span>
             </div>
           </div>
 
