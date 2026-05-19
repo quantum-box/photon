@@ -144,6 +144,7 @@ export interface AppKitConfig {
     transport: AuthTransport
     apiBaseUrl?: string
     restPath: string
+    passwordPath: string
     graphqlPath: string
     mutationName: string
     graphqlSelection: string
@@ -559,6 +560,7 @@ export const appKitConfig: AppKitConfig = {
     transport: resolveAuthTransport(viteEnv.VITE_PHOTON_AUTH_TRANSPORT),
     apiBaseUrl: viteEnv.VITE_PHOTON_AUTH_API_BASE_URL ?? photonApiBaseUrl,
     restPath: viteEnv.VITE_PHOTON_AUTH_REST_PATH ?? '/auth/v1beta/sign-in-with-platform',
+    passwordPath: viteEnv.VITE_PHOTON_AUTH_PASSWORD_PATH ?? '/auth/v1beta/sign-in-with-password',
     graphqlPath: viteEnv.VITE_PHOTON_AUTH_GRAPHQL_PATH ?? '/graphql',
     mutationName: viteEnv.VITE_PHOTON_AUTH_GRAPHQL_MUTATION ?? 'sign_in_with_platform',
     graphqlSelection: viteEnv.VITE_PHOTON_AUTH_GRAPHQL_SELECTION

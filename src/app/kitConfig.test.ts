@@ -70,6 +70,7 @@ describe('appKitConfig', () => {
     expect(appKitConfig.attachments.webStorageProvider).toBe('web-object-storage')
     expect(appKitConfig.sync.roomParam).toBe('room')
     expect(appKitConfig.server.recordsPath).toBe('/api/records')
+    expect(appKitConfig.auth.passwordPath).toBe('/auth/v1beta/sign-in-with-password')
     expect(appKitConfig.chat.stream.mode).toBe('mock')
     expect(appKitConfig.chat.stream.transport).toBe('sse')
     expect(appKitConfig.chat.stream.endpoint).toBe('/api/agent/chat/stream')

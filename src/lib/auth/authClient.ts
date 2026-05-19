@@ -16,6 +16,11 @@ export interface SignInWithPlatformInput {
   platformToken: string
 }
 
+export interface SignInWithPasswordInput {
+  email: string
+  password: string
+}
+
 export class PhotonAuthError extends Error {
   readonly status?: number
   readonly code?: string
@@ -62,10 +67,24 @@ function findToken(payload: unknown): string | undefined {
     ?? asText(record.idToken)
   if (direct) return direct
 
-  for (const key of ['session', 'auth', 'data', 'sign_in_with_platform']) {
+  for (const key of ['session', 'auth', 'data', 'sign_in_with_platform', 'sign_in_with_password']) {
     const nested = record[key]
     const token = nested ? findToken(nested) : undefined
     if (token) return token
+  }
+
+  return undefined
+}
+
+function findExpiresAt(payload: unknown): string | undefined {
+  const record = asRecord(payload)
+  const direct = asText(record.expires_at) ?? asText(record.expiresAt)
+  if (direct) return direct
+
+  for (const key of ['session', 'auth', 'data', 'sign_in_with_platform', 'sign_in_with_password']) {
+    const nested = record[key]
+    const expiresAt = nested ? findExpiresAt(nested) : undefined
+    if (expiresAt) return expiresAt
   }
 
   return undefined
@@ -90,6 +109,13 @@ function authPayload(input: SignInWithPlatformInput) {
     provider_id: appKitConfig.auth.providerId,
     email: normalizeEmail(input.email),
     platform_token: input.platformToken,
+  }
+}
+
+function passwordAuthPayload(input: SignInWithPasswordInput) {
+  return {
+    email: normalizeEmail(input.email),
+    password: input.password,
   }
 }
 
@@ -133,14 +159,10 @@ function sessionFromPayload(payload: unknown): PhotonAuthSession {
     throw new PhotonAuthError('Authentication response did not include an access token.')
   }
   const record = asRecord(payload)
-  const session = asRecord(record.session)
   return {
     accessToken: token,
     tokenType: 'Bearer',
-    expiresAt: asText(record.expires_at)
-      ?? asText(record.expiresAt)
-      ?? asText(session.expires_at)
-      ?? asText(session.expiresAt),
+    expiresAt: findExpiresAt(record),
     user: findUser(payload),
   }
 }
@@ -150,6 +172,17 @@ async function signInWithRest(input: SignInWithPlatformInput): Promise<PhotonAut
     method: 'POST',
     headers: { 'content-type': 'application/json', accept: 'application/json' },
     body: JSON.stringify(authPayload(input)),
+  })
+  const payload = await parseResponse(response)
+  if (!response.ok) throw normalizeAuthError(payload, response.status)
+  return sessionFromPayload(payload)
+}
+
+async function signInWithPasswordRest(input: SignInWithPasswordInput): Promise<PhotonAuthSession> {
+  const response = await fetch(authUrl(appKitConfig.auth.passwordPath), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', accept: 'application/json' },
+    body: JSON.stringify(passwordAuthPayload(input)),
   })
   const payload = await parseResponse(response)
   if (!response.ok) throw normalizeAuthError(payload, response.status)
@@ -181,4 +214,14 @@ export async function signInWithPlatform(input: SignInWithPlatformInput): Promis
   return appKitConfig.auth.transport === 'graphql'
     ? signInWithGraphql(input)
     : signInWithRest(input)
+}
+
+export async function signInWithPassword(input: SignInWithPasswordInput): Promise<PhotonAuthSession> {
+  if (!normalizeEmail(input.email)) {
+    throw new PhotonAuthError('Email is required.')
+  }
+  if (!input.password) {
+    throw new PhotonAuthError('Password is required.')
+  }
+  return signInWithPasswordRest(input)
 }
