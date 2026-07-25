@@ -28,9 +28,9 @@ Photon の同期体験は **Photon Engine** と **Photon Live** の2層で整理
 | ルーティング | TanStack Router |
 | テーブル | TanStack Table |
 | スタイル | Tailwind CSS + Radix UI |
-| Photon Engine | Rust crate (`packages/photon-engine`) |
+| Photon Engine | Rust crate (`crates/photon-engine`) |
 | Photon Live | Yjs + IndexedDB + WebSocket / Durable Object room |
-| アプリ API | Rust axum + SQLite (`packages/server`) |
+| アプリ API | Rust axum + SQLite (`crates/photon-axum`) |
 | テスト | Vitest |
 
 ## 現在実装済みの機能

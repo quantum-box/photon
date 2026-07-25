@@ -9,19 +9,23 @@ Photon is a React 19 + Vite client with Tauri and a Rust backend.
 - `src/components/chat/` and `src/components/files/`: chat and file preview features.
 - `src/assets/`: static frontend assets.
 - `src-tauri/`: Tauri desktop shell.
-- `packages/server/`: Rust axum + SQLite + yrs backend. Migrations live in `packages/server/migrations/`.
+- `crates/`: the Rust Cargo workspace.
+  - `photon-engine/`: the sync core — operations, records, CRDT projection, storage adapters, WASM kernel.
+  - `photon-axum/`: Engine sync + Live relay as mountable axum routers. Migrations live in `crates/photon-axum/migrations/`.
+  - `photon-server/`: thin runnable binaries (combined, engine-only, live-only) over `photon-axum`.
+- `examples/rust-sync-server/`: reference Engine sync server, used as a test fixture.
 - `tests/e2e/`: Playwright end-to-end tests.
 
 ## Build, Test, and Development Commands
 
 - `npm install`: install frontend and test dependencies.
 - `npm run dev -- --host 127.0.0.1`: start the Vite frontend on port `5173`.
-- `cd packages/server && cargo run`: start the backend on port `3001`.
+- `cargo run --bin photon-server`: start the backend on port `3001`.
 - `npm run build`: type-check and build the frontend.
 - `npm run type-check`: run TypeScript checks without emitting files.
 - `npm test`: run Vitest unit tests.
 - `npm run test:e2e`: run Playwright E2E tests.
-- `cd packages/server && cargo test`: run backend Rust tests.
+- `cargo test --workspace`: run backend Rust tests.
 - `npm run tauri:dev`: run the desktop app during development.
 
 ## Coding Style & Naming Conventions
@@ -49,4 +53,4 @@ For pull requests, include a summary, linked ticket or PLT ID, verification comm
 
 ## Security & Configuration Tips
 
-Do not commit generated data such as `dist/`, `packages/server/target/`, local SQLite files, Playwright reports, or secrets. Keep ports and API endpoints explicit so frontend, backend, mobile, and desktop clients share runtime assumptions.
+Do not commit generated data such as `dist/`, `target/`, local SQLite files, Playwright reports, or secrets. Keep ports and API endpoints explicit so frontend, backend, mobile, and desktop clients share runtime assumptions.

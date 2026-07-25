@@ -8,5 +8,6 @@ storybook-static/
 .wrangler/
 
 # Rust
-packages/*/target/
-packages/server/photon.db
+target/
+photon.db
+crates/photon-engine/pkg/

@@ -64,17 +64,17 @@
     "tauri:ios:dev": "tauri ios dev",
     "tauri:ios:build": "tauri ios build",
     "tauri:ios:build:sim": "tauri ios build --target aarch64-sim",
-    "engine:wasm": "npx wasm-pack build packages/photon-engine --target web --out-dir pkg --no-default-features --features wasm",
-    "server": "cd packages/server && cargo run --bin photon-server",
-    "server:engine": "cd packages/server && cargo run --bin photon-engine-server",
-    "server:live": "cd packages/server && cargo run --bin photon-live-server",
+    "engine:wasm": "npx wasm-pack build crates/photon-engine --target web --out-dir pkg --no-default-features --features wasm",
+    "server": "cargo run --bin photon-server",
+    "server:engine": "cargo run --bin photon-engine-server",
+    "server:live": "cargo run --bin photon-live-server",
     "server:engine:smoke": "node scripts/smoke-engine-api.mjs",
-    "server:test": "cargo test --manifest-path packages/server/Cargo.toml",
+    "server:test": "cargo test --workspace",
     "pages:build": "npm run build",
     "pages:deploy": "npm run pages:build && cd dist && wrangler pages deploy . --project-name photon --branch main --commit-dirty=true",
     "worker:dev": "wrangler dev --config wrangler.jsonc --port 8787",
     "worker:deploy": "wrangler deploy --config wrangler.jsonc",
-    "mock:tachyon": "cd packages/server && cargo run --bin mock-tachyon-api"
+    "mock:tachyon": "cargo run --bin mock-tachyon-api"
   },
   "dependencies": {
     "@blocknote/core": "^0.50.0",

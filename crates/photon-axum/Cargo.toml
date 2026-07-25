@@ -1,0 +1,27 @@
+[package]
+name = "photon-axum"
+description = "Photon Engine sync + Live relay as mountable axum routers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+axum.workspace = true
+chrono.workspace = true
+futures-util.workspace = true
+photon-engine = { workspace = true, features = ["sqlite", "mysql"] }
+serde.workspace = true
+serde_json.workspace = true
+sqlx.workspace = true
+tokio.workspace = true
+tower-http.workspace = true
+tracing.workspace = true
+utoipa.workspace = true
+utoipa-swagger-ui.workspace = true
+yrs.workspace = true
+
+[dev-dependencies]
+tower.workspace = true
+uuid.workspace = true

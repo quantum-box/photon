@@ -102,7 +102,7 @@ async fn photon_engine_server_accepts_push_and_returns_pull() {
             value: json!({
                 "id": "record-1",
                 "title": "Engine server smoke",
-                "source": "packages/server/tests/engine_server_smoke.rs"
+                "source": "crates/photon-server/tests/engine_server_smoke.rs"
             }),
         },
     )

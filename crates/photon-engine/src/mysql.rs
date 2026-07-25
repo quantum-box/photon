@@ -630,23 +630,6 @@ impl StorageAdapter for MySqlAdapter {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::MySqlAdapter;
-
-    #[test]
-    fn normalizes_tidb_urls_for_sqlx_mysql_driver() {
-        assert_eq!(
-            MySqlAdapter::normalize_database_url("tidb://user:pass@host:4000/photon"),
-            "mysql://user:pass@host:4000/photon"
-        );
-        assert_eq!(
-            MySqlAdapter::normalize_database_url("mysql://user:pass@host:3306/photon"),
-            "mysql://user:pass@host:3306/photon"
-        );
-    }
-}
-
 fn push_where(builder: &mut QueryBuilder<'_, MySql>, has_where: &mut bool) {
     if *has_where {
         builder.push(" AND ");
@@ -695,4 +678,21 @@ fn snapshot_update_from_row(key: RecordKey, row: sqlx::mysql::MySqlRow) -> Resul
         metadata: serde_json::from_str(&metadata_json)?,
         created_at_ms: row.try_get("created_at_ms")?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MySqlAdapter;
+
+    #[test]
+    fn normalizes_tidb_urls_for_sqlx_mysql_driver() {
+        assert_eq!(
+            MySqlAdapter::normalize_database_url("tidb://user:pass@host:4000/photon"),
+            "mysql://user:pass@host:4000/photon"
+        );
+        assert_eq!(
+            MySqlAdapter::normalize_database_url("mysql://user:pass@host:3306/photon"),
+            "mysql://user:pass@host:3306/photon"
+        );
+    }
 }

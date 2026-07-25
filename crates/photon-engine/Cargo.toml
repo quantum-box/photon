@@ -1,10 +1,10 @@
 [package]
 name = "photon-engine"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
 description = "Universal offline sync core for Photon and Tachyon runtimes"
-authors = ["Quantum Box"]
-license = "MIT"
+authors.workspace = true
+license.workspace = true
 publish = false
 
 [lib]

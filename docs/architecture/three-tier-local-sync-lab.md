@@ -263,7 +263,7 @@ between parsed Engine operations and storage writes.
 
 1. Add Worker tests for pass-through proxy behavior.
 2. Add cloud server request ID logging for push/pull.
-3. Add a domain validation boundary in `packages/server`.
+3. Add a domain validation boundary in `crates/photon-axum`.
 4. Add client pull apply and cursor persistence.
 5. Add a Playwright or Node smoke that starts:
    - MySQL

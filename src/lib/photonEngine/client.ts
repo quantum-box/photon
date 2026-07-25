@@ -201,7 +201,7 @@ function isTauriRuntime() {
 
 async function loadWasmEngine(): Promise<WasmPhotonEngineModule> {
   if (wasmUnavailable) throw new Error('Photon Engine WASM adapter is unavailable')
-  wasmModulePromise ??= import('../../../packages/photon-engine/pkg/photon_engine.js').then(
+  wasmModulePromise ??= import('../../../crates/photon-engine/pkg/photon_engine.js').then(
     async (module: WasmPhotonEngineModule) => {
       await module.default?.()
       return module

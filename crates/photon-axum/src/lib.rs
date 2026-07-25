@@ -1,6 +1,5 @@
 use std::{
     collections::{BTreeMap, HashMap},
-    net::SocketAddr,
     sync::{
         atomic::{AtomicI64, AtomicUsize, Ordering},
         Arc,
@@ -370,7 +369,11 @@ impl StorageAdapter for ServerEngineAdapter {
     }
 }
 
-fn engine_api_router() -> Router<Arc<AppState>> {
+/// Engine sync routes, without state or middleware.
+///
+/// Use this when the host application supplies its own layers; otherwise reach
+/// for [`engine_router`], which is the batteries-included form.
+pub fn engine_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/health", get(health))
         .route(
@@ -384,100 +387,49 @@ fn engine_api_router() -> Router<Arc<AppState>> {
         .route("/api/engine/debug", get(engine_debug_state))
 }
 
-fn live_router() -> Router<Arc<AppState>> {
+/// Photon Live WebSocket route, without state or middleware.
+pub fn live_routes() -> Router<Arc<AppState>> {
     Router::new().route("/ws", get(ws_handler))
 }
 
-fn combined_app_router(state: Arc<AppState>, cors: CorsLayer) -> Router {
-    Router::new()
-        .merge(engine_api_router())
-        .merge(live_router())
-        .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
+/// Engine sync API: `/api/health`, `/api/engine/{push,pull,debug}` and Swagger UI.
+///
+/// Ready to `.merge()` into an existing axum application.
+pub fn engine_router(state: Arc<AppState>) -> Router {
+    engine_routes()
+        .merge(swagger_ui())
         .layer(tower_http::trace::TraceLayer::new_for_http())
-        .layer(cors)
+        .layer(cors_layer())
         .with_state(state)
 }
 
-#[derive(Debug, Clone, Copy)]
-pub enum PhotonServerMode {
-    Combined,
-    Engine,
-    Live,
+/// Photon Live realtime relay: `/ws`.
+pub fn live_router(state: Arc<AppState>) -> Router {
+    live_routes()
+        .layer(tower_http::trace::TraceLayer::new_for_http())
+        .layer(cors_layer())
+        .with_state(state)
 }
 
-impl PhotonServerMode {
-    fn service_name(self) -> &'static str {
-        match self {
-            Self::Combined => "Photon server",
-            Self::Engine => "Photon Engine server",
-            Self::Live => "Photon Live server",
-        }
-    }
-
-    fn default_port(self) -> u16 {
-        match self {
-            Self::Combined | Self::Engine => 3001,
-            Self::Live => 3002,
-        }
-    }
-
-    fn mode_port_env(self) -> Option<&'static str> {
-        match self {
-            Self::Combined => None,
-            Self::Engine => Some("PHOTON_ENGINE_PORT"),
-            Self::Live => Some("PHOTON_LIVE_PORT"),
-        }
-    }
+/// Engine sync API and Live relay behind one shared middleware stack.
+pub fn combined_router(state: Arc<AppState>) -> Router {
+    engine_routes()
+        .merge(live_routes())
+        .merge(swagger_ui())
+        .layer(tower_http::trace::TraceLayer::new_for_http())
+        .layer(cors_layer())
+        .with_state(state)
 }
 
-fn init_tracing() {
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "photon_server=debug,tower_http=debug".into()),
-        )
-        .try_init();
+fn swagger_ui() -> SwaggerUi {
+    SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi())
 }
 
-fn resolve_app_database_url(mode: PhotonServerMode) -> String {
-    resolve_app_database_url_from(mode, |key| std::env::var(key).ok())
-}
-
-fn resolve_app_database_url_from(
-    mode: PhotonServerMode,
-    mut lookup: impl FnMut(&str) -> Option<String>,
-) -> String {
-    match mode {
-        PhotonServerMode::Live => lookup("PHOTON_LIVE_DATABASE_URL")
-            .unwrap_or_else(|| "sqlite:photon-live.db?mode=rwc".into()),
-        PhotonServerMode::Engine => lookup("PHOTON_ENGINE_APP_DATABASE_URL")
-            .unwrap_or_else(|| "sqlite:photon.db?mode=rwc".into()),
-        PhotonServerMode::Combined => {
-            lookup("DATABASE_URL").unwrap_or_else(|| "sqlite:photon.db?mode=rwc".into())
-        }
-    }
-}
-
-fn resolve_engine_database_url(mode: PhotonServerMode) -> String {
-    match mode {
-        PhotonServerMode::Engine => std::env::var("PHOTON_ENGINE_DATABASE_URL")
-            .or_else(|_| std::env::var("DATABASE_URL"))
-            .unwrap_or_else(|_| "sqlite:photon.db?mode=rwc".into()),
-        PhotonServerMode::Live => std::env::var("PHOTON_LIVE_ENGINE_DATABASE_URL")
-            .or_else(|_| std::env::var("PHOTON_ENGINE_DATABASE_URL"))
-            .or_else(|_| std::env::var("DATABASE_URL"))
-            .unwrap_or_else(|_| "sqlite:photon.db?mode=rwc".into()),
-        PhotonServerMode::Combined => std::env::var("PHOTON_ENGINE_DATABASE_URL")
-            .or_else(|_| std::env::var("DATABASE_URL"))
-            .unwrap_or_else(|_| "sqlite:photon.db?mode=rwc".into()),
-    }
-}
-
-fn normalize_engine_database_url(engine_database_url: &str) -> String {
+pub fn normalize_engine_database_url(engine_database_url: &str) -> String {
     MySqlAdapter::normalize_database_url(engine_database_url)
 }
 
-fn engine_database_kind(engine_database_url: &str) -> &'static str {
+pub fn engine_database_kind(engine_database_url: &str) -> &'static str {
     if engine_database_url.starts_with("tidb://") {
         "tidb"
     } else if engine_database_url.starts_with("mysql://") {
@@ -487,15 +439,7 @@ fn engine_database_kind(engine_database_url: &str) -> &'static str {
     }
 }
 
-fn resolve_port(mode: PhotonServerMode) -> u16 {
-    mode.mode_port_env()
-        .and_then(|env| std::env::var(env).ok())
-        .or_else(|| std::env::var("PORT").ok())
-        .and_then(|port| port.parse::<u16>().ok())
-        .unwrap_or_else(|| mode.default_port())
-}
-
-async fn build_state(
+pub async fn build_state(
     database_url: &str,
     engine_database_url: &str,
 ) -> Result<Arc<AppState>, Box<dyn std::error::Error>> {
@@ -522,54 +466,6 @@ fn cors_layer() -> CorsLayer {
         .allow_origin(Any)
         .allow_methods(Any)
         .allow_headers(Any)
-}
-
-fn app_router_for_mode(mode: PhotonServerMode, state: Arc<AppState>) -> Router {
-    match mode {
-        PhotonServerMode::Combined => combined_app_router(state, cors_layer()),
-        PhotonServerMode::Engine => engine_api_router()
-            .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
-            .layer(tower_http::trace::TraceLayer::new_for_http())
-            .layer(cors_layer())
-            .with_state(state),
-        PhotonServerMode::Live => live_router()
-            .layer(tower_http::trace::TraceLayer::new_for_http())
-            .layer(cors_layer())
-            .with_state(state),
-    }
-}
-
-pub async fn run_server(mode: PhotonServerMode) -> Result<(), Box<dyn std::error::Error>> {
-    init_tracing();
-
-    let database_url = resolve_app_database_url(mode);
-    let engine_database_url = resolve_engine_database_url(mode);
-    let state = build_state(&database_url, &engine_database_url).await?;
-    let app = app_router_for_mode(mode, state);
-
-    let port = resolve_port(mode);
-    let addr = SocketAddr::from(([0, 0, 0, 0], port));
-    info!("{} listening on {addr}", mode.service_name());
-    if matches!(mode, PhotonServerMode::Combined | PhotonServerMode::Engine) {
-        info!("Swagger UI: http://{addr}/swagger-ui/");
-    }
-
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
-
-    Ok(())
-}
-
-pub async fn run_combined_server() -> Result<(), Box<dyn std::error::Error>> {
-    run_server(PhotonServerMode::Combined).await
-}
-
-pub async fn run_engine_server() -> Result<(), Box<dyn std::error::Error>> {
-    run_server(PhotonServerMode::Engine).await
-}
-
-pub async fn run_live_server() -> Result<(), Box<dyn std::error::Error>> {
-    run_server(PhotonServerMode::Live).await
 }
 
 // ---------------------------------------------------------------------------
@@ -1024,7 +920,7 @@ impl IntoResponse for AppError {
 // Database initialization
 // ---------------------------------------------------------------------------
 
-async fn init_db(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+pub async fn init_db(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     sqlx::raw_sql(include_str!("../migrations/002_create_yjs_state.sql"))
         .execute(pool)
         .await?;
@@ -1393,12 +1289,12 @@ mod tests {
 
     async fn engine_test_app() -> (Router, Arc<AppState>) {
         let state = test_state().await;
-        (engine_api_router().with_state(state.clone()), state)
+        (engine_routes().with_state(state.clone()), state)
     }
 
     async fn live_test_app() -> (Router, Arc<AppState>) {
         let state = test_state().await;
-        (live_router().with_state(state.clone()), state)
+        (live_routes().with_state(state.clone()), state)
     }
 
     async fn test_app() -> (Router, Arc<AppState>) {
@@ -1670,42 +1566,6 @@ mod tests {
             "mysql"
         );
         assert_eq!(engine_database_kind("sqlite:photon.db?mode=rwc"), "sqlite");
-    }
-
-    #[test]
-    fn test_mode_specific_app_database_url_resolution() {
-        let lookup = |key: &str| match key {
-            "DATABASE_URL" => Some("sqlite:shared.db?mode=rwc".to_owned()),
-            "PHOTON_LIVE_DATABASE_URL" => Some("sqlite:live.db?mode=rwc".to_owned()),
-            "PHOTON_ENGINE_APP_DATABASE_URL" => Some("sqlite:engine-app.db?mode=rwc".to_owned()),
-            _ => None,
-        };
-
-        assert_eq!(
-            resolve_app_database_url_from(PhotonServerMode::Combined, lookup),
-            "sqlite:shared.db?mode=rwc"
-        );
-        assert_eq!(
-            resolve_app_database_url_from(PhotonServerMode::Engine, lookup),
-            "sqlite:engine-app.db?mode=rwc"
-        );
-        assert_eq!(
-            resolve_app_database_url_from(PhotonServerMode::Live, lookup),
-            "sqlite:live.db?mode=rwc"
-        );
-
-        let shared_only = |key: &str| match key {
-            "DATABASE_URL" => Some("mysql://user:pass@mysql.example.com:3306/photon".to_owned()),
-            _ => None,
-        };
-        assert_eq!(
-            resolve_app_database_url_from(PhotonServerMode::Engine, shared_only),
-            "sqlite:photon.db?mode=rwc"
-        );
-        assert_eq!(
-            resolve_app_database_url_from(PhotonServerMode::Live, shared_only),
-            "sqlite:photon-live.db?mode=rwc"
-        );
     }
 
     // -----------------------------------------------------------------------

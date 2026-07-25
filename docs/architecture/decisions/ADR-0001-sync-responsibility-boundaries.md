@@ -12,7 +12,7 @@ Photon は React/Vite/Tauri frontend、Yjs local-first state、Cloudflare Worker
 
 Cloudflare sync backend は `workers/sync/index.ts` で `/ws` を Durable Object room に routing し、opaque な Yjs update を保存、replay、broadcast する。presence は WebSocket connection 数から計算する。この backend は update payload を domain data として解釈しない。
 
-Rust server は `packages/server/src/main.rs` で record API、SQLite storage、yrs-based `/ws` sync endpoint を提供する。structured domain data は Photon Engine の `scope + collection + record_id` model に寄せ、surface 固有の互換 layer を増やさない。
+Rust server は `crates/photon-axum/src/lib.rs` で record API、SQLite storage、yrs-based `/ws` sync endpoint を提供する。structured domain data は Photon Engine の `scope + collection + record_id` model に寄せ、surface 固有の互換 layer を増やさない。
 
 Photon Workspace v0.2 では records だけでなく、Notion-like editor documents、attachments、chat messages、tool calls、workspace metadata も扱う。これらは realtime collaboration だけでなく、server-side persistence、permissions、audit、search、migration に乗る必要がある。
 
@@ -166,6 +166,6 @@ Rejected. Infinite replay gets slower over time and makes repair, migration, sea
 - `src/lib/yjs/useYjsRecords.ts`
 - `src/contexts/RecordsContext.tsx`
 - `workers/sync/index.ts`
-- `packages/server/src/main.rs`
-- `packages/photon-engine/src/sqlite.rs`
+- `crates/photon-axum/src/lib.rs`
+- `crates/photon-engine/src/sqlite.rs`
 - `docs/cloudflare-sync.md`

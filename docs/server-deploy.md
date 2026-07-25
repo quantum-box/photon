@@ -1,6 +1,6 @@
 # Photon Server Deploy
 
-Photon's Rust servers live in `packages/server`. Production should deploy the
+Photon's Rust servers live in `crates/photon-axum`. Production should deploy the
 Engine and Live roles separately, usually behind an edge ingress:
 
 ```text
@@ -25,23 +25,23 @@ Client
 Build the compatibility server image locally:
 
 ```bash
-docker build -f packages/server/Dockerfile -t photon-server:local packages/server
+docker build -f crates/photon-server/Dockerfile -t photon-server:local .
 ```
 
 Build role-specific images:
 
 ```bash
 docker build \
-  -f packages/server/Dockerfile \
+  -f crates/photon-server/Dockerfile \
   --build-arg PHOTON_SERVER_BIN=photon-engine-server \
   -t photon-engine-server:local \
-  packages/server
+  .
 
 docker build \
-  -f packages/server/Dockerfile \
+  -f crates/photon-server/Dockerfile \
   --build-arg PHOTON_SERVER_BIN=photon-live-server \
   -t photon-live-server:local \
-  packages/server
+  .
 ```
 
 Run it locally:
@@ -107,7 +107,7 @@ operations may first pass through edge auth/session checks and rate limits, but
 they should still reach the cloud application/server layer for durable auth,
 permission checks, collection rules, schema validation, conflict policy, and
 audit metadata before they become accepted operations. App-domain SQLite
-migrations under `packages/server/migrations/` are still for the local
+migrations under `crates/photon-axum/migrations/` are still for the local
 compatibility app database; they are not the TiDB Engine schema source.
 
 Local MySQL can stand in for TiDB when validating the production storage path:
@@ -122,7 +122,7 @@ docker run --name photon-engine-mysql \
   -d mysql:8.0.35
 
 PHOTON_ENGINE_MYSQL_TEST_DATABASE_URL=mysql://photon:photon_pass@127.0.0.1:3307/photon_engine \
-  cargo test --manifest-path packages/photon-engine/Cargo.toml --features mysql \
+  cargo test -p photon-engine --features mysql \
   mysql_adapter_satisfies_storage_contract_when_url_is_configured
 ```
 
@@ -156,7 +156,7 @@ For a local lab that runs the Client -> Edge -> Cloud Server -> DB shape, see
 
 ## GitHub Actions Cloud Run Deploy
 
-`.github/workflows/server-deploy.yml` builds `packages/server/Dockerfile`, pushes
+`.github/workflows/server-deploy.yml` builds `crates/photon-server/Dockerfile`, pushes
 the image to Artifact Registry, and deploys it to Cloud Run.
 
 Required repository variables:
