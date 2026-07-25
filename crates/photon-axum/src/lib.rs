@@ -134,6 +134,11 @@ fn engine_yjs_snapshot_key(room_id: &str) -> RecordKey {
 // App state
 // ---------------------------------------------------------------------------
 
+/// Default page size for `/api/engine/pull`.
+const DEFAULT_PULL_LIMIT: usize = 200;
+/// Hard ceiling, so a client cannot ask for the whole history in one response.
+const MAX_PULL_LIMIT: usize = 1_000;
+
 const DEFAULT_ROOM_ID: &str = "default";
 /// Compact the on-disk update log when it grows beyond this many rows.
 const YJS_COMPACTION_THRESHOLD: i64 = 100;
@@ -548,6 +553,12 @@ async fn pull_engine_operations(
         .unwrap_or("none");
     let scope = payload.scope.clone();
     let after_remote_sequence = payload.cursor.as_ref().map(|cursor| cursor.position);
+    // Bound the response. An unbounded pull loads the entire operation history
+    // of a workspace into memory and into one HTTP body.
+    let limit = payload
+        .limit
+        .filter(|limit| *limit > 0)
+        .map_or(DEFAULT_PULL_LIMIT, |limit| limit.min(MAX_PULL_LIMIT));
     let operations = state
         .engine
         .storage()
@@ -555,6 +566,7 @@ async fn pull_engine_operations(
             scope: Some(payload.scope.clone()),
             status: Some(OperationStatus::Accepted),
             after_remote_sequence,
+            limit: Some(limit),
             ..OperationFilter::default()
         })
         .await?;
@@ -588,6 +600,8 @@ async fn pull_engine_operations(
     );
 
     Ok(Json(PullResult {
+        // A full page means there is very likely another one behind it.
+        has_more: pulled_count >= limit,
         operations: pulled,
         cursor: Some(SyncCursor::new(
             payload.scope,
@@ -1398,6 +1412,7 @@ mod tests {
                         serde_json::to_string(&PullRequest {
                             scope: default_workspace_scope(),
                             cursor: None,
+                            limit: None,
                         })
                         .unwrap(),
                     ))

@@ -52,12 +52,18 @@ pub struct PulledOperation {
 pub struct PullRequest {
     pub scope: ScopeId,
     pub cursor: Option<SyncCursor>,
+    /// Page size. The server clamps it; omitting it takes the server default.
+    #[serde(default)]
+    pub limit: Option<usize>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct PullResult {
     pub operations: Vec<PulledOperation>,
     pub cursor: Option<SyncCursor>,
+    /// True when the page was filled, so the client should ask for another.
+    #[serde(default)]
+    pub has_more: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

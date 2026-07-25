@@ -142,6 +142,7 @@ async fn photon_engine_server_accepts_push_and_returns_pull() {
         Some(&PullRequest {
             scope,
             cursor: None,
+            limit: None,
         }),
     )
     .await

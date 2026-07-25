@@ -142,7 +142,15 @@ export function createEngineTransport(options: EngineTransportOptions): SyncTran
     async pull(request: PullRequest): Promise<PullResult> {
       const body = await post<WirePullResponse>(
         pullPath,
-        { scope: request.scope, cursor: request.cursor, limit: request.limit },
+        {
+          scope: request.scope,
+          // The wire cursor is an object; the engine tracks the position.
+          cursor:
+            request.cursor === null
+              ? null
+              : { scope: request.scope, remote: 'photon-server', position: request.cursor, updated_at_ms: 0 },
+          limit: request.limit,
+        },
         request.signal,
       )
 

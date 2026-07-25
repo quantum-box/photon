@@ -171,6 +171,7 @@ impl SyncEndpoint for RemoteHub {
         Ok(PullResult {
             operations,
             cursor: Some(cursor),
+            has_more: false,
         })
     }
 }

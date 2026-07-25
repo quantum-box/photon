@@ -156,6 +156,7 @@ where
             .pull(PullRequest {
                 scope: scope.clone(),
                 cursor,
+                limit: None,
             })
             .await?;
 

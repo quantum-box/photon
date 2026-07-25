@@ -265,7 +265,15 @@ impl StorageAdapter for SqliteAdapter {
             builder.push_bind(after_remote_sequence);
         }
 
-        builder.push(" ORDER BY local_sequence ASC");
+        // Paginate in the same order the cursor advances. Ordering by
+        // local_sequence while filtering on remote_sequence lets a page skip or
+        // repeat operations whenever the two orders diverge, which they do
+        // whenever operations are published in a different order than stored.
+        if filter.after_remote_sequence.is_some() {
+            builder.push(" ORDER BY remote_sequence ASC");
+        } else {
+            builder.push(" ORDER BY local_sequence ASC");
+        }
 
         if let Some(limit) = filter.limit {
             builder.push(" LIMIT ");

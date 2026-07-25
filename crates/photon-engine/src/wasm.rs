@@ -64,7 +64,10 @@ pub struct ReplayResult {
 }
 
 fn key_index(key: &RecordKey) -> String {
-    format!("{}\u{1f}{}\u{1f}{}", key.scope, key.collection, key.record_id)
+    format!(
+        "{}\u{1f}{}\u{1f}{}",
+        key.scope, key.collection, key.record_id
+    )
 }
 
 /// The synchronous semantic kernel.
@@ -104,9 +107,13 @@ impl PhotonKernel {
             clock.clone()
         };
 
-        let mut operation =
-            Operation::at(now_ms as i64, intent.key, self.actor_id.clone(), intent.kind)
-                .with_timestamp(timestamp);
+        let mut operation = Operation::at(
+            now_ms as i64,
+            intent.key,
+            self.actor_id.clone(),
+            intent.kind,
+        )
+        .with_timestamp(timestamp);
 
         if let Some(id) = intent.operation_id {
             operation = operation.with_id(id);

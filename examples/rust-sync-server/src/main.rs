@@ -589,6 +589,7 @@ async fn pull_sync(
     Ok(Json(PullResult {
         operations,
         cursor: Some(cursor),
+        has_more: false,
     }))
 }
 
