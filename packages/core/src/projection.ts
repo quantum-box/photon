@@ -77,7 +77,10 @@ export class Projection {
       updatedBy: engine.updated_by,
       pending: (this.pendingCounts.get(index) ?? 0) > 0,
       durable: options.durable,
-      ...(options.aliasOf ? { aliasOf: options.aliasOf } : {}),
+      // An alias is a historical fact about where this record came from. A
+      // later snapshot of the same record does not make it untrue, and a route
+      // still holding the old id needs it to redirect.
+      ...aliasOf(options.aliasOf ?? previous?.aliasOf),
     }
 
     if (previous && recordsEqual(previous, next)) return null
@@ -141,6 +144,10 @@ export class Projection {
     this.records.set(index, next)
     return { collection, recordId, previous, next }
   }
+}
+
+function aliasOf(value: RecordId | undefined): { aliasOf?: RecordId } {
+  return value === undefined ? {} : { aliasOf: value }
 }
 
 function recordsEqual(a: PhotonRecord, b: PhotonRecord): boolean {

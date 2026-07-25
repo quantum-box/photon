@@ -24,7 +24,7 @@ import { CollectionQuery, RecordQuery } from './query.js'
 import type { LiveQuery, QueryDescriptor, QueryState } from './query.js'
 import type { LocalStore, StoreWrite } from './store.js'
 import { SyncEngine } from './sync/controller.js'
-import type { SyncController, SyncTransport } from './sync/types.js'
+import type { PullResult, SyncController, SyncTransport } from './sync/types.js'
 import type {
   AckResult,
   ChangeSet,
@@ -192,6 +192,7 @@ class PhotonClientImpl implements PhotonClient {
       collectPending: () => [...this.pending.values()].map((entry) => entry.operation),
       onDecision: (decision) => this.handleDecision(decision),
       applyRemote: (operations) => this.applyRemoteOperations(operations),
+      applySnapshot: (page) => this.applySnapshot(page),
       knownOperationIds: () => this.appliedOperationIds,
       pendingCount: () => this.pending.size,
       conflictCount: () => this.conflictRows.length,
@@ -473,6 +474,7 @@ class PhotonClientImpl implements PhotonClient {
     reason?: string
     remoteValue?: unknown
     remoteSequence?: number
+    aliasRecordId?: string
   }): void {
     const entry = this.pending.get(decision.operationId)
     if (!entry) return
@@ -485,9 +487,29 @@ class PhotonClientImpl implements PhotonClient {
     if (released) changes.push(released)
 
     switch (decision.kind) {
-      case 'accepted':
+      case 'accepted': {
+        // A REST backend that assigns its own id: move the record in one
+        // ChangeSet so nothing ever observes both ids at once.
+        if (decision.aliasRecordId && decision.aliasRecordId !== recordId) {
+          const local = this.projection.get(collection, recordId)
+          const removed = this.projection.remove(collection, recordId)
+          if (removed) changes.push(removed)
+          if (local) {
+            const aliased: EngineRecord = {
+              key: { scope: this.scope, collection, record_id: decision.aliasRecordId },
+              value: local.value,
+              version: local.version,
+              field_versions: local.fieldVersions,
+              deleted_at: local.deletedAt,
+              updated_by: local.updatedBy,
+            }
+            const added = this.projection.set(aliased, { durable: true, aliasOf: recordId })
+            if (added) changes.push(added)
+          }
+        }
         entry.resolve({ status: 'accepted', operationId: decision.operationId })
         break
+      }
 
       case 'rejected': {
         entry.resolve({
@@ -550,6 +572,54 @@ class PhotonClientImpl implements PhotonClient {
       if (change) changes.push(change)
     }
     this.emit(origin, changes)
+  }
+
+  /**
+   * Fold a current-state listing into the projection.
+   *
+   * Pending local operations are re-applied on top afterwards, so a refetch
+   * never wipes out an optimistic edit that has not been acknowledged yet.
+   */
+  private applySnapshot(page: Extract<PullResult, { kind: 'snapshot' }>): void {
+    const changes: RecordChange[] = []
+    const seen = new Set<RecordId>()
+
+    for (const remote of page.records) {
+      seen.add(remote.recordId)
+      const version = this.kernel.currentTimestamp()
+      const engine: EngineRecord = {
+        key: { scope: this.scope, collection: remote.collection, record_id: remote.recordId },
+        value: remote.value,
+        version,
+        field_versions: {},
+        deleted_at: remote.deleted ? version : null,
+        updated_by: 'remote',
+      }
+      const change = this.projection.set(engine, { durable: true })
+      if (change) changes.push(change)
+    }
+
+    // Only a complete listing can tell "deleted upstream" from "not on this
+    // page", so tombstone reconciliation is gated on the claim.
+    if (page.complete) {
+      for (const record of [...this.projection.recordsIn(page.collection)]) {
+        if (!seen.has(record.key.record_id) && !record.pending) {
+          const change = this.projection.remove(page.collection, record.key.record_id)
+          if (change) changes.push(change)
+        }
+      }
+    }
+
+    // Re-apply unacknowledged local work over the server's view.
+    for (const entry of this.pending.values()) {
+      if (entry.operation.key.collection !== page.collection) continue
+      const current = this.toEngineRecord(page.collection, entry.operation.key.record_id)
+      const projected = this.kernel.applyOperation(current, entry.operation)
+      const change = this.projection.set(projected, { durable: false })
+      if (change) changes.push(change)
+    }
+
+    this.emit('remote', changes)
   }
 
   private applyRemoteOperations(operations: readonly Operation[]): void {

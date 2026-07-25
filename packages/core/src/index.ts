@@ -40,6 +40,9 @@ export type {
   StoreWrite,
 } from './store.js'
 
+export { createRestTransport, decisionForError } from './rest/index.js'
+export type { RestListResult, RestResource, RestTransportOptions } from './rest/index.js'
+
 export { createBackoff } from './sync/backoff.js'
 export type { Backoff, BackoffOptions } from './sync/backoff.js'
 export { createEngineTransport, SyncHttpError } from './sync/engine-transport.js'

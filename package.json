@@ -22,6 +22,10 @@
       "types": "./packages/react/dist/index.d.ts",
       "default": "./packages/react/dist/index.js"
     },
+    "./rest": {
+      "types": "./packages/core/dist/rest/index.d.ts",
+      "default": "./packages/core/dist/rest/index.js"
+    },
     "./store-pglite": {
       "types": "./packages/store-pglite/dist/index.d.ts",
       "default": "./packages/store-pglite/dist/index.js"

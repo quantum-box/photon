@@ -17,6 +17,7 @@ import { createBackoff } from './backoff.js'
 import type { LocalStore, OperationStatusUpdate } from '../store.js'
 import type { Collection, Operation, Scope } from '../types.js'
 import type {
+  PullResult,
   PushDecision,
   SyncController,
   SyncError,
@@ -39,6 +40,8 @@ export interface SyncEngineOptions {
   collectPending(): Operation[]
   onDecision(decision: PushDecision): void
   applyRemote(operations: readonly Operation[]): void
+  /** A server with no operation log returned current state instead. */
+  applySnapshot(page: Extract<PullResult, { kind: 'snapshot' }>): void
   knownOperationIds(): ReadonlySet<string>
   pendingCount(): number
   conflictCount(): number
@@ -232,7 +235,12 @@ export class SyncEngine implements SyncController {
           limit: this.options.pullPageSize,
         })
 
-        if (page.kind !== 'operations') break
+        if (page.kind === 'snapshot') {
+          this.options.applySnapshot(page)
+          summary.pulled += page.records.length
+          cursor = page.cursor ?? cursor
+          break
+        }
         if (!page.operations.length) {
           cursor = page.cursor ?? cursor
           break
