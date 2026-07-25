@@ -2,7 +2,14 @@
 
 ## Status
 
-Accepted (2026-05-08)
+Superseded by [ADR-0002](ADR-0002-photon-engine-as-the-product.md) (2026-07-25). Originally accepted 2026-05-08.
+
+Engine と Live の責務分割自体はいまも有効で、そのまま効いている。ADR-0002 が変えたのは 2 点だけ:
+
+1. 構造化データが Yjs に二重書きされなくなり、operation log が単一権威になった
+2. 「アプリサーバが domain data を所有する」書き込みパス（下記の手順 1–6）が operation log に置き換わった
+
+follow-up の PLT-1180 / 1183 / 1186 / 1188 は「実装により解決」ではなく「削除により解決」となった。
 
 ## Context
 

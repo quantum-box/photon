@@ -1,68 +1,161 @@
 # Photon
 
-AI × リアルタイム思考速度インターフェース基盤。Tachyon プラットフォーム全体を操作する統合 UI。
+ローカルファーストな同期エンジン。**オフラインでも書き込みが消えず、操作が即座に画面に出て、復帰時に収束する** — これだけを提供する。
 
-## コンセプト
+UI は持たない。データに集中している。
 
-- **究極の楽観 UI**: 操作は即座に反映、バックグラウンドで同期
-- **リアルタイム AI**: 操作コンテキストを AI が理解し提案・自動処理
-- **自然言語オペレーション**: テーブル操作やフィルタを自然言語で実行
-- **Local-first**: オフライン対応、復帰時自動同期 (CRDT ベース)
+```ts
+import { createPhotonClient, createEngineTransport } from '@quantum-box/photon'
+import { createPGliteStore } from '@quantum-box/photon/store-pglite'
+import { loadPhotonKernel } from '@quantum-box/photon/wasm'
 
-## Sync Model
-
-Photon の同期体験は **Photon Engine** と **Photon Live** の2層で整理する。
-
-- **Photon Engine**: 通信が不安定でも作業内容を失わない durable data mutation path。オフライン中も作成・編集・削除をローカルに保存し、オンライン復帰後に push/pull sync で追いつく。
-- **Photon Live**: 共同編集の手触りを作る realtime collaborative UX path。他の人の編集、presence、awareness、同じ画面を一緒に触っている感覚を扱う。オフライン中は transport/presence を止め、ローカル編集は続け、再接続時に local state を送る。
-- **REST/RPC API**: bootstrap、auth、special commands、sync endpoint を提供する外側の API 層。
-
-ざっくり言うと、Photon Engine は「消えない安心感」、Photon Live は「一緒に操作している感じ」を担当する。
-
-## 技術スタック
-
-| レイヤー | 採用技術 |
-|---|---|
-| UI フレームワーク | Vite + React + TypeScript |
-| デスクトップ | Tauri v2 (Web / デスクトップ両対応) |
-| ルーティング | TanStack Router |
-| テーブル | TanStack Table |
-| スタイル | Tailwind CSS + Radix UI |
-| Photon Engine | Rust crate (`crates/photon-engine`) |
-| Photon Live | Yjs + IndexedDB + WebSocket / Durable Object room |
-| アプリ API | Rust axum + SQLite (`crates/photon-axum`) |
-| テスト | Vitest |
-
-## 現在実装済みの機能
-
-- **Records (テーブルビュー)**: record 一覧・ソート・ステータスフィルタ・インライン編集
-- **Board (カンバンビュー)**: ドラッグ&ドロップでステータス変更
-- **Detail パネル**: record 詳細・編集・削除
-- **Chat**: AI チャットビュー
-- **Create Record モーダル**: 新規 record 作成
-
-## ローカル開発
-
-```bash
-# 依存インストール
-npm install
-
-# Web 版 dev サーバー起動
-npm run dev
-
-# デスクトップ版 (Tauri) 起動
-npm run tauri:dev
-
-# 型チェック
-npm run type-check
-
-# テスト
-npm run test
+const photon = await createPhotonClient({
+  scope: 'workspace:acme:roadmap',
+  actorId: `${deviceId}:${userId}`,
+  storage: await createPGliteStore({ dataDir: 'idb://photon-acme' }),
+  kernel: await loadPhotonKernel(),
+  transport: createEngineTransport({ baseUrl: 'https://api.example.com' }),
+})
 ```
 
-## txcloud auth 接続
+```tsx
+import { useLiveQuery, useMutation } from '@quantum-box/photon/react'
 
-Photon can require txcloud auth email/password sign-in before the shell loads. Enable it with env vars instead of committing credentials:
+function Records() {
+  const { data: records } = useLiveQuery<Issue>({
+    collection: 'records',
+    where: { status: { ne: 'archived' } },
+    orderBy: [{ field: 'updatedAt', direction: 'desc' }],
+  })
+
+  const setStatus = useMutation((client, { id, status }: Args) =>
+    client.patch<Issue>('records', id, { status }),
+  )
+
+  return records.map((record) => (
+    <Row
+      key={record.key.record_id}
+      record={record.value}
+      dimmed={record.pending}          // サーバ未 ack
+      onChange={(status) => setStatus.mutate({ id: record.key.record_id, status })}
+    />
+  ))
+}
+```
+
+`setStatus.mutate` は即座に返る。**ブラウザがペイントする前に**この行は新しい値で再レンダリングされ、`record.pending` が ack まで `true`、失敗すれば逆操作で自動ロールバックする。
+
+## 何を保証するか
+
+| 保証 | 意味 |
+|---|---|
+| **消えない** | 書き込みは操作ログとしてローカルに耐久化される。オフラインでもリロードでも残る |
+| **即座に出る** | ミューテーションは同期的に投影へ反映され、同じ tick で購読側に届く |
+| **収束する** | 復帰時に push/pull し、フィールド単位の CRDT マージで解決する |
+| **正直に壊れる** | reject は逆操作でロールバックし、conflict は行として残る。黙って握り潰さない |
+
+React の `useOptimistic` より強い。楽観値はアンマウントを跨いで残り、同じレコードを表示する全コンポーネントで共有され、ナビゲーションを越える。
+
+## 段階的に入れられる
+
+エンジンは HTTP を呼ばない。`SyncTransport` を定義するだけで、実装は差し替えられる。**サーバを移行し終わるまで使えない、という状態を作らない。**
+
+```ts
+// ① 導入時 — バックエンド変更ゼロ
+collections: { issues: { mode: 'passthrough', resource: issues } }
+
+// ② オフライン対応が欲しくなったら
+collections: { issues: { mode: 'rest-backed', resource: issues } }
+
+// ③ サーバが engine プロトコルを喋るようになったら
+collections: { issues: { mode: 'engine-native' } }
+```
+
+**3 段階すべてでコンポーネントコードは無変更。** 変わるのはこの 1 行だけ。
+
+`rest-backed` は既存の REST API に対して 5 行のアダプタを書くだけで、オフライン編集キュー・楽観 UI・失敗ロールバック・conflict 表示が入る。既存の認証・インターセプタ・リトライはそのまま効く。
+
+ただし素の REST は CRDT マージを表現できない。`increment` / `setAdd` / `setRemove` はローカルで解決して patch として送るので、REST 境界では last-write-wins になる。本当のマージが要るコレクションは `engine-native` に上げる。
+
+## Photon Engine と Photon Live
+
+同期体験は 2 層に分かれている。
+
+- **Photon Engine**: 構造化データの唯一の権威。operation log として耐久化し、push/pull で収束させる。「消えない安心感」を担当する。
+- **Photon Live**: Yjs によるリッチテキストの共同編集と presence。「一緒に操作している感じ」を担当する。構造化データは扱わない。
+
+## パッケージ構成
+
+単一パッケージ + subpath exports。
+
+| Import | 中身 |
+|---|---|
+| `@quantum-box/photon` | フレームワーク非依存のコア。React も PGlite も Vite も import しない |
+| `@quantum-box/photon/react` | `useLiveQuery` / `useMutation` / `useSyncStatus` などの hooks |
+| `@quantum-box/photon/rest` | 既存 REST API 用のトランスポート |
+| `@quantum-box/photon/store-pglite` | PGlite 永続化アダプタ |
+| `@quantum-box/photon/wasm` | WASM カーネルのローダー |
+| `@quantum-box/photon/worker` | Cloudflare Worker（Engine プロキシ + Live リレー） |
+
+Rust 側は Cargo workspace:
+
+| Crate | 役割 |
+|---|---|
+| `photon-engine` | 同期コア。operation / record / CRDT projection / storage adapter / WASM カーネル |
+| `photon-axum` | Engine sync と Live リレーを axum router として提供。既存サービスに `.merge()` できる |
+| `photon-server` | mode / DB / port を解決するだけの実行バイナリ |
+
+```rust
+let app = Router::new()
+    .merge(photon_axum::engine_router(state.clone()))  // /api/engine/{push,pull,debug}
+    .merge(photon_axum::live_router(state))            // /ws
+    .route("/api/my-own-thing", get(my_handler));
+```
+
+## 設計上の約束
+
+- **カーネルは同期的で、ストレージを持たない。** operation 構築・CRDT 投影・時計の因果関係だけを担い、I/O をしない。だから async の世界が 1 つで済み、`!Send` なストレージ trait をネイティブエンジンに伝播させずに済む。
+- **JS フォールバックは無い。** WASM のロード失敗は hard error。かつて「ロード失敗時は shallow merge」というフォールバックがあり、fetch が成功したかどうかでマージ意味論が静かに変わっていた。
+- **時計は常に引数。** `Operation::at` / `HybridTimestamp::at` — テストが決定的になり、`SystemTime::now()` が panic する wasm32 でも動く。
+- **ID はクライアントが決める（uuid v7）。** temp-ID → server-ID の載せ替えが設計から消え、作成直後の画面遷移がオフラインでも 404 にならない。
+- **`patch` は変更フィールドだけを取る。** レコード全体を渡すとフィールド単位の HLC マージが壊れる。
+- **ロールバックは逆操作。** accepted な操作だけから再射影する。「前の値を復元」だと、その間に着地した並行リモート編集を踏み潰す。
+- **SDK はモジュールスコープで `window` / `localStorage` / `import.meta.env` を読まない。** ブラウザ・Node・Web Worker・Vitest・Tauri でそのまま動く。
+
+## リポジトリ構成
+
+```
+crates/           Rust workspace（engine / axum / server）
+packages/         TypeScript の公開面（core / react / store-pglite / wasm / edge-worker）
+examples/
+  playground/     dogfooding 用 React アプリ。製品ではなくリグレッション面
+  rust-sync-server/  Engine 同期サーバの参照実装
+docs/
+```
+
+## 開発
+
+```bash
+npm install
+npm run engine:wasm          # WASM カーネルを生成（初回必須）
+npm run server               # Rust サーバを :3001 で起動
+npm run dev                  # playground を :5173 で起動
+```
+
+| コマンド | 内容 |
+|---|---|
+| `npm run type-check` | 全 workspace の型チェック |
+| `npm test` | 全 workspace のユニットテスト |
+| `npm run lint` | ESLint |
+| `cargo test --workspace` | Rust テスト |
+| `npm run test:e2e` | Playwright E2E |
+| `npm run tauri:dev` | playground のデスクトップ版 |
+
+ローカル同期ラボ（Docker + Edge Worker + Web の三層）は `mise run sync:infra` / `sync:edge` / `sync:web` / `sync:smoke`。
+
+## playground の auth 設定
+
+playground は txcloud auth のサインインを要求できる。エンジン自体は auth クライアントを持たず、`headers` フックだけを受け取る。
 
 ```bash
 VITE_PHOTON_API_BASE_URL=https://api.n1.tachy.one
@@ -70,25 +163,15 @@ VITE_PHOTON_AUTH_ENABLED=true
 VITE_PHOTON_AUTH_TRANSPORT=rest
 VITE_PHOTON_AUTH_PASSWORD_PATH=/auth/v1beta/sign-in-with-password
 VITE_PHOTON_AUTH_TENANT_ID=tn_01hjjn348rn3t49zz6hvmfq67p
-VITE_PHOTON_OPERATOR_ID=<operator-id-if-required>
 npm run dev -- --host 127.0.0.1
 ```
 
-`VITE_PHOTON_AUTH_PASSWORD_PATH` defaults to `/auth/v1beta/sign-in-with-password`. The acquired access token is stored in localStorage under `VITE_PHOTON_AUTH_TOKEN_STORAGE_KEY` or the default Photon namespaced key, then attached as `Authorization: Bearer <token>` to Photon API requests.
+取得したアクセストークンは localStorage に保存され、`Authorization: Bearer <token>` として付与される。
 
-PLT-1038 enforces normalized global auth emails. Photon trims and ASCII-lowercases the submitted email and treats duplicate/conflict responses as sign-in errors instead of assuming a second user can be created.
+デモデータの投入は `seedPlaygroundData()` として明示的に行われる（dev のみ、`VITE_PHOTON_SEED_DEMO_DATA=false` で無効化）。読み取りパスがレコードを捏造することはない。
 
-## ビルド
+## リンク
 
-```bash
-# Web ビルド
-npm run build
-
-# デスクトップビルド
-npm run tauri:build
-```
-
-## リポジトリ
-
-- GitHub: https://github.com/quantum-box/tachyon-ui (public)
+- GitHub: https://github.com/quantum-box/photon
 - Linear プロジェクト: photon
+- 設計判断: [docs/architecture/decisions/](docs/architecture/decisions/)
