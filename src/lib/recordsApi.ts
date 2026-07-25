@@ -133,7 +133,14 @@ function nextIdentifier(records: DatabaseRecord[]) {
   return `${prefix}-${maxNumber + 1}`
 }
 
-async function ensureDefaultRecordRecords() {
+/**
+ * Seed the local Photon Engine with demo records.
+ *
+ * This is playground-only scaffolding and must never run from a read path:
+ * `fetchServerRecords` returns whatever the engine holds, including nothing.
+ * Call this explicitly from app bootstrap when demo data is wanted.
+ */
+export async function seedPlaygroundData() {
   seedDefaultRecordsPromise ??= (async () => {
     const existingSeed = await getClientEngineRecord(seedCollection, defaultRecordSeedId, {
       includeDeleted: true,
@@ -156,14 +163,7 @@ async function ensureDefaultRecordRecords() {
 }
 
 export async function fetchServerRecords(): Promise<DatabaseRecord[]> {
-  let records = await listClientEngineRecords<DatabaseRecord>('records')
-  if (import.meta.env.MODE === 'test') {
-    return records.map((record) => record.value)
-  }
-  if (records.length === 0) {
-    await ensureDefaultRecordRecords()
-    records = await listClientEngineRecords<DatabaseRecord>('records')
-  }
+  const records = await listClientEngineRecords<DatabaseRecord>('records')
   return records.map((record) => record.value)
 }
 

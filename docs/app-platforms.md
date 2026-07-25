@@ -81,7 +81,8 @@ browser / desktop / mobile
        /ws
        static assets
   -> Rust app server
-       /api/records
+       /api/engine/push
+       /api/engine/pull
        optional /ws sync
   -> durable database volume or managed on-prem database
 ```

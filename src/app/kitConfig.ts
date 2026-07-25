@@ -104,7 +104,6 @@ export interface AppKitConfig {
   }
   attachments: {
     yjsArrayName: string
-    endpoint: string
     acceptedTypes: string
     maxPreviewBytes: number
     webStorageProvider: 'web-object-storage'
@@ -136,8 +135,6 @@ export interface AppKitConfig {
   server: {
     backend: AppServerBackend
     apiBaseUrl?: string
-    recordsPath: string
-    documentsPath: string
   }
   auth: {
     enabled: boolean
@@ -527,7 +524,6 @@ export const appKitConfig: AppKitConfig = {
   },
   attachments: {
     yjsArrayName: 'attachments',
-    endpoint: '/api/attachments',
     acceptedTypes: '.pdf,.xlsx,.xls,.csv,.docx,.pptx',
     maxPreviewBytes: 25 * 1024 * 1024,
     webStorageProvider: 'web-object-storage',
@@ -552,8 +548,6 @@ export const appKitConfig: AppKitConfig = {
   server: {
     backend: resolveAppServerBackend(viteEnv.VITE_PHOTON_APP_SERVER_BACKEND),
     apiBaseUrl: photonApiBaseUrl,
-    recordsPath: '/api/records',
-    documentsPath: '/api/documents',
   },
   auth: {
     enabled: viteEnv.VITE_PHOTON_AUTH_ENABLED === 'true',
