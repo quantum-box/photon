@@ -6,7 +6,14 @@ import tseslint from 'typescript-eslint'
 import { defineConfig, globalIgnores } from 'eslint/config'
 
 export default defineConfig([
-  globalIgnores(['dist', 'storybook-static', 'test-results', 'playwright-report', '**/target/**']),
+  globalIgnores([
+    '**/dist/**',
+    '**/storybook-static/**',
+    '**/test-results/**',
+    '**/playwright-report/**',
+    '**/target/**',
+    'crates/photon-engine/pkg/**',
+  ]),
   {
     files: ['**/*.{ts,tsx}'],
     extends: [

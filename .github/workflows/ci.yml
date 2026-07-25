@@ -11,8 +11,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  frontend:
-    name: Frontend checks
+  playground:
+    name: Playground checks
     runs-on: ubuntu-latest
 
     steps:

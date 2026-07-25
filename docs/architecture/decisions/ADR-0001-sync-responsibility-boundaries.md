@@ -10,7 +10,7 @@ Photon は React/Vite/Tauri frontend、Yjs local-first state、Cloudflare Worker
 
 現状の frontend は `src/lib/yjs/yjsProvider.ts` で単一の `Y.Doc` を作り、`y-indexeddb` で `workspace:{workspaceId}:records` に保存し、`/ws` に Yjs binary update を送っている。`src/contexts/RecordsContext.tsx` の record CRUD は application server の accepted response を Yjs projection に反映する。
 
-Cloudflare sync backend は `workers/sync/index.ts` で `/ws` を Durable Object room に routing し、opaque な Yjs update を保存、replay、broadcast する。presence は WebSocket connection 数から計算する。この backend は update payload を domain data として解釈しない。
+Cloudflare sync backend は `packages/edge-worker/src/index.ts` で `/ws` を Durable Object room に routing し、opaque な Yjs update を保存、replay、broadcast する。presence は WebSocket connection 数から計算する。この backend は update payload を domain data として解釈しない。
 
 Rust server は `crates/photon-axum/src/lib.rs` で record API、SQLite storage、yrs-based `/ws` sync endpoint を提供する。structured domain data は Photon Engine の `scope + collection + record_id` model に寄せ、surface 固有の互換 layer を増やさない。
 
@@ -165,7 +165,7 @@ Rejected. Infinite replay gets slower over time and makes repair, migration, sea
 - `src/lib/yjs/yjsProvider.ts`
 - `src/lib/yjs/useYjsRecords.ts`
 - `src/contexts/RecordsContext.tsx`
-- `workers/sync/index.ts`
+- `packages/edge-worker/src/index.ts`
 - `crates/photon-axum/src/lib.rs`
 - `crates/photon-engine/src/sqlite.rs`
 - `docs/cloudflare-sync.md`

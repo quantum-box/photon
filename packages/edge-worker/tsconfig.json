@@ -1,7 +1,7 @@
 {
   "compilerOptions": {
-    "target": "ES2023",
-    "lib": ["ES2023", "WebWorker"],
+    "target": "ES2022",
+    "lib": ["ES2022"],
     "module": "ESNext",
     "moduleResolution": "bundler",
     "types": ["@cloudflare/workers-types"],
@@ -9,12 +9,11 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
-    "skipLibCheck": true,
+    "verbatimModuleSyntax": true,
     "declaration": true,
-    "declarationMap": true,
-    "sourceMap": true,
-    "outDir": "dist/package",
-    "rootDir": "."
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "skipLibCheck": true
   },
-  "include": ["workers/sync/index.ts"]
+  "include": ["src/**/*.ts"]
 }

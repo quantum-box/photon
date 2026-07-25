@@ -26,7 +26,8 @@ export default defineConfig({
   ],
   webServer: [
     {
-      command: 'cargo run',
+      command: 'cargo run --bin photon-server',
+      cwd: '../..',
       url: 'http://127.0.0.1:3001/api/health',
       reuseExistingServer: true,
       timeout: 120_000,

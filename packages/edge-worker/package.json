@@ -1,0 +1,19 @@
+{
+  "name": "@quantum-box/photon-edge-worker",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Cloudflare Worker: Photon Engine push/pull proxy and Live Durable Object relay",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "type-check": "tsc -p tsconfig.json --noEmit",
+    "dev": "wrangler dev --config wrangler.jsonc --port 8787",
+    "deploy": "wrangler deploy --config wrangler.jsonc"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260505.1",
+    "wrangler": "^4.87.0"
+  }
+}
