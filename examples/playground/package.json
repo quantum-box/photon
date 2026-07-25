@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Dogfooding app for the Photon engine. Not a product — a regression surface.",
+  "description": "Dogfooding app for the Photon engine. Not a product \u2014 a regression surface.",
   "scripts": {
     "dev": "vite",
     "dev:cf-sync": "VITE_PHOTON_SYNC_WS_URL=ws://127.0.0.1:8787/ws vite",
@@ -37,6 +37,9 @@
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/sortable": "^10.0.0",
     "@electric-sql/pglite": "^0.4.5",
+    "@quantum-box/photon-core": "*",
+    "@quantum-box/photon-store-pglite": "*",
+    "@quantum-box/photon-wasm": "*",
     "@radix-ui/themes": "^3.3.0",
     "@tanstack/react-router": "^1.168.10",
     "@tanstack/react-table": "^8.21.3",

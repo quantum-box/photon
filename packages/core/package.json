@@ -1,0 +1,20 @@
+{
+  "name": "@quantum-box/photon-core",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Framework-agnostic local-first sync engine core",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "type-check": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.2"
+  }
+}

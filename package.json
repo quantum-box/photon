@@ -14,6 +14,18 @@
     "docs"
   ],
   "exports": {
+    ".": {
+      "types": "./packages/core/dist/index.d.ts",
+      "default": "./packages/core/dist/index.js"
+    },
+    "./store-pglite": {
+      "types": "./packages/store-pglite/dist/index.d.ts",
+      "default": "./packages/store-pglite/dist/index.js"
+    },
+    "./wasm": {
+      "types": "./packages/wasm/dist/index.d.ts",
+      "default": "./packages/wasm/dist/index.js"
+    },
     "./worker": {
       "types": "./packages/edge-worker/dist/index.d.ts",
       "default": "./packages/edge-worker/dist/index.js"

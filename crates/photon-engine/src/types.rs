@@ -1,8 +1,6 @@
-use std::{
-    collections::BTreeMap,
-    fmt,
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::{collections::BTreeMap, fmt};
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -94,20 +92,43 @@ impl HybridTimestamp {
     }
 
     pub fn now(actor_id: impl Into<ActorId>) -> Self {
+        Self::at(unix_time_ms(), actor_id)
+    }
+
+    /// [`HybridTimestamp::now`] with the clock supplied by the caller.
+    pub fn at(now_ms: i64, actor_id: impl Into<ActorId>) -> Self {
         Self {
-            wall_time_ms: unix_time_ms(),
+            wall_time_ms: now_ms,
             counter: 0,
             actor_id: actor_id.into(),
         }
     }
 
     pub fn tick(&self, actor_id: impl Into<ActorId>) -> Self {
+        self.tick_at(unix_time_ms(), actor_id)
+    }
+
+    /// [`HybridTimestamp::tick`] with the clock supplied by the caller.
+    pub fn tick_at(&self, now_ms: i64, actor_id: impl Into<ActorId>) -> Self {
         let actor_id = actor_id.into();
-        let now = unix_time_ms();
-        if now > self.wall_time_ms {
-            Self::new(now, 0, actor_id)
+        if now_ms > self.wall_time_ms {
+            Self::new(now_ms, 0, actor_id)
         } else {
             Self::new(self.wall_time_ms, self.counter + 1, actor_id)
+        }
+    }
+
+    /// Advance past a timestamp observed from another actor.
+    ///
+    /// This is what keeps causality intact when a remote operation arrives with
+    /// a clock ahead of ours.
+    pub fn observe(&self, other: &Self, now_ms: i64, actor_id: impl Into<ActorId>) -> Self {
+        let ceiling = now_ms.max(other.wall_time_ms).max(self.wall_time_ms);
+        let actor_id = actor_id.into();
+        if ceiling > self.wall_time_ms && ceiling > other.wall_time_ms {
+            Self::new(ceiling, 0, actor_id)
+        } else {
+            Self::new(ceiling, self.counter.max(other.counter) + 1, actor_id)
         }
     }
 }
@@ -159,11 +180,21 @@ pub struct Operation {
 
 impl Operation {
     pub fn new(key: RecordKey, actor_id: impl Into<ActorId>, kind: OperationKind) -> Self {
+        Self::at(unix_time_ms(), key, actor_id, kind)
+    }
+
+    /// [`Operation::new`] with the clock supplied by the caller.
+    pub fn at(
+        now_ms: i64,
+        key: RecordKey,
+        actor_id: impl Into<ActorId>,
+        kind: OperationKind,
+    ) -> Self {
         let actor_id = actor_id.into();
         Self {
             id: OperationId::random(),
             key,
-            timestamp: HybridTimestamp::now(actor_id.clone()),
+            timestamp: HybridTimestamp::at(now_ms, actor_id.clone()),
             actor_id,
             kind,
             metadata: Value::Null,
@@ -285,13 +316,24 @@ impl Snapshot {
         payload: Vec<u8>,
         format: impl Into<SnapshotFormat>,
     ) -> Self {
+        Self::at(unix_time_ms(), key, sequence, payload, format)
+    }
+
+    /// [`Snapshot::new`] with the clock supplied by the caller.
+    pub fn at(
+        now_ms: i64,
+        key: RecordKey,
+        sequence: i64,
+        payload: Vec<u8>,
+        format: impl Into<SnapshotFormat>,
+    ) -> Self {
         Self {
             key,
             format: format.into(),
             payload,
             sequence,
             metadata: Value::Null,
-            updated_at_ms: unix_time_ms(),
+            updated_at_ms: now_ms,
         }
     }
 
@@ -319,13 +361,24 @@ impl SnapshotUpdate {
         payload: Vec<u8>,
         format: impl Into<SnapshotFormat>,
     ) -> Self {
+        Self::at(unix_time_ms(), key, sequence, payload, format)
+    }
+
+    /// [`SnapshotUpdate::new`] with the clock supplied by the caller.
+    pub fn at(
+        now_ms: i64,
+        key: RecordKey,
+        sequence: i64,
+        payload: Vec<u8>,
+        format: impl Into<SnapshotFormat>,
+    ) -> Self {
         Self {
             key,
             format: format.into(),
             payload,
             sequence,
             metadata: Value::Null,
-            created_at_ms: unix_time_ms(),
+            created_at_ms: now_ms,
         }
     }
 
@@ -345,11 +398,21 @@ pub struct SyncCursor {
 
 impl SyncCursor {
     pub fn new(scope: impl Into<ScopeId>, remote: impl Into<RemoteId>, position: i64) -> Self {
+        Self::at(unix_time_ms(), scope, remote, position)
+    }
+
+    /// [`SyncCursor::new`] with the clock supplied by the caller.
+    pub fn at(
+        now_ms: i64,
+        scope: impl Into<ScopeId>,
+        remote: impl Into<RemoteId>,
+        position: i64,
+    ) -> Self {
         Self {
             scope: scope.into(),
             remote: remote.into(),
             position,
-            updated_at_ms: unix_time_ms(),
+            updated_at_ms: now_ms,
         }
     }
 }
@@ -373,6 +436,25 @@ impl Conflict {
         local_value: Option<Value>,
         remote_value: Option<Value>,
     ) -> Self {
+        Self::at(
+            unix_time_ms(),
+            key,
+            operation_id,
+            reason,
+            local_value,
+            remote_value,
+        )
+    }
+
+    /// [`Conflict::new`] with the clock supplied by the caller.
+    pub fn at(
+        now_ms: i64,
+        key: RecordKey,
+        operation_id: OperationId,
+        reason: impl Into<String>,
+        local_value: Option<Value>,
+        remote_value: Option<Value>,
+    ) -> Self {
         Self {
             id: ConflictId::random(),
             key,
@@ -380,7 +462,7 @@ impl Conflict {
             reason: reason.into(),
             local_value,
             remote_value,
-            created_at_ms: unix_time_ms(),
+            created_at_ms: now_ms,
         }
     }
 }
@@ -404,9 +486,38 @@ impl OperationFilter {
     }
 }
 
+/// Wall-clock milliseconds since the Unix epoch.
+///
+/// Prefer the `*_at(now_ms, ..)` constructors: they keep the clock an argument,
+/// which is what makes the projection reproducible in tests and callable from
+/// the WASM kernel, where the host owns the clock.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn unix_time_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis() as i64)
         .unwrap_or_default()
+}
+
+/// `SystemTime::now()` panics on `wasm32-unknown-unknown`, so read the host clock.
+#[cfg(target_arch = "wasm32")]
+pub fn unix_time_ms() -> i64 {
+    js_date_now() as i64
+}
+
+#[cfg(target_arch = "wasm32")]
+#[allow(unused)]
+mod wasm_clock {
+    use wasm_bindgen::prelude::*;
+
+    #[wasm_bindgen]
+    extern "C" {
+        #[wasm_bindgen(js_namespace = Date, js_name = now)]
+        pub fn now() -> f64;
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn js_date_now() -> f64 {
+    wasm_clock::now()
 }

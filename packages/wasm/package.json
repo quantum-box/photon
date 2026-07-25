@@ -1,0 +1,17 @@
+{
+  "name": "@quantum-box/photon-wasm",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Loader for the Photon Engine WASM kernel",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": { ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" } },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "type-check": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@quantum-box/photon-core": "*"
+  }
+}
