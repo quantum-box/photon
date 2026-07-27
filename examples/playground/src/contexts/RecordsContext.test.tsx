@@ -78,6 +78,8 @@ vi.mock('../lib/yjs/useYjsRecords', () => ({
 }))
 
 vi.mock('../lib/recordsApi', () => ({
+  // No bootstrap seed runs under test, so this resolves immediately.
+  playgroundSeedSettled: () => Promise.resolve(),
   fetchServerRecords: mocks.fetchServerRecords,
   createServerRecord: mocks.createServerRecord,
   updateServerRecord: mocks.updateServerRecord,
