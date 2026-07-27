@@ -14,7 +14,7 @@ npm test
 npm run build
 npm run type-check:worker
 npm run test:e2e
-cd packages/server && cargo test
+cargo test --workspace
 ```
 
 The GitHub `CI` workflow must also be green on the release commit. It covers the
@@ -26,7 +26,7 @@ server release build, and a Linux Tauri smoke build.
 Default Rust server development:
 
 ```bash
-cd packages/server && cargo run
+cargo run --bin photon-server
 npm run dev -- --host 127.0.0.1
 ```
 

@@ -2,7 +2,14 @@
 
 ## Status
 
-Accepted (2026-05-08)
+Superseded by [ADR-0002](ADR-0002-photon-engine-as-the-product.md) (2026-07-25). Originally accepted 2026-05-08.
+
+Engine と Live の責務分割自体はいまも有効で、そのまま効いている。ADR-0002 が変えたのは 2 点だけ:
+
+1. 構造化データが Yjs に二重書きされなくなり、operation log が単一権威になった
+2. 「アプリサーバが domain data を所有する」書き込みパス（下記の手順 1–6）が operation log に置き換わった
+
+follow-up の PLT-1180 / 1183 / 1186 / 1188 は「実装により解決」ではなく「削除により解決」となった。
 
 ## Context
 
@@ -10,9 +17,9 @@ Photon は React/Vite/Tauri frontend、Yjs local-first state、Cloudflare Worker
 
 現状の frontend は `src/lib/yjs/yjsProvider.ts` で単一の `Y.Doc` を作り、`y-indexeddb` で `workspace:{workspaceId}:records` に保存し、`/ws` に Yjs binary update を送っている。`src/contexts/RecordsContext.tsx` の record CRUD は application server の accepted response を Yjs projection に反映する。
 
-Cloudflare sync backend は `workers/sync/index.ts` で `/ws` を Durable Object room に routing し、opaque な Yjs update を保存、replay、broadcast する。presence は WebSocket connection 数から計算する。この backend は update payload を domain data として解釈しない。
+Cloudflare sync backend は `packages/edge-worker/src/index.ts` で `/ws` を Durable Object room に routing し、opaque な Yjs update を保存、replay、broadcast する。presence は WebSocket connection 数から計算する。この backend は update payload を domain data として解釈しない。
 
-Rust server は `packages/server/src/main.rs` で record API、SQLite storage、yrs-based `/ws` sync endpoint を提供する。structured domain data は Photon Engine の `scope + collection + record_id` model に寄せ、surface 固有の互換 layer を増やさない。
+Rust server は `crates/photon-axum/src/lib.rs` で record API、SQLite storage、yrs-based `/ws` sync endpoint を提供する。structured domain data は Photon Engine の `scope + collection + record_id` model に寄せ、surface 固有の互換 layer を増やさない。
 
 Photon Workspace v0.2 では records だけでなく、Notion-like editor documents、attachments、chat messages、tool calls、workspace metadata も扱う。これらは realtime collaboration だけでなく、server-side persistence、permissions、audit、search、migration に乗る必要がある。
 
@@ -165,7 +172,7 @@ Rejected. Infinite replay gets slower over time and makes repair, migration, sea
 - `src/lib/yjs/yjsProvider.ts`
 - `src/lib/yjs/useYjsRecords.ts`
 - `src/contexts/RecordsContext.tsx`
-- `workers/sync/index.ts`
-- `packages/server/src/main.rs`
-- `packages/photon-engine/src/sqlite.rs`
+- `packages/edge-worker/src/index.ts`
+- `crates/photon-axum/src/lib.rs`
+- `crates/photon-engine/src/sqlite.rs`
 - `docs/cloudflare-sync.md`

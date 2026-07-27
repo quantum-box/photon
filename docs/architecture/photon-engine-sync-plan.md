@@ -97,11 +97,11 @@ Use this map when tracing a sync bug from UI to storage:
 
 | Surface | Local Engine call | Local store | Server sync call |
 | --- | --- | --- | --- |
-| Web | `src/lib/photonEngine/client.ts` loads `packages/photon-engine/pkg/photon_engine.js` and applies operations through WASM | PGlite `appKitConfig.engine.pgliteDataDir` | `syncClientEngineOperations()` posts pending operations to `appKitConfig.engine.pushPath` |
+| Web | `src/lib/photonEngine/client.ts` loads `crates/photon-engine/pkg/photon_engine.js` and applies operations through WASM | PGlite `appKitConfig.engine.pgliteDataDir` | `syncClientEngineOperations()` posts pending operations to `appKitConfig.engine.pushPath` |
 | Tauri desktop | `src/lib/photonEngine/client.ts` calls Tauri `invoke('photon_engine_apply_operation')` | PGlite in the WebView | same `syncClientEngineOperations()` HTTP push path |
 | Tauri mobile/iPad | planned Tauri invoke bridge mirroring desktop | PGlite or Rust/SQLite after durability decision | same push/pull JSON protocol |
 | Edge server | Worker/edge runtime or lightweight Rust ingress receives public client traffic | cache/session/rate-limit only | proxies Engine push/pull to cloud authority; owns nearby Live transport when possible |
-| Cloud Server Engine | `packages/server/src/lib.rs` receives `/api/engine/push` and `/api/engine/pull` behind edge | business/domain layer first, then `photon-engine` storage adapter backed by TiDB/MySQL in production | accepts/rejects/publishes remote sequence cursor |
+| Cloud Server Engine | `crates/photon-axum/src/lib.rs` receives `/api/engine/push` and `/api/engine/pull` behind edge | business/domain layer first, then `photon-engine` storage adapter backed by TiDB/MySQL in production | accepts/rejects/publishes remote sequence cursor |
 | Live | `src/lib/yjs/*` and `/ws` realtime transport, often edge-hosted | Yjs IndexedDB / room state | no durable Engine decisions |
 
 ## Remaining Implementation Work

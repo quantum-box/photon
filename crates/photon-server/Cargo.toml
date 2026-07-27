@@ -1,0 +1,33 @@
+[package]
+name = "photon-server"
+description = "Runnable Photon servers — combined, engine-only, and live-only"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+default-run = "photon-server"
+
+[[bin]]
+name = "photon-server"
+path = "src/bin/photon-server.rs"
+
+[[bin]]
+name = "photon-engine-server"
+path = "src/bin/photon-engine-server.rs"
+
+[[bin]]
+name = "photon-live-server"
+path = "src/bin/photon-live-server.rs"
+
+[dependencies]
+axum.workspace = true
+photon-axum.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+photon-engine = { workspace = true, features = ["memory"] }
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true

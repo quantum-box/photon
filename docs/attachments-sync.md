@@ -4,14 +4,14 @@ Photon treats attachment metadata as workspace domain data and file bytes as sto
 
 ## Domain Model
 
-`attachments` stores metadata:
+An attachment record holds metadata:
 
 - `workspace_id`, `filename`, `content_type`, `byte_size`
 - `storage_provider`, `storage_key`, `content_status`
 - `preview_metadata` as JSON for file type and preview readiness
 - audit timestamps and optional creator
 
-`attachment_links` stores references from the same attachment to workspace surfaces:
+It also carries `links`, the references from that attachment to workspace surfaces:
 
 - `surface_type`: `record`, `chat`, or `document`
 - `surface_id`: the record id, chat thread id, or document id
@@ -26,21 +26,23 @@ Tauri builds use the reserved `tauri-local-file-cache` provider name. Desktop sh
 
 ## Responsibilities
 
-The application server owns attachment metadata, surface links, permission checks, and delete semantics through `/api/attachments`.
+Attachment metadata and surface links are Photon Engine records, carried by the
+same operation log as every other structured collection. They are not a bespoke
+REST surface: the dedicated `/api/attachments` endpoints were removed once the
+client moved onto the engine, because nothing called them.
+
+The client stores them in the engine collection `attachments`, one record per
+attachment keyed by attachment id, with its surface links carried inline on the
+record rather than as a separate collection. That collection syncs through
+`/api/engine/push` and `/api/engine/pull` like any other, so offline creation
+and later reconciliation come for free.
 
 The storage provider owns file bytes. Previewers consume local `File` objects or future downloaded blobs. Preview metadata is descriptive only and stays separate from content storage.
 
-The Yjs workspace projection mirrors attachment metadata into the frontend alongside records so surfaces can render attachment chips immediately after sync. Binary content is never written into Yjs.
+Binary content is never written into the operation log or into Yjs.
 
-## API Shape
+## Open Work
 
-- `GET /api/attachments?workspace_id=...`
-- `GET /api/attachments?workspace_id=...&surface_type=record&surface_id=...`
-- `POST /api/attachments`
-- `GET /api/attachments/:id`
-- `PUT /api/attachments/:id`
-- `DELETE /api/attachments/:id`
-- `POST /api/attachments/:id/links`
-- `DELETE /api/attachments/:id/links/:link_id`
-
-Current local development has no auth layer, so these endpoints are workspace-scoped but not user-authorized. PLT-1189 should harden this with the same auth boundary used for records/docs/chat before release.
+Permission checks and delete semantics are not yet enforced anywhere: engine
+push accepts operations without a user-level authorization boundary. PLT-1189
+should apply the same auth boundary used for records/docs/chat before release.

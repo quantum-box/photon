@@ -11,8 +11,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  frontend:
-    name: Frontend checks
+  playground:
+    name: Playground checks
     runs-on: ubuntu-latest
 
     steps:
@@ -25,6 +25,17 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: jetli/wasm-pack-action@v0.4.0
+
+      - name: Build WASM kernel
+        run: npm run engine:wasm
 
       - name: Install Storybook browser
         run: npx playwright install --with-deps chromium
@@ -62,13 +73,17 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
 
       - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: packages/server
+
+      - uses: jetli/wasm-pack-action@v0.4.0
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Build WASM kernel
+        run: npm run engine:wasm
 
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
@@ -84,40 +99,9 @@ jobs:
           path: playwright-report/
           retention-days: 7
 
-  server:
-    name: Backend checks
+  rust:
+    name: Rust workspace
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: packages/server
-
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: packages/server
-
-      - name: Format
-        run: cargo fmt --check
-
-      - name: Clippy
-        run: cargo clippy --all-targets -- -D warnings
-
-      - name: Test
-        run: cargo test --all-targets
-
-      - name: Build
-        run: cargo build --release
-
-  photon-engine:
-    name: Photon Engine checks
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: packages/photon-engine
 
     steps:
       - uses: actions/checkout@v6
@@ -127,100 +111,82 @@ jobs:
           components: rustfmt, clippy
 
       - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: packages/photon-engine
 
       - name: Format
-        run: cargo fmt --check
+        run: cargo fmt --all --check
 
       - name: Clippy
-        run: cargo clippy --all-targets --features sqlite -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
-      - name: Test default features
-        run: cargo test
+      - name: Test
+        run: cargo test --workspace --all-targets
 
-      - name: Test SQLite feature
-        run: cargo test --features sqlite
+      - name: Build
+        run: cargo build --workspace --release
+
+  rust-features:
+    name: Rust feature matrix
+    runs-on: ubuntu-latest
+    # Workspace-wide clippy unifies features, which hides a broken feature gate.
+    # Check photon-engine's feature combinations on their own.
+    strategy:
+      fail-fast: false
+      matrix:
+        features:
+          - ""
+          - "sqlite"
+          - "mysql"
+          - "sqlite,mysql"
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Clippy
+        run: |
+          cargo clippy -p photon-engine --all-targets \
+            --no-default-features --features "memory,${{ matrix.features }}" -- -D warnings
+
+      - name: Test
+        run: |
+          cargo test -p photon-engine \
+            --no-default-features --features "memory,${{ matrix.features }}"
+
+  wasm:
+    name: Photon Engine WASM
+    runs-on: ubuntu-latest
+    # Nothing else in CI proves the kernel still compiles for wasm32, and the
+    # browser client cannot run without it.
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: jetli/wasm-pack-action@v0.4.0
+
+      - name: Build WASM kernel
+        run: |
+          wasm-pack build crates/photon-engine --target web --out-dir pkg \
+            --no-default-features --features wasm
 
       - name: Check no default features
-        run: cargo check --no-default-features
+        run: cargo check -p photon-engine --no-default-features
 
-  tauri-smoke:
-    name: Tauri smoke build
-    runs-on: ubuntu-22.04
-
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 22
-          cache: npm
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
-
-      - name: Install Linux dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libappindicator3-dev \
-            librsvg2-dev \
-            patchelf
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build Tauri app
-        run: npm run tauri:build
-
-  tauri-android-smoke:
-    name: Tauri Android smoke build
+  pack-smoke:
+    name: Package contract
     runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 22
-          cache: npm
-
-      - uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: 17
-
-      - uses: android-actions/setup-android@v3
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-linux-android
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
-
-      - name: Install Android NDK
-        run: sdkmanager "ndk;27.2.12479018"
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build Android APK
-        env:
-          ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.2.12479018
-          NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.2.12479018
-        run: npm run tauri:android:build -- --target aarch64 --apk
-
-  tauri-ios-smoke:
-    name: Tauri iOS simulator smoke build
-    runs-on: macos-latest
-
+    # `prepare` + workspaces + subpath exports interact in ways that are easy to
+    # get wrong and invisible until a consumer installs. Install the real
+    # tarball into a scratch app and import every entry point.
     steps:
       - uses: actions/checkout@v6
 
@@ -231,14 +197,46 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-ios-sim
+          targets: wasm32-unknown-unknown
 
       - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: src-tauri
+
+      - uses: jetli/wasm-pack-action@v0.4.0
 
       - name: Install dependencies
         run: npm ci
 
-      - name: Build iOS simulator app
-        run: npm run tauri:ios:build:sim
+      - name: Pack
+        run: npm pack --pack-destination "$RUNNER_TEMP"
+
+      - name: Import every subpath from the tarball
+        working-directory: ${{ runner.temp }}
+        run: |
+          mkdir -p app && cd app
+          cat > package.json <<'JSON'
+          { "name": "pack-smoke", "private": true, "type": "module", "version": "1.0.0" }
+          JSON
+          cat > smoke.ts <<'TS'
+          import { createPhotonClient, createEngineTransport, newId, buildWorkspaceScope } from '@quantum-box/photon'
+          import { createRestTransport } from '@quantum-box/photon/rest'
+          import { useLiveQuery, useMutation, PhotonProvider } from '@quantum-box/photon/react'
+          import { createPGliteStore } from '@quantum-box/photon/store-pglite'
+          import { loadPhotonKernel } from '@quantum-box/photon/wasm'
+          export const surface = {
+            createPhotonClient, createEngineTransport, newId, buildWorkspaceScope,
+            createRestTransport, useLiveQuery, useMutation, PhotonProvider,
+            createPGliteStore, loadPhotonKernel,
+          }
+          TS
+          cat > tsconfig.json <<'JSON'
+          {
+            "compilerOptions": {
+              "target": "ES2022", "lib": ["ES2022", "DOM"], "module": "ESNext",
+              "moduleResolution": "bundler", "jsx": "react-jsx",
+              "strict": true, "noEmit": true, "skipLibCheck": true
+            },
+            "include": ["smoke.ts"]
+          }
+          JSON
+          npm install ../quantum-box-photon-*.tgz react @types/react typescript
+          npx tsc -p tsconfig.json

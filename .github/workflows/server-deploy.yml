@@ -15,7 +15,9 @@ on:
     branches: [main]
     paths:
       - .github/workflows/server-deploy.yml
-      - packages/server/**
+      - crates/**
+      - Cargo.toml
+      - Cargo.lock
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -106,9 +108,9 @@ jobs:
       - name: Build and push server image
         run: |
           docker build \
-            -f packages/server/Dockerfile \
+            -f crates/photon-server/Dockerfile \
             -t "${{ steps.settings.outputs.image }}" \
-            packages/server
+            .
           docker push "${{ steps.settings.outputs.image }}"
 
       - name: Deploy to Cloud Run
