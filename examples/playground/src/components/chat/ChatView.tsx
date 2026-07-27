@@ -43,7 +43,7 @@ function createFileAttachment(file: File): FileAttachment {
 }
 
 export function ChatView() {
-  const { records, syncRecord, syncRecords } = useDatabaseRecords()
+  const { records } = useDatabaseRecords()
   const { createAttachment, attachmentsForSurface } = useWorkspaceAttachments()
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
@@ -117,7 +117,7 @@ export function ChatView() {
         prompt,
         messages: conversation.map((message) => ({ role: message.role, content: message.content })),
         context: {
-          recordTools: { records, syncRecord, syncRecords },
+          recordTools: { records },
           documentContext,
         },
       },
@@ -169,7 +169,7 @@ export function ChatView() {
     )
 
     abortRef.current = controller
-  }, [documentContext, records, syncRecord, syncRecords])
+  }, [documentContext, records])
 
   const chatAttachments = attachmentsForSurface({ surfaceType: 'chat', surfaceId: CHAT_SURFACE_ID })
   const recentChatAttachments = [...chatAttachments]

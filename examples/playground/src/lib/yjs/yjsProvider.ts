@@ -7,7 +7,6 @@ import { appKitConfig } from '../../app/kitConfig.js'
 // ---------------------------------------------------------------------------
 
 export const ydoc = new Y.Doc()
-export const recordsArray = ydoc.getArray<Y.Map<string>>(appKitConfig.sync.yjsArrayName)
 export const databasesArray = ydoc.getArray<Y.Map<string>>(appKitConfig.sync.databasesArrayName)
 export const databaseViewsArray = ydoc.getArray<Y.Map<string>>(
   appKitConfig.sync.databaseViewsArrayName

@@ -47,7 +47,6 @@ describe('appKitConfig', () => {
     expect(appKitConfig.sync.workspaceScope).toBe('tenant:photon:workspace:photon-default')
     expect(appKitConfig.sync.recordsRoomId).toBe('tenant:photon:workspace:photon-default:records')
     expect(appKitConfig.sync.persistenceKey).toBe('tenant:photon:workspace:photon-default:records')
-    expect(appKitConfig.sync.yjsArrayName).toBe('records')
     expect(appKitConfig.sync.databasesArrayName).toBe('databases')
     expect(appKitConfig.sync.workflowCanvasesMapName).toBe('workflowCanvases')
     expect(appKitConfig.sync.websocketPath).toBe(

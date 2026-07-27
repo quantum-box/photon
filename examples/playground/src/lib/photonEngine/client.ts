@@ -86,15 +86,11 @@ async function build(): Promise<PhotonClient> {
     storage,
     kernel,
     sync: {
-      // Off until the UI actually reads the engine.
-      //
-      // This app still renders records from Yjs, so a running sync loop has no
-      // user-visible effect here — it only pushes each tab's seed data to a
-      // shared server and pulls back everyone else's, which makes the
-      // cross-tab E2E specs depend on how many tabs happened to start first.
-      // The debug dashboard can still trigger a cycle by hand, and the loop
-      // turns on for real when the op-log becomes the read path.
-      autoStart: false,
+      // The op-log is the read path now: React renders records straight from
+      // the engine, so the sync loop runs for real. Push is debounced behind
+      // mutations, pull rides the poll interval, and failures back off with
+      // jitter — offline use degrades to local-only, not to an error state.
+      autoStart: true,
     },
     transport: createEngineTransport({
       baseUrl: appKitConfig.server.apiBaseUrl ?? '',

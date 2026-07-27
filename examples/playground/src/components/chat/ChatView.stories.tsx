@@ -1,8 +1,14 @@
 import type { Meta, StoryObj } from '@storybook/react-vite'
 import { expect, userEvent, within } from 'storybook/test'
+import { PhotonProvider } from '@quantum-box/photon-react'
+import { createBootingPhotonClient } from '../../lib/photonEngine/bootClient'
 import { RecordsProvider } from '../../contexts/RecordsContext'
 import { AttachmentsProvider } from '../../lib/attachments/useWorkspaceAttachments'
 import { ChatView } from './ChatView'
+
+// Stories render against the booting stub client: deterministic, no WASM or
+// PGlite startup. The real client is exercised by unit and E2E tests.
+const storyClient = createBootingPhotonClient()
 
 const meta = {
   title: 'Chat/ChatView',
@@ -13,13 +19,15 @@ const meta = {
   },
   decorators: [
     (Story) => (
-      <RecordsProvider>
-        <AttachmentsProvider>
-          <div className="h-[720px]">
-            <Story />
-          </div>
-        </AttachmentsProvider>
-      </RecordsProvider>
+      <PhotonProvider client={storyClient}>
+        <RecordsProvider>
+          <AttachmentsProvider>
+            <div className="h-[720px]">
+              <Story />
+            </div>
+          </AttachmentsProvider>
+        </RecordsProvider>
+      </PhotonProvider>
     ),
   ],
 } satisfies Meta<typeof ChatView>

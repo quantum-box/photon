@@ -122,7 +122,6 @@ export interface AppKitConfig {
     workspaceId: string
     workspaceScope: string
     recordsRoomId: string
-    yjsArrayName: string
     databasesArrayName: string
     databaseViewsArrayName: string
     workflowCanvasesMapName: string
@@ -535,7 +534,6 @@ export const appKitConfig: AppKitConfig = {
     workspaceId,
     workspaceScope,
     recordsRoomId,
-    yjsArrayName: 'records',
     databasesArrayName: 'databases',
     databaseViewsArrayName: 'databaseViews',
     workflowCanvasesMapName: 'workflowCanvases',

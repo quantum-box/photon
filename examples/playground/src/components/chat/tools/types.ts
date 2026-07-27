@@ -35,8 +35,6 @@ export interface ToolResult {
 
 export interface RecordToolRuntime {
   records: DatabaseRecord[]
-  syncRecord: (record: DatabaseRecord) => void
-  syncRecords: (records: DatabaseRecord[]) => void
 }
 
 export interface RecordToolResponse {

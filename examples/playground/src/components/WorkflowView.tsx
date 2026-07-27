@@ -215,6 +215,17 @@ export function WorkflowView({
   const localNodeDragActive = useRef(false)
   const workflowLoaded = loadedDatabaseId === databaseId
 
+  // The engine's live query reallocates `records` on every invalidation —
+  // seed writes streaming in, acks flipping `pending`, pulled operations.
+  // Reading it through a ref keeps `applyWorkflowCanvas` referentially stable,
+  // so the canvas load/subscribe effects below run per database, not per
+  // record change; re-running them mid-interaction re-applied the last synced
+  // canvas over nodes whose save was still inside the throttle window.
+  const recordsRef = useRef(records)
+  useEffect(() => {
+    recordsRef.current = records
+  }, [records])
+
   const selectedTemplate = workflowTemplates.find(
     (template) => template.id === selectedTemplateId
   ) ?? workflowTemplates[0]
@@ -310,7 +321,7 @@ export function WorkflowView({
     (canvas: WorkflowCanvas) => {
       const nextNodes = canvas.nodes.flatMap((node) => {
         const record =
-          records.find((item) => item.id === node.recordId) ??
+          recordsRef.current.find((item) => item.id === node.recordId) ??
           (isRecordSnapshot(node.recordSnapshot)
             ? {
                 ...node.recordSnapshot,
@@ -348,8 +359,33 @@ export function WorkflowView({
         0
       )
     },
-    [records]
+    []
   )
+
+  // Keep node card content in step with record edits without touching canvas
+  // membership: refreshing data only can never drop a locally added node.
+  useEffect(() => {
+    setNodes((current) => {
+      let changed = false
+      const next = current.map((node) => {
+        const record = records.find((item) => item.id === node.data.recordId)
+        if (!record) return node
+        const fresh = createRecordNode(record, node.data.templateId, node.position, 0, node.id)
+        if (
+          node.data.identifier === fresh.data.identifier &&
+          node.data.title === fresh.data.title &&
+          node.data.description === fresh.data.description &&
+          node.data.status === fresh.data.status &&
+          node.data.priority === fresh.data.priority
+        ) {
+          return node
+        }
+        changed = true
+        return { ...node, data: fresh.data }
+      })
+      return changed ? next : current
+    })
+  }, [records])
 
   useEffect(() => {
     let cancelled = false

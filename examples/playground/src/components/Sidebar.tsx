@@ -8,7 +8,7 @@ import { useWorkspaceDatabases } from '../contexts/DatabasesContext'
 import { useTheme } from '../contexts/ThemeContext'
 import { useAuth } from '../contexts/AuthContext'
 import type { ThemeMode } from '../contexts/ThemeContext'
-import { useConnectionStatus, useSyncPresence } from '../lib/yjs/useYjsRecords'
+import { useConnectionStatus, useSyncPresence } from '../lib/yjs/usePresence'
 import { appKitConfig, switchTenantWorkspace } from '../app/kitConfig'
 import type { TenantWorkspaceOption } from '../app/kitConfig'
 import {
