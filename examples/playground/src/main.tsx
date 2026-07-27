@@ -11,28 +11,22 @@ import { seedPlaygroundData } from './lib/recordsApi'
  * Demo data is playground scaffolding, not engine behavior, so it is seeded
  * here rather than fabricated by a read path.
  *
- * Awaited before the first render on purpose: the records context reads the
- * engine once on mount, and a seed still in flight at that moment leaves the
- * app permanently empty until a reload.
+ * Started, not awaited: blocking the first paint on a dozen durable writes
+ * delays every page load. The records context awaits the same promise before
+ * it hydrates, which is the only place the ordering actually matters.
  */
-async function seedIfWanted(): Promise<void> {
-  if (!import.meta.env.DEV) return
-  if (import.meta.env.VITE_PHOTON_SEED_DEMO_DATA === 'false') return
-  try {
-    await seedPlaygroundData()
-  } catch (error) {
+if (import.meta.env.DEV && import.meta.env.VITE_PHOTON_SEED_DEMO_DATA !== 'false') {
+  void seedPlaygroundData().catch((error: unknown) => {
     console.warn('Failed to seed playground demo data', error)
-  }
+  })
 }
 
-void seedIfWanted().finally(() => {
-  createRoot(document.getElementById('root')!).render(
-    <StrictMode>
-      <ThemeProvider>
-        <AuthProvider>
-          <RouterProvider router={router} />
-        </AuthProvider>
-      </ThemeProvider>
-    </StrictMode>,
-  )
-})
+createRoot(document.getElementById('root')!).render(
+  <StrictMode>
+    <ThemeProvider>
+      <AuthProvider>
+        <RouterProvider router={router} />
+      </AuthProvider>
+    </ThemeProvider>
+  </StrictMode>,
+)

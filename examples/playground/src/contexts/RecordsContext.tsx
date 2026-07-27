@@ -14,6 +14,7 @@ import {
   createServerRecord,
   deleteServerRecord,
   fetchServerRecords,
+  playgroundSeedSettled,
   updateServerRecord,
   type ServerUpdateRecordData,
 } from '../lib/recordsApi'
@@ -190,7 +191,10 @@ export function RecordsProvider({ children }: { children: ReactNode }) {
 
     let cancelled = false
 
-    fetchServerRecords()
+    // Wait for a bootstrap seed that is already running, so the first read does
+    // not observe a half-populated engine and leave the app empty until reload.
+    playgroundSeedSettled()
+      .then(fetchServerRecords)
       .then((serverRecords) => {
         if (cancelled) return
         ydoc.transact(() => {

@@ -162,6 +162,18 @@ export async function seedPlaygroundData() {
   return seedDefaultRecordsPromise
 }
 
+/**
+ * Resolves once bootstrap seeding has finished, or immediately if none is in
+ * flight.
+ *
+ * A read may *wait for* a seed that bootstrap already started; it must never
+ * start one. That distinction is the whole point — a read path that creates
+ * records makes "empty" and "not loaded yet" indistinguishable.
+ */
+export function playgroundSeedSettled(): Promise<void> {
+  return seedDefaultRecordsPromise ?? Promise.resolve()
+}
+
 export async function fetchServerRecords(): Promise<DatabaseRecord[]> {
   const records = await listClientEngineRecords<DatabaseRecord>('records')
   return records.map((record) => record.value)
