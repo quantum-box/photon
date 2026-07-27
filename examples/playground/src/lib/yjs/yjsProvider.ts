@@ -1,6 +1,7 @@
 import * as Y from 'yjs'
 import { IndexeddbPersistence } from 'y-indexeddb'
 import { appKitConfig } from '../../app/kitConfig.js'
+import { peekPhotonClient } from '../photonEngine/client.js'
 
 // ---------------------------------------------------------------------------
 // Y.Doc singleton
@@ -49,6 +50,30 @@ function setStatus(s: ConnectionStatus) {
   if (s === _status) return
   _status = s
   _listeners.forEach((fn) => fn(s))
+  // The Live socket doubles as Photon Engine's realtime signal: while it is
+  // connected the Engine sync loop can stand down its poll timer.
+  forwardRealtimeStateToEngine(s)
+}
+
+// ---------------------------------------------------------------------------
+// Photon Engine realtime bridge
+//
+// Uses peekPhotonClient() so a WS event never forces the engine to build: if
+// the client does not exist yet there is nothing to wake up, and a client
+// created later starts with realtime 'off', which keeps polling on — the
+// safety net — until the next realtime event refreshes the state.
+// ---------------------------------------------------------------------------
+
+function forwardRealtimeStateToEngine(status: ConnectionStatus) {
+  const pending = peekPhotonClient()
+  if (!pending) return
+  void pending.then((client) => client.sync.setRealtimeState(status)).catch(() => {})
+}
+
+function notifyEngineRemoteChange() {
+  const pending = peekPhotonClient()
+  if (!pending) return
+  void pending.then((client) => client.sync.notifyRemoteChange()).catch(() => {})
 }
 
 function setPresence(presence: SyncPresence) {
@@ -154,6 +179,10 @@ export function connectWs() {
         }
         if (message.type === 'presence' && typeof message.onlineCount === 'number') {
           setPresence({ onlineCount: message.onlineCount })
+        } else if (message.type === 'engine-changed') {
+          // The server accepted engine operations from someone: pull now
+          // instead of waiting for the poll interval.
+          notifyEngineRemoteChange()
         }
       } catch {
         // Ignore non-protocol text messages.

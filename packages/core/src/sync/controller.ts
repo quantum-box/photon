@@ -144,6 +144,7 @@ export class SyncEngine implements SyncController {
 
   /** Called when a realtime frame says the server has news. */
   notifyRemoteChange(): void {
+    if (!this.running || !this.options.transport) return
     void this.syncNow('realtime')
   }
 

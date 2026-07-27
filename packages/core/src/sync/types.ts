@@ -134,6 +134,16 @@ export interface SyncController {
   getStatus(): SyncStatus
   subscribe(listener: () => void): () => void
   syncNow(reason?: SyncReason): Promise<SyncSummary>
+  /**
+   * A realtime frame said the server has news. No-op unless the loop is
+   * running: a stopped loop must stay stopped, realtime or not.
+   */
+  notifyRemoteChange(): void
+  /**
+   * Mirror the realtime channel's connection state. While `connected`, the
+   * poll timer stands down; anything else re-arms polling as the safety net.
+   */
+  setRealtimeState(state: SyncStatus['realtime']): void
   start(): void
   stop(): void
 }

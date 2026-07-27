@@ -51,6 +51,13 @@ Engineering responsibilities:
 - reconnect behavior
 - notifications that wake up Engine sync sooner
 
+The wake-up notification is the `{"type":"engine-changed"}` text frame. The
+server (or the edge worker, after proxying a successful engine push) sends it
+to a room's Live sockets when the Engine op-log advances; a client that
+receives it triggers an Engine sync cycle immediately instead of waiting for
+its poll interval. While the Live socket is connected the Engine poll timer
+stands down, and polling resumes as the safety net whenever the socket drops.
+
 Photon Live does not decide canonical domain truth, validate business rules, or resolve durable conflicts.
 
 ## REST/RPC API
