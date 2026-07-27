@@ -200,6 +200,12 @@ function presenceMessage(onlineCount: number): string {
   return JSON.stringify({ type: 'presence', onlineCount })
 }
 
+/** Text frame sent to Live sockets when the Engine op-log advanced. */
+const ENGINE_CHANGED_MESSAGE = JSON.stringify({ type: 'engine-changed' })
+
+/** Text frames relayed verbatim between sockets in a room. */
+const RELAYED_TEXT_TYPES = new Set(['awareness', 'engine-changed'])
+
 function getRoomId(request: Request): string {
   const url = new URL(request.url)
   return url.searchParams.get('room') || DEFAULT_ROOM_ID
@@ -250,7 +256,20 @@ export default {
     }
 
     if (ENGINE_PROXY_PATHS.has(url.pathname)) {
-      return proxyEngineRequest(request, env, url.pathname)
+      const response = await proxyEngineRequest(request, env, url.pathname)
+      if (url.pathname === '/api/engine/push' && response.ok) {
+        // Wake up the Live room's Engine sync loops right away instead of
+        // leaving them to their poll interval. The push body carries no room
+        // id, so only the default room is told; clients in other rooms fall
+        // back to polling.
+        const id = env.PHOTON_SYNC_ROOMS.idFromName(DEFAULT_ROOM_ID)
+        try {
+          await env.PHOTON_SYNC_ROOMS.get(id).broadcastEngineChanged()
+        } catch (error) {
+          console.warn('[photon-edge] engine-changed broadcast failed', error)
+        }
+      }
+      return response
     }
 
     if (url.pathname !== '/ws') {
@@ -293,7 +312,7 @@ export class PhotonSyncRoom extends DurableObject<Env> {
 
   async webSocketMessage(sender: WebSocket, message: string | ArrayBuffer | ArrayBufferView) {
     if (typeof message === 'string') {
-      this.broadcastAwareness(sender, message)
+      this.relayTextFrame(sender, message)
       return
     }
 
@@ -478,10 +497,18 @@ export class PhotonSyncRoom extends DurableObject<Env> {
     }
   }
 
-  private broadcastAwareness(sender: WebSocket, message: string) {
+  /** Tell every socket in this room that the Engine op-log advanced. Called
+   * over DO RPC by the worker after it proxies a successful engine push. */
+  broadcastEngineChanged() {
+    for (const socket of this.ctx.getWebSockets()) {
+      socket.send(ENGINE_CHANGED_MESSAGE)
+    }
+  }
+
+  private relayTextFrame(sender: WebSocket, message: string) {
     try {
       const parsed = JSON.parse(message) as { type?: string }
-      if (parsed.type !== 'awareness') return
+      if (typeof parsed.type !== 'string' || !RELAYED_TEXT_TYPES.has(parsed.type)) return
     } catch {
       return
     }

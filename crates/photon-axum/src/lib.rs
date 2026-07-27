@@ -535,11 +535,28 @@ async fn push_engine_operations(
         "Photon Engine push accepted operations",
     );
 
+    // Wake up other clients' Engine sync loops right away instead of leaving
+    // them to their poll interval. Rooms are keyed by Live room id, not Engine
+    // scope, so every room is told; a pull that finds nothing new is cheap.
+    if !decisions.is_empty() {
+        broadcast_engine_changed(&state).await;
+    }
+
     Ok(Json(PushResult {
         decisions,
         server_operations: Vec::new(),
         cursor,
     }))
+}
+
+/// Text frame sent over Photon Live sockets when the Engine op-log advanced.
+const ENGINE_CHANGED_FRAME: &str = r#"{"type":"engine-changed"}"#;
+
+async fn broadcast_engine_changed(state: &AppState) {
+    for room in state.rooms.read().await.values() {
+        // Send fails only when a room has no subscribers, which is fine.
+        let _ = room.presence_tx.send(ENGINE_CHANGED_FRAME.to_string());
+    }
 }
 
 async fn pull_engine_operations(

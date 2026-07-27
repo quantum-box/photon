@@ -70,6 +70,15 @@ export function photonClient(): Promise<PhotonClient> {
   return clientPromise
 }
 
+/**
+ * The client if something already asked for it, without triggering the build.
+ * The realtime bridge in `yjsProvider` uses this: a WebSocket frame must never
+ * be the thing that drags PGlite + WASM loading onto the first-paint path.
+ */
+export function peekPhotonClient(): Promise<PhotonClient> | null {
+  return clientPromise
+}
+
 async function build(): Promise<PhotonClient> {
   // PGlite's idb:// backend needs IndexedDB. jsdom has none, so unit tests run
   // against an in-memory database: durable within a test, not across a reload.
