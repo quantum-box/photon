@@ -37,7 +37,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: src-tauri
+          workspaces: examples/playground/src-tauri
 
       - name: Install Linux dependencies
         run: |
@@ -52,6 +52,9 @@ jobs:
         run: npm ci
 
       - name: Build Tauri app
+        # Run from the workspace itself: `npm run x -- --flag` through a
+        # delegating root script hands --flag to npm, not to the tauri CLI.
+        working-directory: examples/playground
         run: npm run tauri:build
 
   tauri-android-smoke:
@@ -79,7 +82,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: src-tauri
+          workspaces: examples/playground/src-tauri
 
       - name: Install Android NDK
         run: sdkmanager "ndk;27.2.12479018"
@@ -91,6 +94,7 @@ jobs:
         env:
           ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.2.12479018
           NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.2.12479018
+        working-directory: examples/playground
         run: npm run tauri:android:build -- --target aarch64 --apk
 
   tauri-ios-smoke:
@@ -111,10 +115,11 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: src-tauri
+          workspaces: examples/playground/src-tauri
 
       - name: Install dependencies
         run: npm ci
 
       - name: Build iOS simulator app
+        working-directory: examples/playground
         run: npm run tauri:ios:build:sim
