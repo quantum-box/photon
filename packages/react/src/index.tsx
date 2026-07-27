@@ -25,6 +25,7 @@ import type {
   ChangeSet,
   Collection,
   Conflict,
+  LiveQuery,
   MutationHandle,
   PhotonClient,
   PhotonRecord,
@@ -75,13 +76,67 @@ export function usePhotonClient(): PhotonClient {
   return context.client
 }
 
+interface OwnedQuery<R> {
+  readonly client: PhotonClient
+  readonly key: string
+  readonly query: LiveQuery<R>
+}
+
 /**
- * Subscribe to a live query.
+ * Subscribe to a query whose lifetime follows the subscription, not the
+ * component.
  *
- * `getSnapshot` returns a cached value whose identity does not change until
- * listeners are notified — the engine guarantees it, and useSyncExternalStore
- * requires it. Violating that guarantee is the classic infinite-render bug.
+ * React deliberately runs subscription setup twice on one component instance
+ * (StrictMode, and offscreen remounts): setup → cleanup → setup. A query
+ * created once per mount and destroyed in cleanup comes back destroyed on the
+ * second setup — it unhooked from the engine's invalidation feed, so it stays
+ * frozen on its last snapshot and never notifies again. Acquiring lazily and
+ * destroying on unsubscribe means every setup starts from a live query.
+ *
+ * `getSnapshot` returns the query's cached value, whose identity does not
+ * change until listeners are notified — the engine guarantees it, and
+ * useSyncExternalStore requires it. Violating that guarantee is the classic
+ * infinite-render bug.
  */
+function useOwnedQuery<R>(
+  client: PhotonClient,
+  key: string,
+  create: () => LiveQuery<R>,
+): QueryState<R> {
+  const holder = useRef<OwnedQuery<R> | null>(null)
+
+  // A new `create` closure arrives every render, but for one (client, key)
+  // every closure builds an equivalent query: the key is derived from the
+  // descriptor — or from caller-supplied deps, for function predicates that
+  // the descriptor cannot serialize.
+  const acquire = useCallback(() => {
+    const current = holder.current
+    if (!current || current.client !== client || current.key !== key) {
+      current?.query.destroy()
+      holder.current = { client, key, query: create() }
+    }
+    return holder.current!.query
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [client, key])
+
+  const subscribe = useCallback(
+    (listener: () => void) => {
+      const query = acquire()
+      const unsubscribe = query.subscribe(listener)
+      return () => {
+        unsubscribe()
+        query.destroy()
+        if (holder.current?.query === query) holder.current = null
+      }
+    },
+    [acquire],
+  )
+
+  const getSnapshot = useCallback(() => acquire().getSnapshot(), [acquire])
+
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
+}
+
 export function useLiveQuery<T = unknown>(
   descriptor: QueryDescriptor<T>,
   deps?: readonly unknown[],
@@ -96,19 +151,7 @@ export function useLiveQuery<T = unknown>(
     deps ?? [stableKey(descriptor)],
   )
 
-  const query = useMemo(
-    () => client.query<T>(descriptor),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [client, key],
-  )
-
-  useEffect(() => () => query.destroy(), [query])
-
-  return useSyncExternalStore(
-    useCallback((listener) => query.subscribe(listener), [query]),
-    useCallback(() => query.getSnapshot(), [query]),
-    useCallback(() => query.getSnapshot(), [query]),
-  )
+  return useOwnedQuery(client, `query:${key}`, () => client.query<T>(descriptor))
 }
 
 export function useRecord<T = unknown>(
@@ -116,16 +159,9 @@ export function useRecord<T = unknown>(
   recordId: RecordId,
 ): QueryState<PhotonRecord<T> | null> {
   const client = usePhotonClient()
-  const query = useMemo(
-    () => client.liveRecord<T>(collection, recordId),
-    [client, collection, recordId],
-  )
-  useEffect(() => () => query.destroy(), [query])
 
-  return useSyncExternalStore(
-    useCallback((listener) => query.subscribe(listener), [query]),
-    useCallback(() => query.getSnapshot(), [query]),
-    useCallback(() => query.getSnapshot(), [query]),
+  return useOwnedQuery(client, `record:${collection}:${recordId}`, () =>
+    client.liveRecord<T>(collection, recordId),
   )
 }
 
