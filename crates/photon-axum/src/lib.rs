@@ -818,6 +818,15 @@ async fn handle_ws(socket: WebSocket, state: Arc<RoomState>) {
     let (mut ws_sender, mut ws_receiver) = socket.split();
     let active_count = state.active_connections.fetch_add(1, Ordering::SeqCst) + 1;
 
+    // Subscribe BEFORE encoding the initial snapshot. In the other order an
+    // update that lands between the snapshot read and the subscription is in
+    // neither — nothing ever retransmits it, so the late-joining client stays
+    // behind until an unrelated update happens to arrive. Subscribing first
+    // means the worst case is receiving an update the snapshot already
+    // contains, and applying a Yjs update twice is a no-op.
+    let mut broadcast_rx = state.broadcast_tx.subscribe();
+    let mut presence_rx = state.presence_tx.subscribe();
+
     // Send initial state — scope the transaction so it's dropped before await
     let initial_update = {
         let doc = state.doc.read().await;
@@ -832,10 +841,6 @@ async fn handle_ws(socket: WebSocket, state: Arc<RoomState>) {
         state.active_connections.fetch_sub(1, Ordering::SeqCst);
         return;
     }
-
-    // Subscribe to broadcast channel for updates from other clients
-    let mut broadcast_rx = state.broadcast_tx.subscribe();
-    let mut presence_rx = state.presence_tx.subscribe();
     let _ = state.presence_tx.send(format!(
         r#"{{"type":"presence","onlineCount":{active_count}}}"#
     ));
