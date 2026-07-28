@@ -1,0 +1,14 @@
+[package]
+name = "photon-tauri"
+description = "Photon Engine as a Tauri plugin"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+photon-client = { path = "../photon-client" }
+tauri = { version = "2", default-features = false }
+
+[dev-dependencies]
+tauri = { version = "2", default-features = false, features = ["test"] }

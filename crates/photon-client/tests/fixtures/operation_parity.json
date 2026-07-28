@@ -1,0 +1,19 @@
+{
+  "comment": "Shared fixture for the Rust/TypeScript operation parity tests. The Rust side is crates/photon-client/tests/operation_parity.rs; the TypeScript side is examples/playground/src/lib/photonEngine/operationParity.test.ts, which drives the WASM kernel. Both must produce expected_operation_json byte-for-byte.",
+  "actor_id": "parity-actor",
+  "now_ms": 1700000000500,
+  "intent": {
+    "key": {
+      "scope": "tenant:acme:workspace:demo",
+      "collection": "issues",
+      "record_id": "issue-parity-1"
+    },
+    "kind": {
+      "type": "upsert",
+      "value": { "id": "issue-parity-1", "tags": ["a", "b"], "title": "Parity" }
+    },
+    "operation_id": "op_parity-0001",
+    "metadata": { "source": "parity-fixture" }
+  },
+  "expected_operation_json": "{\"id\":\"op_parity-0001\",\"key\":{\"scope\":\"tenant:acme:workspace:demo\",\"collection\":\"issues\",\"record_id\":\"issue-parity-1\"},\"actor_id\":\"parity-actor\",\"timestamp\":{\"wall_time_ms\":1700000000500,\"counter\":1,\"actor_id\":\"parity-actor\"},\"kind\":{\"type\":\"upsert\",\"value\":{\"id\":\"issue-parity-1\",\"tags\":[\"a\",\"b\"],\"title\":\"Parity\"}},\"metadata\":{\"source\":\"parity-fixture\"}}"
+}

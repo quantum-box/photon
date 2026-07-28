@@ -1,0 +1,33 @@
+[package]
+name = "photon-client"
+description = "Rust client SDK for Photon Engine — offline writes and push/pull sync"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[features]
+default = []
+# HTTP transport lives behind a feature so the core client carries only the
+# SyncEndpoint trait, never reqwest.
+http = ["dep:reqwest"]
+
+[dependencies]
+async-trait.workspace = true
+photon-engine = { workspace = true, features = ["memory"] }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dependencies.reqwest]
+version = "0.12"
+optional = true
+default-features = false
+features = ["json", "rustls-tls"]
+
+[dev-dependencies]
+axum.workspace = true
+photon-axum.workspace = true
+sqlx.workspace = true
+tokio.workspace = true
+tower.workspace = true
