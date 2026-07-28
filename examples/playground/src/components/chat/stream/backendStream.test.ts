@@ -103,8 +103,6 @@ describe('backend chat stream adapter', () => {
             },
             recordTools: {
               records: [],
-              syncRecord: vi.fn(),
-              syncRecords: vi.fn(),
             },
           },
         },

@@ -5,6 +5,7 @@ import './index.css'
 import { router } from './router'
 import { ThemeProvider } from './contexts/ThemeContext'
 import { AuthProvider } from './contexts/AuthContext'
+import { PhotonBoot } from './PhotonBoot'
 import { seedPlaygroundData } from './lib/recordsApi'
 
 /**
@@ -12,8 +13,8 @@ import { seedPlaygroundData } from './lib/recordsApi'
  * here rather than fabricated by a read path.
  *
  * Started, not awaited: blocking the first paint on a dozen durable writes
- * delays every page load. The records context awaits the same promise before
- * it hydrates, which is the only place the ordering actually matters.
+ * delays every page load. The record live query observes the same store, so
+ * seeded records stream into the UI as each write lands.
  */
 if (import.meta.env.DEV && import.meta.env.VITE_PHOTON_SEED_DEMO_DATA !== 'false') {
   void seedPlaygroundData().catch((error: unknown) => {
@@ -23,10 +24,12 @@ if (import.meta.env.DEV && import.meta.env.VITE_PHOTON_SEED_DEMO_DATA !== 'false
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <ThemeProvider>
-      <AuthProvider>
-        <RouterProvider router={router} />
-      </AuthProvider>
-    </ThemeProvider>
+    <PhotonBoot>
+      <ThemeProvider>
+        <AuthProvider>
+          <RouterProvider router={router} />
+        </AuthProvider>
+      </ThemeProvider>
+    </PhotonBoot>
   </StrictMode>,
 )

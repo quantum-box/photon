@@ -245,10 +245,11 @@ function matchesRecordRef(record: DatabaseRecord, ref: string) {
 }
 
 async function fetchCanonicalRecords(context?: ToolRuntimeContext) {
-  const runtime = requireRecordRuntime(context)
-  const records = await fetchServerRecords()
-  runtime.syncRecords(records)
-  return records
+  // Gate on the runtime so record tools stay unavailable outside record-aware
+  // chats; the records themselves come straight from the engine, which every
+  // live query already observes.
+  requireRecordRuntime(context)
+  return fetchServerRecords()
 }
 
 async function resolveDatabaseRecord(ref: unknown, context?: ToolRuntimeContext) {
@@ -365,7 +366,7 @@ async function executeRecordCreate(
   signal: AbortSignal,
   context?: ToolRuntimeContext
 ): Promise<ToolResult> {
-  const runtime = requireRecordRuntime(context)
+  requireRecordRuntime(context)
   const start = Date.now()
   const title = asText(args.title)
   if (!title) throw new Error('Record title is required')
@@ -380,7 +381,6 @@ async function executeRecordCreate(
     labels: asLabels(args.labels) ?? [],
     project: asText(args.project),
   })
-  runtime.syncRecord(record)
 
   return {
     data: {
@@ -419,7 +419,7 @@ async function executeRecordUpdate(
   signal: AbortSignal,
   context?: ToolRuntimeContext
 ): Promise<ToolResult> {
-  const runtime = requireRecordRuntime(context)
+  requireRecordRuntime(context)
   const start = Date.now()
   const existing = await resolveDatabaseRecord(args.recordId ?? args.identifier ?? args.id, context)
   const update = buildRecordUpdate(args)
@@ -429,7 +429,6 @@ async function executeRecordUpdate(
   if (signal.aborted) throw new DOMException('Aborted', 'AbortError')
 
   const record = await updateServerRecord(existing.id, update)
-  runtime.syncRecord(record)
 
   return {
     data: {

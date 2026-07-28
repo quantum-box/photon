@@ -364,7 +364,7 @@ export function DocumentEditor({
 
 export function DocsView({ selectedDocId }: DocsViewProps) {
   const { docs, ready, createDocument, ensureDocument, renameDocument } = useDocs()
-  const { records, syncRecord } = useDatabaseRecords()
+  const { records } = useDatabaseRecords()
   const { createAttachment, attachmentsForSurface } = useWorkspaceAttachments()
   const navigate = useNavigate()
   const [linksByDocId, setLinksByDocId] = useState<Record<string, DocumentRecordLink[]>>({})
@@ -432,10 +432,9 @@ export function DocsView({ selectedDocId }: DocsViewProps) {
       priority: 'none',
       labels: ['docs'],
     })
-    syncRecord(record)
     await handleRecordLinked(record, selectedText)
     return record
-  }, [handleRecordLinked, selectedDoc, syncRecord])
+  }, [handleRecordLinked, selectedDoc])
 
   const handleAttachFiles = useCallback((files: FileList | File[]) => {
     if (!selectedDoc) return

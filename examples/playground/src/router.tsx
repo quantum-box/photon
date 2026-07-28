@@ -33,7 +33,6 @@ import { DatabasesProvider, type WorkspaceDatabase, useWorkspaceDatabases } from
 import { DatabaseViewsProvider, useDatabaseViews } from './contexts/DatabaseViewsContext'
 import { AttachmentsProvider } from './lib/attachments/useWorkspaceAttachments'
 import { useAuth } from './contexts/AuthContext'
-import { fetchServerRecords } from './lib/recordsApi'
 import { statusConfig, type Status, type DatabaseRecord } from './data/mock'
 import type { SortingState } from '@tanstack/react-table'
 import {
@@ -918,7 +917,7 @@ const recordDetailRoute = createRoute({
 function RecordDetailPanel() {
   const { recordId } = recordDetailRoute.useParams()
   const { database, view } = databasesRoute.useSearch()
-  const { records, handleUpdateRecord, handleDeleteRecord, syncRecords } = useDatabaseRecords()
+  const { records, handleUpdateRecord, handleDeleteRecord } = useDatabaseRecords()
   const { databases } = useWorkspaceDatabases()
   const navigate = useNavigate()
   const databaseRecords = useMemo(
@@ -926,25 +925,12 @@ function RecordDetailPanel() {
     [records, databases, database]
   )
 
+  // The live query renders straight from the engine, so a deep link resolves as
+  // soon as the engine loads — there is no stale cache to re-hydrate around.
   const record = useMemo(
     () => databaseRecords.find((candidate) => candidate.identifier === recordId) ?? null,
     [databaseRecords, recordId]
   )
-
-  useEffect(() => {
-    if (record) return
-    let cancelled = false
-    void fetchServerRecords()
-      .then((serverRecords) => {
-        if (!cancelled) syncRecords(serverRecords)
-      })
-      .catch((error: unknown) => {
-        console.warn('Failed to hydrate record detail from Photon Engine', error)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [record, syncRecords])
 
   return (
     <DetailPanel

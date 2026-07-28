@@ -3,7 +3,7 @@ import { appKitConfig } from '../app/kitConfig'
 import { toRecord, type ServerRecord } from './recordsApi'
 
 describe('recordsApi', () => {
-  it('normalizes server record projections for the Yjs record cache', () => {
+  it('normalizes server record projections for the engine read path', () => {
     const serverRecord: ServerRecord = {
       id: 'f3cc94d8-cc78-4fd3-a407-4793ea2f537c',
       identifier: 'PLT-1200',

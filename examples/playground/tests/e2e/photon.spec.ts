@@ -167,6 +167,11 @@ test.describe('Photon shell', () => {
   })
 
   test('syncs workflow canvas changes between browser tabs', async ({ page, context }) => {
+    // Two tabs cold-booting the engine against one IndexedDB serialize PGlite
+    // startup; on CI hardware that alone can eat the default 60s budget. The
+    // canvas sync under test is Yjs and fast — the boot is what needs room.
+    test.setTimeout(120_000)
+
     const canvasDatabase = `workflow-sync-${Date.now()}`
     const secondPage = await context.newPage()
 

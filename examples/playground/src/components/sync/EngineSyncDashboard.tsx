@@ -6,6 +6,7 @@ import {
   upsertClientEngineRecord,
   type ClientEngineDebugState,
 } from '../../lib/photonEngine/client'
+import { resetLocalCache } from '../../lib/resetLocalCache'
 
 interface EdgeSyncLog {
   id: string
@@ -372,6 +373,18 @@ export function EngineSyncDashboard() {
     }
   }, [refresh])
 
+  const resetCache = useCallback(async () => {
+    const confirmed = window.confirm(
+      'Delete the local engine database and Yjs cache, then reload? Unsynced local changes are lost; server data is untouched.'
+    )
+    if (!confirmed) return
+    try {
+      await resetLocalCache()
+    } finally {
+      window.location.reload()
+    }
+  }, [])
+
   useEffect(() => {
     void refresh()
     const timer = window.setInterval(() => void refresh(), 3000)
@@ -472,6 +485,13 @@ export function EngineSyncDashboard() {
             onClick={() => void refresh()}
           >
             Refresh
+          </button>
+          <button
+            type="button"
+            className="rounded bg-surface-hover px-2.5 py-1.5 text-xs font-medium text-red-400 hover:text-red-300"
+            onClick={() => void resetCache()}
+          >
+            Reset local cache
           </button>
           <button
             type="button"
