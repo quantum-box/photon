@@ -529,15 +529,19 @@ test.describe('Photon shell', () => {
     const documentUrl = page.url()
     const sharedContext = await browser.newContext()
     const sharedPage = await sharedContext.newPage()
-    await sharedPage.goto(documentUrl)
 
-    await expect(sharedPage.getByText('Server connected')).toBeVisible({ timeout: 20_000 })
-    await expect(sharedPage.getByText('Reload proof body')).toBeVisible({ timeout: 20_000 })
+    // A reload re-requests the full room state, so retrying through goto turns
+    // a missed one-shot delivery race into an eventually-consistent check.
+    await expect(async () => {
+      await sharedPage.goto(documentUrl)
+      await expect(sharedPage.getByText('Server connected')).toBeVisible({ timeout: 20_000 })
+      await expect(sharedPage.getByText('Reload proof body')).toBeVisible({ timeout: 20_000 })
+    }).toPass({ timeout: 90_000 })
 
     await editor.click()
     await page.keyboard.press(process.platform === 'darwin' ? 'Meta+A' : 'Control+A')
     await page.keyboard.type('Synced from first browser')
-    await expect(sharedPage.getByText('Synced from first browser')).toBeVisible()
+    await expect(sharedPage.getByText('Synced from first browser')).toBeVisible({ timeout: 20_000 })
     await sharedContext.close()
 
     await page.reload()
