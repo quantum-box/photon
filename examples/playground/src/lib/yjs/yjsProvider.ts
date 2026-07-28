@@ -1,5 +1,6 @@
 import * as Y from 'yjs'
 import { IndexeddbPersistence } from 'y-indexeddb'
+import { createBackoff } from '@quantum-box/photon-core'
 import { appKitConfig } from '../../app/kitConfig.js'
 import { peekPhotonClient } from '../photonEngine/client.js'
 
@@ -117,8 +118,7 @@ const WS_REMOTE = 'ws-remote'
 
 let ws: WebSocket | null = null
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null
-let backoff = 1000
-const MAX_BACKOFF = 30_000
+const backoff = createBackoff({ initialMs: 1_000, maxMs: 30_000 })
 let disposed = false
 
 function getWsUrl(): string {
@@ -136,8 +136,7 @@ function scheduleReconnect() {
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null
     connectWs()
-  }, backoff)
-  backoff = Math.min(backoff * 2, MAX_BACKOFF)
+  }, backoff.next())
 }
 
 /** Send local Y.Doc updates to the server (skip remote-origin updates). */
@@ -163,7 +162,7 @@ export function connectWs() {
   let isFirstMessage = true
 
   socket.addEventListener('open', () => {
-    backoff = 1000 // reset backoff on successful connect
+    backoff.reset() // reset backoff on successful connect
     setStatus('connected')
     ydoc.on('update', onDocUpdate)
     socket.send(Y.encodeStateAsUpdate(ydoc))
