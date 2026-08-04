@@ -77,7 +77,7 @@ function corsHeaders(): HeadersInit {
   return {
     'access-control-allow-origin': '*',
     'access-control-allow-methods': 'GET,POST,OPTIONS',
-    'access-control-allow-headers': 'content-type,x-request-id,x-photon-request-id',
+    'access-control-allow-headers': 'authorization,content-type,x-request-id,x-photon-request-id',
     'access-control-expose-headers': 'x-photon-request-id',
   }
 }
@@ -141,7 +141,14 @@ async function proxyEngineRequest(request: Request, env: Env, path: string): Pro
     const headers = new Headers()
     headers.set('content-type', request.headers.get('content-type') || 'application/json')
     headers.set('x-photon-request-id', id)
-    if (env.PHOTON_EDGE_SERVICE_TOKEN) {
+    // The caller's own bearer token wins: the cloud engine authorizes per
+    // tenant, and a user token carries a narrower grant than the edge's
+    // service token. The service token is the fallback for callers the edge
+    // itself has already authenticated some other way.
+    const callerAuthorization = request.headers.get('authorization')
+    if (callerAuthorization) {
+      headers.set('authorization', callerAuthorization)
+    } else if (env.PHOTON_EDGE_SERVICE_TOKEN) {
       headers.set('authorization', `Bearer ${env.PHOTON_EDGE_SERVICE_TOKEN}`)
     }
 

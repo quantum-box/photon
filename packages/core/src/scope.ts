@@ -24,9 +24,14 @@ function slug(value: string): string {
   return normalized
 }
 
-/** `workspace:<tenant>:<workspace>` — the scope every collection is stored under. */
+/**
+ * `tenant:<tenant>:workspace:<workspace>` — the scope every collection is
+ * stored under. This is the one shape the Photon Engine server accepts on the
+ * wire: its authorization boundary parses the tenant out of the scope, so any
+ * other format is rejected with 400.
+ */
 export function buildWorkspaceScope({ tenantId, workspaceId }: WorkspaceScopeInput): string {
-  return `workspace:${slug(tenantId)}:${slug(workspaceId)}`
+  return `tenant:${slug(tenantId)}:workspace:${slug(workspaceId)}`
 }
 
 /** The Live room id for a scope's realtime channel. */
