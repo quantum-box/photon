@@ -11,7 +11,7 @@ on:
     branches: [main]
     paths:
       - .github/workflows/tauri.yml
-      - src-tauri/**
+      - examples/playground/src-tauri/**
       - crates/photon-engine/**
       - package.json
       - package-lock.json

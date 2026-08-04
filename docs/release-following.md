@@ -41,28 +41,32 @@ production builds pinned to a moving branch such as `main`.
 
 ## What Photon Exposes
 
-The root package exposes stable platform entrypoints:
+The root package exposes stable platform entrypoints (see `exports` in
+`package.json`):
 
 ```text
 @quantum-box/photon
-@quantum-box/photon/config
-@quantum-box/photon/router
-@quantum-box/photon/sync
+@quantum-box/photon/react
+@quantum-box/photon/rest
+@quantum-box/photon/store-pglite
+@quantum-box/photon/wasm
 @quantum-box/photon/worker
-@quantum-box/photon/server-contract
-@quantum-box/photon/styles.css
 ```
 
 Example app wiring:
 
 ```ts
-import '@quantum-box/photon/styles.css'
-import { RouterProvider } from '@tanstack/react-router'
-import { router } from '@quantum-box/photon/router'
+import { createPhotonClient, createEngineTransport } from '@quantum-box/photon'
+import { createPGliteStore } from '@quantum-box/photon/store-pglite'
+import { loadPhotonKernel } from '@quantum-box/photon/wasm'
 
-export function App() {
-  return <RouterProvider router={router} />
-}
+const photon = await createPhotonClient({
+  scope: buildWorkspaceScope({ tenantId, workspaceId }),
+  actorId,
+  storage: await createPGliteStore({ dataDir: 'idb://photon' }),
+  kernel: await loadPhotonKernel(),
+  transport: createEngineTransport({ baseUrl: apiBaseUrl }),
+})
 ```
 
 The `worker` entrypoint is for Cloudflare Workers or `workerd` compatible
