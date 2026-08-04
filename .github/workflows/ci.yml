@@ -12,7 +12,7 @@ concurrency:
 
 jobs:
   playground:
-    name: Playground checks
+    name: Frontend checks
     runs-on: ubuntu-latest
 
     steps:
@@ -100,7 +100,7 @@ jobs:
           retention-days: 7
 
   rust:
-    name: Rust workspace
+    name: Backend checks
     runs-on: ubuntu-latest
 
     steps:
@@ -111,6 +111,15 @@ jobs:
           components: rustfmt, clippy
 
       - uses: Swatinem/rust-cache@v2
+
+      - name: Install Tauri Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf
 
       - name: Format
         run: cargo fmt --all --check
