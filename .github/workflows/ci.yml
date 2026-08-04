@@ -12,7 +12,7 @@ concurrency:
 
 jobs:
   playground:
-    name: Playground checks
+    name: Frontend checks
     runs-on: ubuntu-latest
 
     steps:
@@ -100,7 +100,7 @@ jobs:
           retention-days: 7
 
   rust:
-    name: Rust workspace
+    name: Backend checks
     runs-on: ubuntu-latest
 
     steps:
