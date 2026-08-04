@@ -43,7 +43,63 @@ impl MySqlAdapter {
         &self.pool
     }
 
+    /// Apply every schema migration this build knows about, in order,
+    /// recording each in `photon_engine_schema_migrations`.
+    ///
+    /// MySQL/TiDB DDL is not transactional, so each migration's statements
+    /// must be individually idempotent (`IF NOT EXISTS`, index-existence
+    /// checks): a crash mid-migration is then repaired by simply running
+    /// `migrate()` again.
     pub async fn migrate(&self) -> Result<()> {
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS photon_engine_schema_migrations (
+                version BIGINT NOT NULL PRIMARY KEY,
+                name VARCHAR(191) NOT NULL,
+                applied_at_ms BIGINT NOT NULL
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        let current = self.schema_version().await?;
+        for (version, name) in SCHEMA_MIGRATIONS {
+            if *version <= current {
+                continue;
+            }
+            self.apply_migration(*version).await?;
+            sqlx::query(
+                "INSERT INTO photon_engine_schema_migrations (version, name, applied_at_ms) VALUES (?, ?, ?)",
+            )
+            .bind(version)
+            .bind(name)
+            .bind(unix_time_ms())
+            .execute(&self.pool)
+            .await?;
+        }
+        Ok(())
+    }
+
+    /// Highest applied schema migration version, 0 when none have run.
+    pub async fn schema_version(&self) -> Result<i64> {
+        let version: Option<i64> =
+            sqlx::query_scalar("SELECT MAX(version) FROM photon_engine_schema_migrations")
+                .fetch_one(&self.pool)
+                .await?;
+        Ok(version.unwrap_or(0))
+    }
+
+    async fn apply_migration(&self, version: i64) -> Result<()> {
+        match version {
+            1 => self.migrate_v1_initial_schema().await,
+            unknown => Err(EngineError::Storage(format!(
+                "unknown photon-engine schema migration version {unknown}"
+            ))),
+        }
+    }
+
+    async fn migrate_v1_initial_schema(&self) -> Result<()> {
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS photon_engine_operations (
@@ -160,6 +216,10 @@ impl MySqlAdapter {
         Ok(())
     }
 }
+
+/// Every schema version this build knows how to reach, in order. Append-only:
+/// a released migration is never edited, schema changes get a new entry.
+const SCHEMA_MIGRATIONS: &[(i64, &str)] = &[(1, "initial engine schema")];
 
 async fn create_index_if_missing(
     pool: &MySqlPool,

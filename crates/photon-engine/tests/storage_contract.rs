@@ -164,6 +164,24 @@ async fn sqlite_adapter_satisfies_storage_contract() {
     run_storage_contract(adapter).await;
 }
 
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn sqlite_migrations_are_versioned_and_idempotent() {
+    let adapter = photon_engine::SqliteAdapter::connect("sqlite::memory:")
+        .await
+        .unwrap();
+    assert_eq!(adapter.schema_version().await.unwrap(), 1);
+
+    // Re-running must be a no-op, not a failure or a duplicate version row.
+    adapter.migrate().await.unwrap();
+    assert_eq!(adapter.schema_version().await.unwrap(), 1);
+    let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM photon_engine_schema_migrations")
+        .fetch_one(adapter.pool())
+        .await
+        .unwrap();
+    assert_eq!(rows, 1);
+}
+
 #[cfg(feature = "mysql")]
 #[tokio::test]
 async fn mysql_adapter_satisfies_storage_contract_when_url_is_configured() {
@@ -177,6 +195,12 @@ async fn mysql_adapter_satisfies_storage_contract_when_url_is_configured() {
     let adapter = photon_engine::MySqlAdapter::connect(&database_url)
         .await
         .unwrap();
+
+    // Version tracking: connect() migrated, a second run is a no-op.
+    assert_eq!(adapter.schema_version().await.unwrap(), 1);
+    adapter.migrate().await.unwrap();
+    assert_eq!(adapter.schema_version().await.unwrap(), 1);
+
     reset_mysql_storage(&adapter).await;
     run_storage_contract(adapter.clone()).await;
     reset_mysql_storage(&adapter).await;
