@@ -86,6 +86,17 @@ The container reads:
   room state.
 - `PHOTON_LIVE_ENGINE_DATABASE_URL`: optional Engine storage URL for Live when
   Live needs the same durable snapshot/update storage as Engine.
+- `PHOTON_AUTH_TOKENS`: comma-separated bearer tokens the server trusts, e.g.
+  `edge-token,acme-token@acme`. A bare token is granted every tenant; a
+  `token@tenant` entry is confined to that tenant. When set, `/api/engine/push`,
+  `/api/engine/pull`, `/api/engine/debug`, and `/ws` all require
+  `Authorization: Bearer <token>` (Live sockets may pass `?token=` instead,
+  since browsers cannot set WebSocket headers), the request scope must be
+  `tenant:{tenant}:workspace:{workspace}`, and the token's tenant grant is
+  enforced against it. Unset disables authentication — local development only;
+  the server logs a warning at startup.
+- `PHOTON_CORS_ALLOWED_ORIGINS`: comma-separated exact origins for CORS.
+  Unset or `*` allows any origin.
 
 The default SQLite database is suitable for preview/demo deployments only. Cloud
 Run filesystem data is ephemeral, so production record data needs a durable
@@ -100,15 +111,23 @@ PHOTON_ENGINE_DATABASE_URL=tidb://<user>:<password>@<tidb-host>:4000/photon \
   npm run server:engine
 ```
 
-Engine schema preparation currently creates the `photon_engine_*` tables and
-indexes from the Rust adapter at process startup. Treat that adapter as the
-storage implementation behind cloud-server business logic. Incoming Engine
-operations may first pass through edge auth/session checks and rate limits, but
-they should still reach the cloud application/server layer for durable auth,
-permission checks, collection rules, schema validation, conflict policy, and
-audit metadata before they become accepted operations. App-domain SQLite
-migrations under `crates/photon-axum/migrations/` are still for the local
-compatibility app database; they are not the TiDB Engine schema source.
+Engine schema preparation runs versioned migrations from the Rust adapter at
+process startup: each migration is recorded in
+`photon_engine_schema_migrations`, re-running is a no-op, and future schema
+changes ship as new numbered entries rather than edits to released DDL. The
+statements are individually idempotent, so an interrupted MySQL/TiDB migration
+(their DDL is not transactional) is repaired by simply starting the process
+again. Treat that adapter as the storage implementation behind cloud-server
+business logic. Incoming Engine operations pass the service auth boundary
+(`PHOTON_AUTH_TOKENS`: bearer token, strict scope shape, tenant grant), are
+evaluated per operation against the host-supplied `EnginePolicy`
+(`build_state_with_auth_and_policy`; the default allows what the token grant
+allows), and each accepted operation is stamped with `metadata.photon_audit`
+(principal kind, tenant, request id, receive time) before entering the log.
+Domain rules — per-user permissions, collection rules, schema validation,
+conflict policy — belong in the host's `EnginePolicy` implementation. App-domain SQLite migrations under
+`crates/photon-axum/migrations/` are still for the local compatibility app
+database; they are not the TiDB Engine schema source.
 
 Local MySQL can stand in for TiDB when validating the production storage path:
 

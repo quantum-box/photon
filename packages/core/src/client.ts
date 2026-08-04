@@ -22,9 +22,12 @@ import { newId } from './id.js'
 import { Projection } from './projection.js'
 import { CollectionQuery, RecordQuery } from './query.js'
 import type { LiveQuery, QueryDescriptor, QueryState } from './query.js'
+import { createRestTransport } from './rest/index.js'
+import type { RestResource } from './rest/index.js'
 import type { LocalStore, StoreWrite } from './store.js'
 import { SyncEngine } from './sync/controller.js'
-import type { PullResult, SyncController, SyncTransport } from './sync/types.js'
+import { createModeRouterTransport } from './sync/mode-router.js'
+import type { PullResult, PushDecision, SyncController, SyncTransport } from './sync/types.js'
 import type {
   AckResult,
   ChangeSet,
@@ -44,9 +47,24 @@ import type {
 
 export type CollectionMode = 'engine-native' | 'rest-backed' | 'passthrough'
 
-export interface CollectionConfig {
-  readonly mode: CollectionMode
-}
+/**
+ * Per-collection sync behavior. The staged-adoption story is this one line:
+ *
+ * - `passthrough` — the REST resource does everything. No durable log, no
+ *   offline queue: a mutation is applied optimistically and pushed inline,
+ *   and a transport failure rejects it. Zero backend change.
+ * - `rest-backed` — same REST resource, but writes go through the durable
+ *   operation log, so they queue offline, survive reload, and roll back on
+ *   rejection. Merge is last-write-wins at the REST boundary.
+ * - `engine-native` — the server speaks the engine protocol; field-level CRDT
+ *   merge applies. Served by the client's `transport`.
+ *
+ * Component code never changes across the three.
+ */
+export type CollectionConfig =
+  | { readonly mode: 'engine-native' }
+  | { readonly mode: 'rest-backed'; readonly resource: RestResource<never> }
+  | { readonly mode: 'passthrough'; readonly resource: RestResource<never> }
 
 export interface PhotonClientOptions {
   /** Opaque to the engine; only ever compared for equality. */
@@ -158,6 +176,9 @@ class PhotonClientImpl implements PhotonClient {
   private dirtyCollections = new Set<Collection>()
   private closed = false
   private readonly registryKey: string
+  private readonly collectionModes = new Map<Collection, CollectionMode>()
+  /** Wraps the REST resources of rest-backed and passthrough collections. */
+  private readonly restTransport: SyncTransport | null
 
   readonly sync: SyncEngine
 
@@ -180,16 +201,47 @@ class PhotonClientImpl implements PhotonClient {
     }
     liveClients.add(this.registryKey)
 
+    const restResources: Record<Collection, RestResource<never>> = {}
+    for (const [collection, config] of Object.entries(options.collections ?? {})) {
+      this.collectionModes.set(collection, config.mode)
+      if (config.mode === 'engine-native') continue
+      // Runtime guard for plain-JS callers: the union type cannot save them.
+      if (!('resource' in config) || !config.resource) {
+        throw new Error(
+          `Collection "${collection}" is configured as "${config.mode}" but has no REST resource`,
+        )
+      }
+      restResources[collection] = config.resource
+    }
+
+    this.restTransport = Object.keys(restResources).length
+      ? createRestTransport({
+          resources: restResources,
+          readRecord: (collection, recordId) => this.projection.get(collection, recordId)?.value,
+        })
+      : null
+
+    const transport = createModeRouterTransport({
+      ...(options.transport ? { engine: options.transport } : {}),
+      ...(this.restTransport ? { rest: this.restTransport } : {}),
+      modeOf: (collection) => this.modeOf(collection),
+    })
+
     this.sync = new SyncEngine({
       scope: options.scope,
-      ...(options.transport ? { transport: options.transport } : {}),
+      ...(transport ? { transport } : {}),
       store: options.storage,
       clock,
       remoteId: options.sync?.remoteId ?? 'photon-server',
       pushDebounceMs: options.sync?.pushDebounceMs ?? 150,
       pollIntervalMs: options.sync?.pollIntervalMs ?? 30_000,
       pullPageSize: options.sync?.pullPageSize ?? 200,
-      collectPending: () => [...this.pending.values()].map((entry) => entry.operation),
+      // Passthrough operations are pushed inline at mutation time and have no
+      // durable queue, so the sync loop must never re-push them.
+      collectPending: () =>
+        [...this.pending.values()]
+          .map((entry) => entry.operation)
+          .filter((operation) => this.modeOf(operation.key.collection) !== 'passthrough'),
       onDecision: (decision) => this.handleDecision(decision),
       applyRemote: (operations) => this.applyRemoteOperations(operations),
       applySnapshot: (page) => this.applySnapshot(page),
@@ -197,6 +249,10 @@ class PhotonClientImpl implements PhotonClient {
       pendingCount: () => this.pending.size,
       conflictCount: () => this.conflictRows.length,
     })
+  }
+
+  private modeOf(collection: Collection): CollectionMode {
+    return this.collectionModes.get(collection) ?? 'engine-native'
   }
 
   async bootstrap(): Promise<void> {
@@ -316,7 +372,10 @@ class PhotonClientImpl implements PhotonClient {
 
     const operations: Operation[] = []
     const changes: RecordChange[] = []
+    const durableOperations: Operation[] = []
+    const durableMutations: Mutation[] = []
     const engineRecords: EngineRecord[] = []
+    const passthrough: { operation: Operation; previous: EngineRecord | null }[] = []
     let lastRecord: PhotonRecord<T> | null = null
 
     for (const mutation of mutations) {
@@ -333,7 +392,16 @@ class PhotonClientImpl implements PhotonClient {
       const projected = this.kernel.applyOperation(current, operation)
 
       operations.push(operation)
-      engineRecords.push(projected)
+      if (this.modeOf(mutation.collection) === 'passthrough') {
+        // No durable log for passthrough: the write is pushed inline below,
+        // and `previous` is what a rejection restores — there are no accepted
+        // operations to replay it from.
+        passthrough.push({ operation, previous: current })
+      } else {
+        durableOperations.push(operation)
+        durableMutations.push(mutation)
+        engineRecords.push(projected)
+      }
       this.registerPending(operation)
       this.appliedOperationIds.add(operation.id)
 
@@ -348,17 +416,19 @@ class PhotonClientImpl implements PhotonClient {
     // Subscribers observe the mutation here, before this call returns.
     this.emit('local', changes)
 
-    const local = this.commit({ operations, records: engineRecords })
-      .then(() => {
-        const durableChanges: RecordChange[] = []
-        for (const mutation of mutations) {
-          const change = this.projection.markDurable(mutation.collection, mutation.recordId)
-          if (change) durableChanges.push(change)
-        }
-        this.emit('local', durableChanges)
-        const last = mutations[mutations.length - 1]!
-        return this.projection.get(last.collection, last.recordId) as PhotonRecord<T> | null
-      })
+    const persisted = durableOperations.length
+      ? this.commit({ operations: durableOperations, records: engineRecords })
+      : Promise.resolve()
+    const local = persisted.then(() => {
+      const durableChanges: RecordChange[] = []
+      for (const mutation of durableMutations) {
+        const change = this.projection.markDurable(mutation.collection, mutation.recordId)
+        if (change) durableChanges.push(change)
+      }
+      this.emit('local', durableChanges)
+      const last = mutations[mutations.length - 1]!
+      return this.projection.get(last.collection, last.recordId) as PhotonRecord<T> | null
+    })
 
     const settled = Promise.all(
       operations.map(
@@ -371,7 +441,8 @@ class PhotonClientImpl implements PhotonClient {
       ),
     ).then((results) => results.find((result) => result.status !== 'accepted') ?? results[0]!)
 
-    void this.sync.notifyLocalChange()
+    if (passthrough.length) void this.pushPassthrough(passthrough)
+    if (durableOperations.length) void this.sync.notifyLocalChange()
 
     return {
       operationId: operations[0]!.id,
@@ -380,6 +451,79 @@ class PhotonClientImpl implements PhotonClient {
       settled,
       rollback: () => this.rollbackOperations(operations),
     }
+  }
+
+  /**
+   * The passthrough write path: straight to the REST resource, right now.
+   *
+   * There is deliberately no queue behind this. Passthrough is the zero-
+   * backend-change mode, and its failure semantics are a plain REST app's: a
+   * transport failure rejects the write and the optimistic value is undone.
+   * Collections that should survive being offline belong on `rest-backed`.
+   */
+  private async pushPassthrough(
+    batch: readonly { operation: Operation; previous: EngineRecord | null }[],
+  ): Promise<void> {
+    const transport = this.restTransport
+    if (!transport) return
+
+    const byOperationId = new Map(batch.map((entry) => [entry.operation.id, entry]))
+    let decisions: readonly PushDecision[]
+    try {
+      const result = await transport.push({
+        scope: this.scope,
+        operations: batch.map((entry) => entry.operation),
+      })
+      decisions = result.decisions
+    } catch (error) {
+      decisions = batch.map((entry) => ({
+        kind: 'rejected' as const,
+        operationId: entry.operation.id,
+        reason: error instanceof Error ? error.message : 'the server could not be reached',
+      }))
+    }
+
+    for (const decision of decisions) {
+      if (decision.kind === 'rejected') {
+        this.resolvePassthroughRejection(decision, byOperationId.get(decision.operationId))
+        continue
+      }
+      this.handleDecision(decision)
+    }
+  }
+
+  /**
+   * Undo a rejected passthrough write by restoring the value it displaced.
+   * Rejected durable writes replay their accepted operations instead, but a
+   * passthrough collection has no operation log to replay from.
+   */
+  private resolvePassthroughRejection(
+    decision: Extract<PushDecision, { kind: 'rejected' }>,
+    entry: { operation: Operation; previous: EngineRecord | null } | undefined,
+  ): void {
+    const pending = this.pending.get(decision.operationId)
+    if (!pending || !entry) return
+    this.pending.delete(decision.operationId)
+
+    const { collection, record_id: recordId } = pending.operation.key
+    const changes: RecordChange[] = []
+    const released = this.projection.releasePending(collection, recordId)
+    if (released) changes.push(released)
+
+    if (entry.previous) {
+      const change = this.projection.set(entry.previous, { durable: false })
+      if (change) changes.push(change)
+    } else {
+      const change = this.projection.remove(collection, recordId)
+      if (change) changes.push(change)
+    }
+
+    pending.resolve({
+      status: 'rejected',
+      operationId: decision.operationId,
+      reason: decision.reason,
+    })
+    this.emit('rollback', changes)
   }
 
   upsert<T>(collection: Collection, recordId: RecordId, value: T): MutationHandle<T> {

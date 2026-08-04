@@ -35,6 +35,78 @@ export interface PGliteStoreOptions {
   readonly dataDir?: string
   /** Reuse an already-open instance instead of creating one. */
   readonly client?: PGlite
+  /**
+   * Claim a cross-tab exclusive lock (Web Locks API) on `dataDir` before
+   * opening. PGlite holds a single connection per data directory; a second
+   * *tab* on the same directory is invisible to the in-process registry and
+   * corrupts silently. With this on, the second tab fails loudly with
+   * `PGliteStoreLockedError` instead.
+   *
+   * Opt-in because it changes multi-tab behavior: without a takeover story
+   * (leader election, SharedWorker), the honest options are "second tab may
+   * corrupt" and "second tab refuses to open" — the host picks. Where the
+   * Web Locks API does not exist (Node, very old WebViews) the guard degrades
+   * to the in-process registry with a console warning.
+   */
+  readonly exclusiveLock?: boolean
+}
+
+/** Another tab (or window) already holds this data directory. */
+export class PGliteStoreLockedError extends Error {
+  constructor(readonly lockName: string) {
+    super(
+      `Another tab already holds the PGlite database ${lockName}. ` +
+        'Close it (or its Photon client) before opening a new one.',
+    )
+    this.name = 'PGliteStoreLockedError'
+  }
+}
+
+/** The slice of the Web Locks API this module uses; avoids requiring DOM lib types. */
+interface WebLockManager {
+  request(
+    name: string,
+    options: { ifAvailable: boolean },
+    callback: (lock: object | null) => Promise<unknown>,
+  ): Promise<unknown>
+}
+
+interface WebLocksHost {
+  navigator?: { locks?: WebLockManager }
+}
+
+/**
+ * Hold a Web Lock for the store's lifetime. Resolves to a release function,
+ * or rejects with [`PGliteStoreLockedError`] when another tab holds it.
+ */
+async function acquireExclusiveLock(lockName: string): Promise<() => void> {
+  const locks = (globalThis as WebLocksHost).navigator?.locks
+  if (!locks) {
+    console.warn(
+      `Photon: exclusiveLock was requested for ${lockName}, but the Web Locks API ` +
+        'is unavailable here. Falling back to the in-process guard only.',
+    )
+    return () => {}
+  }
+
+  return await new Promise<() => void>((resolveAcquired, rejectAcquired) => {
+    let release!: () => void
+    const held = new Promise<void>((resolveRelease) => {
+      release = resolveRelease
+    })
+    // `ifAvailable` instead of queueing: a second tab waiting forever on a
+    // lock looks exactly like a hang. Failing immediately is diagnosable.
+    void locks
+      .request(lockName, { ifAvailable: true }, async (lock) => {
+        if (!lock) {
+          rejectAcquired(new PGliteStoreLockedError(lockName))
+          return
+        }
+        resolveAcquired(release)
+        await held
+      })
+      .catch(rejectAcquired)
+  })
 }
 
 const SCHEMA = `
@@ -116,6 +188,7 @@ class PGliteStore implements LocalStore {
   constructor(
     private readonly db: PGlite,
     readonly dataDir: string,
+    private readonly releaseLock: () => void = () => {},
   ) {}
 
   async migrate(): Promise<void> {
@@ -352,13 +425,29 @@ class PGliteStore implements LocalStore {
   }
 
   async close(): Promise<void> {
-    await this.db.close()
+    try {
+      await this.db.close()
+    } finally {
+      this.releaseLock()
+    }
   }
 }
 
 export async function createPGliteStore(
   options: PGliteStoreOptions = {},
 ): Promise<LocalStore> {
-  const db = options.client ?? (await PGlite.create(options.dataDir))
-  return new PGliteStore(db, options.dataDir ?? 'memory://')
+  const dataDir = options.dataDir ?? 'memory://'
+  // Claim the lock before touching the database: opening PGlite on a held
+  // directory is exactly the corruption this option exists to prevent.
+  const releaseLock = options.exclusiveLock
+    ? await acquireExclusiveLock(`photon-pglite:${dataDir}`)
+    : () => {}
+
+  try {
+    const db = options.client ?? (await PGlite.create(options.dataDir))
+    return new PGliteStore(db, dataDir, releaseLock)
+  } catch (error) {
+    releaseLock()
+    throw error
+  }
 }

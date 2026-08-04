@@ -20,7 +20,6 @@ services:
     build:
       context: .
       dockerfile: crates/photon-server/Dockerfile
-      dockerfile: Dockerfile
       args:
         PHOTON_SERVER_BIN: photon-engine-server
     environment:

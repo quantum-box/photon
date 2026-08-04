@@ -64,10 +64,22 @@ npm run tauri:build
 - Attachment byte storage is still a provider contract. Local web development
   keeps preview bytes in runtime object URLs, so CI proves metadata sync and
   chips, not durable binary download.
-- The local Rust server has no authentication or authorization boundary for
-  record, document sync, chat tool, or attachment metadata endpoints.
+- The Rust server now has a service-level auth boundary (`PHOTON_AUTH_TOKENS`
+  bearer tokens with tenant grants on Engine push/pull/debug and Live `/ws`,
+  strict `tenant:{t}:workspace:{w}` scope enforcement), a per-operation
+  `EnginePolicy` hook for domain-level write rules, and audit metadata stamped
+  into every accepted operation. What remains is wiring Tachyon's real user
+  sessions into an `EnginePolicy` implementation. Legacy record/chat/attachment
+  REST endpoints remain open.
 - Playwright covers Chromium workspace flows only. Native desktop packaging is
   covered by Tauri smoke builds, not full desktop UI automation.
-- Offline coverage is intentionally reconnect-focused. It verifies local Yjs
-  document edits replay after reconnection, but it does not yet cover long-lived
-  conflict resolution across multiple disconnected writers.
+- Offline coverage now includes the Engine round trip (offline record write →
+  reload → reconnect → second client convergence) and two disconnected writers
+  converging through the server. Same-record long-lived conflict resolution is
+  covered deterministically at the Rust integration level
+  (`crates/photon-engine/tests/sync_integration.rs`), not yet through browser
+  UI automation.
+- PGlite multi-tab remains a known limitation: `createPGliteStore` now offers
+  an opt-in `exclusiveLock` (Web Locks) that makes a second tab fail loudly
+  instead of corrupting silently, but graceful multi-tab (leader election or a
+  SharedWorker) is still future work.

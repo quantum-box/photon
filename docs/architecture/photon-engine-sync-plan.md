@@ -164,10 +164,28 @@ Use this map when tracing a sync bug from UI to storage:
 
 ### 5. Server Validation And Authorization
 
-- Validate workspace scope before accepting operations.
-- Check user/session permissions.
-- Reject writes to collections the caller cannot mutate.
-- Add audit metadata to accepted operations.
+- Done: validate workspace scope before accepting operations — push/pull
+  reject anything that is not `tenant:{tenant}:workspace:{workspace}`, and a
+  push whose operations are keyed outside the request scope is rejected whole
+  (`crates/photon-axum/src/lib.rs`).
+- Done: service-level authorization — `PHOTON_AUTH_TOKENS` bearer tokens with
+  per-tenant grants, enforced on `/api/engine/push`, `/api/engine/pull`,
+  `/api/engine/debug`, and `/ws` (`crates/photon-axum/src/auth.rs`). Live
+  rooms are pinned to the tenant in their room id, and `engine-changed`
+  wake-ups only reach rooms of the pushing tenant.
+- Done: per-operation domain authorization hook — every pushed operation is
+  evaluated against an `EnginePolicy` before it is applied; a rejection
+  becomes a per-operation `PushDecision::Rejected` that the client rolls back
+  by replay (`crates/photon-axum/src/policy.rs`). The host supplies the
+  policy via `build_state_with_auth_and_policy`; the default allows whatever
+  the token grant allowed.
+- Done: audit metadata on accepted operations — the server stamps
+  `metadata.photon_audit` (authorized principal kind, tenant, request id,
+  receive time) into each accepted operation before it enters the log, so
+  audit travels durably with the operation itself.
+- Remaining: wire Tachyon's identity into an `EnginePolicy` implementation so
+  the per-user answer ("may this user move this issue?") comes from real
+  sessions rather than token grants.
 - Keep business validation outside Photon Live.
 
 ### 6. TiDB/MySQL Production Hardening
@@ -175,7 +193,11 @@ Use this map when tracing a sync bug from UI to storage:
 - Run `npm run server:engine:smoke` against a real TiDB endpoint.
 - Confirm table DDL against TiDB SQL mode and MySQL compatibility mode.
 - Add deployment docs for TLS and connection parameters.
-- Add migration/version tracking for Engine tables.
+- Done: migration/version tracking for Engine tables —
+  `photon_engine_schema_migrations` records numbered, append-only migrations
+  in both the MySQL and SQLite adapters, and CI runs the MySQL storage
+  contract against a real MySQL service (`rust-mysql` job in
+  `.github/workflows/ci.yml`).
 
 ### 7. Observability
 

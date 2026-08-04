@@ -27,11 +27,18 @@ use photon_engine::{
 use serde::{Deserialize, Serialize};
 use sqlx::{sqlite::SqlitePoolOptions, SqlitePool};
 use tokio::sync::{broadcast, RwLock};
-use tower_http::cors::{Any, CorsLayer};
-use tracing::info;
+use tower_http::cors::{AllowOrigin, Any, CorsLayer};
+use tracing::{info, warn};
 use utoipa::{OpenApi, ToSchema};
 use utoipa_swagger_ui::SwaggerUi;
 use yrs::{updates::decoder::Decode, Doc, ReadTxn, StateVector, Transact, Update};
+
+mod auth;
+mod policy;
+
+use auth::bearer_token;
+pub use auth::{parse_workspace_scope, AuthConfig, AuthError, TokenGrant, WorkspaceScope};
+pub use policy::{AllowAllPolicy, EnginePolicy, OperationContext, PolicyVerdict};
 
 // ---------------------------------------------------------------------------
 // OpenAPI
@@ -126,8 +133,27 @@ fn engine_record_key_for_scope(
     RecordKey::new(scope, CollectionName::from(collection), record_id)
 }
 
-fn engine_yjs_snapshot_key(room_id: &str) -> RecordKey {
-    engine_record_key_for_scope(default_workspace_scope(), ENGINE_YJS_COLLECTION, room_id)
+fn engine_yjs_snapshot_key(scope: &ScopeId, room_id: &str) -> RecordKey {
+    engine_record_key_for_scope(scope.clone(), ENGINE_YJS_COLLECTION, room_id)
+}
+
+/// Which tenant a Live room belongs to, and which Engine scope its Yjs
+/// snapshots are stored under.
+///
+/// Rooms follow the `tenant:{tenant}:workspace:{workspace}:{surface}`
+/// convention (see the playground's `buildRoomId`). A room named that way is
+/// pinned to its tenant; anything else is treated as the default tenant, which
+/// a tenant-confined token is never granted.
+fn room_tenant_and_scope(room_id: &str) -> (String, ScopeId) {
+    let mut parts = room_id.splitn(5, ':');
+    if let (Some("tenant"), Some(tenant), Some("workspace"), Some(workspace)) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    {
+        if !tenant.is_empty() && !workspace.is_empty() {
+            return (tenant.to_owned(), workspace_scope(tenant, workspace));
+        }
+    }
+    (DEFAULT_TENANT_ID.to_owned(), default_workspace_scope())
 }
 
 // ---------------------------------------------------------------------------
@@ -148,6 +174,9 @@ pub struct AppState {
     pub engine: PhotonEngine<ServerEngineAdapter>,
     pub engine_next_seq: AtomicI64,
     pub rooms: RwLock<HashMap<String, Arc<RoomState>>>,
+    pub auth: AuthConfig,
+    /// Domain-level write authorization, consulted per pushed operation.
+    pub policy: Arc<dyn EnginePolicy>,
 }
 
 pub struct RoomState {
@@ -158,6 +187,10 @@ pub struct RoomState {
     pub presence_tx: broadcast::Sender<String>,
     pub active_connections: AtomicUsize,
     pub room_id: String,
+    /// Tenant this room is pinned to, derived from the room id convention.
+    pub tenant_id: String,
+    /// Engine scope its Yjs snapshots and updates are stored under.
+    pub engine_scope: ScopeId,
     pub next_seq: AtomicI64,
 }
 
@@ -448,6 +481,32 @@ pub async fn build_state(
     database_url: &str,
     engine_database_url: &str,
 ) -> Result<Arc<AppState>, Box<dyn std::error::Error>> {
+    let auth = AuthConfig::from_env()?;
+    build_state_with_auth(database_url, engine_database_url, auth).await
+}
+
+pub async fn build_state_with_auth(
+    database_url: &str,
+    engine_database_url: &str,
+    auth: AuthConfig,
+) -> Result<Arc<AppState>, Box<dyn std::error::Error>> {
+    build_state_with_auth_and_policy(
+        database_url,
+        engine_database_url,
+        auth,
+        Arc::new(AllowAllPolicy),
+    )
+    .await
+}
+
+/// [`build_state_with_auth`] plus a host-supplied [`EnginePolicy`] for
+/// domain-level write authorization.
+pub async fn build_state_with_auth_and_policy(
+    database_url: &str,
+    engine_database_url: &str,
+    auth: AuthConfig,
+    policy: Arc<dyn EnginePolicy>,
+) -> Result<Arc<AppState>, Box<dyn std::error::Error>> {
     let pool = SqlitePoolOptions::new()
         .max_connections(5)
         .connect(database_url)
@@ -458,17 +517,42 @@ pub async fn build_state(
     verify_engine_startup(&engine, engine_database_url).await?;
     let engine_next_seq = init_engine_next_sequence(&engine).await?;
 
+    if auth.is_enabled() {
+        info!("Photon auth boundary enabled: bearer tokens required");
+    } else {
+        warn!(
+            "Photon auth boundary DISABLED (PHOTON_AUTH_TOKENS is unset). \
+             Every caller can read and write every tenant. Local development only."
+        );
+    }
+
     Ok(Arc::new(AppState {
         db: pool,
         engine,
         engine_next_seq: AtomicI64::new(engine_next_seq),
         rooms: RwLock::new(HashMap::new()),
+        auth,
+        policy,
     }))
 }
 
+/// CORS from `PHOTON_CORS_ALLOWED_ORIGINS` (comma-separated exact origins).
+///
+/// Unset or `*` allows any origin — acceptable because authorization is
+/// carried by bearer tokens, never cookies, so a cross-origin request gains
+/// nothing without a token. Deployments that want the extra fence set the
+/// variable anyway.
 fn cors_layer() -> CorsLayer {
+    let origins = std::env::var("PHOTON_CORS_ALLOWED_ORIGINS").ok();
+    let allow_origin = match origins.as_deref().map(str::trim) {
+        None | Some("") | Some("*") => AllowOrigin::any(),
+        Some(list) => AllowOrigin::list(
+            list.split(',')
+                .filter_map(|origin| origin.trim().parse().ok()),
+        ),
+    };
     CorsLayer::new()
-        .allow_origin(Any)
+        .allow_origin(allow_origin)
         .allow_methods(Any)
         .allow_headers(Any)
 }
@@ -489,6 +573,70 @@ async fn health() -> Json<HealthResponse> {
     })
 }
 
+/// The shared entry check for every scoped Engine request: a trusted bearer
+/// token, a well-formed workspace scope, and a token grant that covers the
+/// scope's tenant. Returns the parsed scope so handlers can use the tenant.
+fn authorize_scoped_request(
+    state: &AppState,
+    headers: &HeaderMap,
+    scope: &ScopeId,
+) -> Result<(TokenGrant, WorkspaceScope), AppError> {
+    let grant = state.auth.authorize(bearer_token(headers))?;
+    let workspace = parse_workspace_scope(scope).ok_or_else(|| {
+        AppError::BadRequest(format!(
+            "scope must be tenant:{{tenant}}:workspace:{{workspace}}, got {scope:?}"
+        ))
+    })?;
+    if !grant.allows_tenant(&workspace.tenant_id) {
+        return Err(AppError::Forbidden(
+            "token is not granted access to this tenant",
+        ));
+    }
+    Ok((grant, workspace))
+}
+
+/// The key under which the server records audit metadata on an accepted
+/// operation. Stored inside `Operation::metadata`, so it is durable in the
+/// same row as the operation itself and travels with every pull.
+const AUDIT_METADATA_KEY: &str = "photon_audit";
+
+/// Stamp who was authorized to push this operation, and under which request.
+///
+/// `Operation::metadata` is the designed slot for out-of-band annotations: it
+/// does not participate in projection, so stamping it cannot change what any
+/// client renders. Existing metadata keys are preserved; a non-object
+/// metadata value is left untouched rather than destroyed.
+fn stamp_audit_metadata(
+    operation: &mut Operation,
+    grant: &TokenGrant,
+    request_id: &str,
+    received_at_ms: i64,
+) {
+    let audit = match grant {
+        TokenGrant::AllTenants => serde_json::json!({
+            "authorized": "service",
+            "request_id": request_id,
+            "received_at_ms": received_at_ms,
+        }),
+        TokenGrant::Tenant(tenant_id) => serde_json::json!({
+            "authorized": "tenant",
+            "tenant_id": tenant_id,
+            "request_id": request_id,
+            "received_at_ms": received_at_ms,
+        }),
+    };
+
+    match &mut operation.metadata {
+        serde_json::Value::Null => {
+            operation.metadata = serde_json::json!({ AUDIT_METADATA_KEY: audit });
+        }
+        serde_json::Value::Object(existing) => {
+            existing.insert(AUDIT_METADATA_KEY.to_owned(), audit);
+        }
+        _ => {}
+    }
+}
+
 async fn push_engine_operations(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -498,17 +646,63 @@ async fn push_engine_operations(
         .get("x-photon-request-id")
         .and_then(|value| value.to_str().ok())
         .unwrap_or("none");
+    let (grant, workspace) = authorize_scoped_request(&state, &headers, &payload.scope)?;
     let scope = payload.scope.clone();
     let operation_count = payload.operations.len();
     let mut decisions = Vec::with_capacity(payload.operations.len());
+    let mut accepted_count = 0usize;
+    let mut rejected_count = 0usize;
     let mut max_remote_sequence = 0;
 
-    for operation in payload.operations {
+    // An operation whose own key disagrees with the request scope is how a
+    // caller would smuggle a write into a workspace the scope check never saw.
+    // The batch is rejected whole: decisions are per-operation verdicts, not a
+    // way to accept half of an inconsistent request.
+    if let Some(operation) = payload
+        .operations
+        .iter()
+        .find(|operation| operation.key.scope != scope)
+    {
+        return Err(AppError::BadRequest(format!(
+            "operation {} is scoped to {:?} but the request is scoped to {:?}",
+            operation.id, operation.key.scope, scope
+        )));
+    }
+
+    for mut operation in payload.operations {
+        // The host's domain rules get the final say, one operation at a time.
+        // A rejection is a decision, not an error: the rest of the batch still
+        // lands, and the client rolls this one back by replay.
+        let verdict = state
+            .policy
+            .authorize_operation(OperationContext {
+                grant: &grant,
+                workspace: &workspace,
+                operation: &operation,
+            })
+            .await;
+        if let PolicyVerdict::Reject { reason } = verdict {
+            rejected_count += 1;
+            decisions.push(PushDecision::Rejected {
+                operation_id: operation.id,
+                reason,
+            });
+            continue;
+        }
+
+        stamp_audit_metadata(
+            &mut operation,
+            &grant,
+            request_id,
+            chrono::Utc::now().timestamp_millis(),
+        );
+
         let remote_sequence = state.engine_next_seq.fetch_add(1, Ordering::SeqCst) + 1;
         state
             .engine
             .apply_remote_operation(operation.clone(), remote_sequence)
             .await?;
+        accepted_count += 1;
         decisions.push(PushDecision::Accepted {
             operation_id: operation.id,
             remote_sequence,
@@ -530,16 +724,18 @@ async fn push_engine_operations(
         request_id,
         scope = %scope,
         operation_count,
-        accepted = decisions.len(),
+        accepted = accepted_count,
+        rejected = rejected_count,
         max_remote_sequence,
-        "Photon Engine push accepted operations",
+        "Photon Engine push processed operations",
     );
 
     // Wake up other clients' Engine sync loops right away instead of leaving
-    // them to their poll interval. Rooms are keyed by Live room id, not Engine
-    // scope, so every room is told; a pull that finds nothing new is cheap.
-    if !decisions.is_empty() {
-        broadcast_engine_changed(&state).await;
+    // them to their poll interval. Only rooms of the pushing tenant are told:
+    // a change-notification frame is cheap, but it still must not leak the
+    // fact that another tenant's data changed.
+    if accepted_count > 0 {
+        broadcast_engine_changed(&state, &workspace.tenant_id).await;
     }
 
     Ok(Json(PushResult {
@@ -552,8 +748,11 @@ async fn push_engine_operations(
 /// Text frame sent over Photon Live sockets when the Engine op-log advanced.
 const ENGINE_CHANGED_FRAME: &str = r#"{"type":"engine-changed"}"#;
 
-async fn broadcast_engine_changed(state: &AppState) {
+async fn broadcast_engine_changed(state: &AppState, tenant_id: &str) {
     for room in state.rooms.read().await.values() {
+        if room.tenant_id != tenant_id {
+            continue;
+        }
         // Send fails only when a room has no subscribers, which is fine.
         let _ = room.presence_tx.send(ENGINE_CHANGED_FRAME.to_string());
     }
@@ -568,6 +767,7 @@ async fn pull_engine_operations(
         .get("x-photon-request-id")
         .and_then(|value| value.to_str().ok())
         .unwrap_or("none");
+    authorize_scoped_request(&state, &headers, &payload.scope)?;
     let scope = payload.scope.clone();
     let after_remote_sequence = payload.cursor.as_ref().map(|cursor| cursor.position);
     // Bound the response. An unbounded pull loads the entire operation history
@@ -661,9 +861,16 @@ fn count_status(counts: &mut EngineOperationCounts, status: &OperationStatus) {
 )]
 async fn engine_debug_state(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Query(params): Query<ListParams>,
 ) -> Result<Json<EngineDebugState>, AppError> {
+    let grant = state.auth.authorize(bearer_token(&headers))?;
     let tenant_id = normalized_tenant_id(params.tenant_id);
+    if !grant.allows_tenant(&tenant_id) {
+        return Err(AppError::Forbidden(
+            "token is not granted access to this tenant",
+        ));
+    }
     let workspace_id = normalized_workspace_id(params.workspace_id);
     let scope = workspace_scope(&tenant_id, &workspace_id);
     let operations = state
@@ -750,15 +957,37 @@ async fn engine_debug_state(
 // ---------------------------------------------------------------------------
 
 async fn ws_handler(
-    ws: WebSocketUpgrade,
+    // `Option` so the authorization verdict comes first: an unauthenticated
+    // caller learns 401/403, never details about the upgrade handshake.
+    ws: Option<WebSocketUpgrade>,
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Query(params): Query<HashMap<String, String>>,
-) -> impl IntoResponse {
+) -> axum::response::Response {
+    // Browsers cannot set headers on a WebSocket handshake, so the token may
+    // also arrive as a query parameter.
+    let token = bearer_token(&headers)
+        .map(str::to_owned)
+        .or_else(|| params.get("token").cloned());
+    let grant = match state.auth.authorize(token.as_deref()) {
+        Ok(grant) => grant,
+        Err(error) => return AppError::from(error).into_response(),
+    };
+
     let room_id = params
         .get("room")
         .filter(|room| !room.trim().is_empty())
         .cloned()
         .unwrap_or_else(|| DEFAULT_ROOM_ID.to_string());
+    let (tenant_id, _) = room_tenant_and_scope(&room_id);
+    if !grant.allows_tenant(&tenant_id) {
+        return AppError::Forbidden("token is not granted access to this room's tenant")
+            .into_response();
+    }
+
+    let Some(ws) = ws else {
+        return StatusCode::UPGRADE_REQUIRED.into_response();
+    };
 
     ws.on_upgrade(move |socket| async move {
         match get_or_create_room(&state, &room_id).await {
@@ -768,6 +997,7 @@ async fn ws_handler(
             }
         }
     })
+    .into_response()
 }
 
 async fn get_or_create_room(
@@ -786,6 +1016,7 @@ async fn get_or_create_room(
     let (doc, max_seq) = hydrate_yjs_doc(&state.db, room_id).await?;
     let (broadcast_tx, _) = broadcast::channel::<Vec<u8>>(256);
     let (presence_tx, _) = broadcast::channel::<String>(256);
+    let (tenant_id, engine_scope) = room_tenant_and_scope(room_id);
     let room = Arc::new(RoomState {
         db: state.db.clone(),
         engine: state.engine.clone(),
@@ -794,6 +1025,8 @@ async fn get_or_create_room(
         presence_tx,
         active_connections: AtomicUsize::new(0),
         room_id: room_id.to_string(),
+        tenant_id,
+        engine_scope,
         next_seq: AtomicI64::new(max_seq),
     });
 
@@ -912,6 +1145,18 @@ enum AppError {
     Sqlx(sqlx::Error),
     Engine(photon_engine::EngineError),
     Serde(serde_json::Error),
+    Unauthorized(&'static str),
+    Forbidden(&'static str),
+    BadRequest(String),
+}
+
+impl From<AuthError> for AppError {
+    fn from(error: AuthError) -> Self {
+        match error {
+            AuthError::MissingToken => AppError::Unauthorized("missing bearer token"),
+            AuthError::InvalidToken => AppError::Unauthorized("invalid bearer token"),
+        }
+    }
 }
 
 impl From<sqlx::Error> for AppError {
@@ -937,16 +1182,28 @@ impl IntoResponse for AppError {
         let (status, message) = match self {
             AppError::Sqlx(e) => {
                 tracing::error!("Database error: {e}");
-                (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error")
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Internal server error".to_owned(),
+                )
             }
             AppError::Engine(e) => {
                 tracing::error!("Photon engine error: {e}");
-                (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error")
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Internal server error".to_owned(),
+                )
             }
             AppError::Serde(e) => {
                 tracing::error!("Serialization error: {e}");
-                (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error")
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Internal server error".to_owned(),
+                )
             }
+            AppError::Unauthorized(message) => (StatusCode::UNAUTHORIZED, message.to_owned()),
+            AppError::Forbidden(message) => (StatusCode::FORBIDDEN, message.to_owned()),
+            AppError::BadRequest(message) => (StatusCode::BAD_REQUEST, message),
         };
         (status, Json(serde_json::json!({ "error": message }))).into_response()
     }
@@ -1175,7 +1432,7 @@ async fn apply_and_persist_update(
         .storage()
         .append_snapshot_update(
             SnapshotUpdate::new(
-                engine_yjs_snapshot_key(&state.room_id),
+                engine_yjs_snapshot_key(&state.engine_scope, &state.room_id),
                 seq,
                 update_bytes.to_vec(),
                 ENGINE_YJS_UPDATE_FORMAT,
@@ -1256,7 +1513,7 @@ async fn compact_yjs_log(state: &Arc<RoomState>) -> Result<(), sqlx::Error> {
         .storage()
         .save_snapshot(
             Snapshot::new(
-                engine_yjs_snapshot_key(&state.room_id),
+                engine_yjs_snapshot_key(&state.engine_scope, &state.room_id),
                 boundary_seq,
                 snapshot_bytes,
                 ENGINE_YJS_SNAPSHOT_FORMAT,
@@ -1271,7 +1528,10 @@ async fn compact_yjs_log(state: &Arc<RoomState>) -> Result<(), sqlx::Error> {
     state
         .engine
         .storage()
-        .compact_snapshot_updates(&engine_yjs_snapshot_key(&state.room_id), boundary_seq)
+        .compact_snapshot_updates(
+            &engine_yjs_snapshot_key(&state.engine_scope, &state.room_id),
+            boundary_seq,
+        )
         .await
         .map_err(engine_error_to_sqlx)?;
 
@@ -1305,6 +1565,14 @@ mod tests {
     }
 
     async fn test_state() -> Arc<AppState> {
+        test_state_with_auth(AuthConfig::disabled()).await
+    }
+
+    async fn test_state_with_auth(auth: AuthConfig) -> Arc<AppState> {
+        test_state_with(auth, Arc::new(AllowAllPolicy)).await
+    }
+
+    async fn test_state_with(auth: AuthConfig, policy: Arc<dyn EnginePolicy>) -> Arc<AppState> {
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
             .connect("sqlite::memory:")
@@ -1320,12 +1588,20 @@ mod tests {
             engine,
             engine_next_seq: AtomicI64::new(engine_next_seq),
             rooms: RwLock::new(HashMap::new()),
+            auth,
+            policy,
         })
     }
 
     async fn engine_test_app() -> (Router, Arc<AppState>) {
         let state = test_state().await;
         (engine_routes().with_state(state.clone()), state)
+    }
+
+    /// Trusts `edge-token` for every tenant and `acme-token` for tenant
+    /// `acme` only.
+    async fn authed_test_state() -> Arc<AppState> {
+        test_state_with_auth(AuthConfig::from_spec("edge-token,acme-token@acme").unwrap()).await
     }
 
     async fn live_test_app() -> (Router, Arc<AppState>) {
@@ -1580,6 +1856,537 @@ mod tests {
         );
     }
 
+    // -----------------------------------------------------------------------
+    // Auth boundary tests
+    // -----------------------------------------------------------------------
+
+    fn push_body(scope: ScopeId, operation: Operation) -> String {
+        serde_json::to_string(&PushRequest {
+            scope,
+            operations: vec![operation],
+            cursor: None,
+        })
+        .unwrap()
+    }
+
+    fn json_post(uri: &str, token: Option<&str>, body: String) -> Request<Body> {
+        let mut builder = Request::builder()
+            .method("POST")
+            .uri(uri)
+            .header("content-type", "application/json");
+        if let Some(token) = token {
+            builder = builder.header("authorization", format!("Bearer {token}"));
+        }
+        builder.body(Body::from(body)).unwrap()
+    }
+
+    fn acme_push_body() -> String {
+        let scope = workspace_scope("acme", "roadmap");
+        push_body(
+            scope.clone(),
+            Operation::new(
+                engine_record_key_for_scope(scope, "issues", "issue-auth-1"),
+                ActorId::from("client-acme"),
+                OperationKind::Upsert {
+                    value: serde_json::json!({ "id": "issue-auth-1", "title": "Authorized" }),
+                },
+            ),
+        )
+    }
+
+    #[tokio::test]
+    async fn test_push_requires_a_trusted_bearer_token() {
+        let state = authed_test_state().await;
+        let app = engine_routes().with_state(state);
+
+        let missing = app
+            .clone()
+            .oneshot(json_post("/api/engine/push", None, acme_push_body()))
+            .await
+            .unwrap();
+        assert_eq!(missing.status(), StatusCode::UNAUTHORIZED);
+
+        let invalid = app
+            .clone()
+            .oneshot(json_post(
+                "/api/engine/push",
+                Some("wrong-token"),
+                acme_push_body(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(invalid.status(), StatusCode::UNAUTHORIZED);
+
+        let valid = app
+            .oneshot(json_post(
+                "/api/engine/push",
+                Some("acme-token"),
+                acme_push_body(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(valid.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_push_confines_a_tenant_token_to_its_tenant() {
+        let state = authed_test_state().await;
+        let app = engine_routes().with_state(state);
+
+        let globex_scope = workspace_scope("globex", "roadmap");
+        let globex_body = push_body(
+            globex_scope.clone(),
+            Operation::new(
+                engine_record_key_for_scope(globex_scope, "issues", "issue-globex-1"),
+                ActorId::from("client-globex"),
+                OperationKind::Upsert {
+                    value: serde_json::json!({ "id": "issue-globex-1" }),
+                },
+            ),
+        );
+
+        let cross_tenant = app
+            .clone()
+            .oneshot(json_post(
+                "/api/engine/push",
+                Some("acme-token"),
+                globex_body.clone(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(cross_tenant.status(), StatusCode::FORBIDDEN);
+
+        // The all-tenants service token may write anywhere.
+        let service = app
+            .oneshot(json_post(
+                "/api/engine/push",
+                Some("edge-token"),
+                globex_body,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(service.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_push_rejects_malformed_scopes() {
+        let state = authed_test_state().await;
+        let app = engine_routes().with_state(state);
+
+        let malformed_scope = ScopeId::from("workspace:acme:roadmap");
+        let body = push_body(
+            malformed_scope.clone(),
+            Operation::new(
+                engine_record_key_for_scope(malformed_scope, "issues", "issue-1"),
+                ActorId::from("client"),
+                OperationKind::Upsert {
+                    value: serde_json::json!({}),
+                },
+            ),
+        );
+
+        let resp = app
+            .oneshot(json_post("/api/engine/push", Some("edge-token"), body))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_push_rejects_an_operation_scoped_outside_the_request() {
+        let state = authed_test_state().await;
+        let app = engine_routes().with_state(state);
+
+        // Request says acme, but the operation's own key targets globex. This
+        // is the smuggling path the per-operation check exists to close.
+        let body = push_body(
+            workspace_scope("acme", "roadmap"),
+            Operation::new(
+                engine_record_key_for_scope(
+                    workspace_scope("globex", "roadmap"),
+                    "issues",
+                    "issue-smuggled",
+                ),
+                ActorId::from("client-acme"),
+                OperationKind::Upsert {
+                    value: serde_json::json!({ "id": "issue-smuggled" }),
+                },
+            ),
+        );
+
+        let resp = app
+            .oneshot(json_post("/api/engine/push", Some("acme-token"), body))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_pull_enforces_the_same_boundary_as_push() {
+        let state = authed_test_state().await;
+        let app = engine_routes().with_state(state);
+
+        let pull_body = |scope: ScopeId| {
+            serde_json::to_string(&PullRequest {
+                scope,
+                cursor: None,
+                limit: None,
+            })
+            .unwrap()
+        };
+
+        let missing = app
+            .clone()
+            .oneshot(json_post(
+                "/api/engine/pull",
+                None,
+                pull_body(workspace_scope("acme", "roadmap")),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(missing.status(), StatusCode::UNAUTHORIZED);
+
+        let cross_tenant = app
+            .clone()
+            .oneshot(json_post(
+                "/api/engine/pull",
+                Some("acme-token"),
+                pull_body(workspace_scope("globex", "roadmap")),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(cross_tenant.status(), StatusCode::FORBIDDEN);
+
+        let allowed = app
+            .oneshot(json_post(
+                "/api/engine/pull",
+                Some("acme-token"),
+                pull_body(workspace_scope("acme", "roadmap")),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(allowed.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_debug_endpoint_enforces_the_tenant_grant() {
+        let state = authed_test_state().await;
+        let app = engine_routes().with_state(state);
+
+        let request = |token: Option<&str>, uri: &str| {
+            let mut builder = Request::builder().uri(uri);
+            if let Some(token) = token {
+                builder = builder.header("authorization", format!("Bearer {token}"));
+            }
+            builder.body(Body::empty()).unwrap()
+        };
+
+        let missing = app
+            .clone()
+            .oneshot(request(None, "/api/engine/debug?tenant_id=acme"))
+            .await
+            .unwrap();
+        assert_eq!(missing.status(), StatusCode::UNAUTHORIZED);
+
+        let cross_tenant = app
+            .clone()
+            .oneshot(request(
+                Some("acme-token"),
+                "/api/engine/debug?tenant_id=globex",
+            ))
+            .await
+            .unwrap();
+        assert_eq!(cross_tenant.status(), StatusCode::FORBIDDEN);
+
+        // Without an explicit tenant the endpoint reports the default tenant,
+        // which a tenant-confined token is not granted either.
+        let default_tenant = app
+            .clone()
+            .oneshot(request(Some("acme-token"), "/api/engine/debug"))
+            .await
+            .unwrap();
+        assert_eq!(default_tenant.status(), StatusCode::FORBIDDEN);
+
+        let allowed = app
+            .oneshot(request(
+                Some("acme-token"),
+                "/api/engine/debug?tenant_id=acme",
+            ))
+            .await
+            .unwrap();
+        assert_eq!(allowed.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_ws_handshake_enforces_token_and_room_tenant() {
+        let state = authed_test_state().await;
+        let app = live_routes().with_state(state);
+
+        let ws_request = |uri: &str| {
+            Request::builder()
+                .uri(uri)
+                .header("connection", "upgrade")
+                .header("upgrade", "websocket")
+                .header("sec-websocket-version", "13")
+                .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+                .body(Body::empty())
+                .unwrap()
+        };
+
+        let missing = app.clone().oneshot(ws_request("/ws")).await.unwrap();
+        assert_eq!(missing.status(), StatusCode::UNAUTHORIZED);
+
+        // A tenant-confined token may not join a room pinned to another
+        // tenant, nor an unscoped room (which belongs to the default tenant).
+        let cross_tenant = app
+            .clone()
+            .oneshot(ws_request(
+                "/ws?token=acme-token&room=tenant:globex:workspace:roadmap:records",
+            ))
+            .await
+            .unwrap();
+        assert_eq!(cross_tenant.status(), StatusCode::FORBIDDEN);
+
+        let unscoped_room = app
+            .clone()
+            .oneshot(ws_request("/ws?token=acme-token&room=records"))
+            .await
+            .unwrap();
+        assert_eq!(unscoped_room.status(), StatusCode::FORBIDDEN);
+
+        // A synthetic `oneshot` request carries no hyper upgrade extension, so
+        // an *authorized* handshake ends at 426 here. The point of the
+        // assertion is that authorization passed: anything but 401/403.
+        let allowed = app
+            .oneshot(ws_request(
+                "/ws?token=acme-token&room=tenant:acme:workspace:roadmap:records",
+            ))
+            .await
+            .unwrap();
+        assert_eq!(allowed.status(), StatusCode::UPGRADE_REQUIRED);
+    }
+
+    #[tokio::test]
+    async fn test_broadcast_engine_changed_only_wakes_the_pushing_tenant() {
+        let state = test_state().await;
+        let acme_room = get_or_create_room(&state, "tenant:acme:workspace:roadmap:records")
+            .await
+            .unwrap();
+        let default_room = get_or_create_room(&state, "records").await.unwrap();
+
+        let mut acme_rx = acme_room.presence_tx.subscribe();
+        let mut default_rx = default_room.presence_tx.subscribe();
+
+        broadcast_engine_changed(&state, "acme").await;
+
+        assert_eq!(acme_rx.try_recv().unwrap(), ENGINE_CHANGED_FRAME);
+        assert!(
+            default_rx.try_recv().is_err(),
+            "a default-tenant room must not learn about another tenant's push"
+        );
+    }
+
+    #[test]
+    fn test_room_tenant_and_scope_follows_the_room_convention() {
+        let (tenant, scope) = room_tenant_and_scope("tenant:acme:workspace:roadmap:records");
+        assert_eq!(tenant, "acme");
+        assert_eq!(scope, workspace_scope("acme", "roadmap"));
+
+        let (tenant, scope) = room_tenant_and_scope("tenant:acme:workspace:roadmap:doc:42");
+        assert_eq!(tenant, "acme");
+        assert_eq!(scope, workspace_scope("acme", "roadmap"));
+
+        for unscoped in ["records", "default", "tenant:acme", "tenant::workspace:x"] {
+            let (tenant, scope) = room_tenant_and_scope(unscoped);
+            assert_eq!(tenant, DEFAULT_TENANT_ID, "room {unscoped:?}");
+            assert_eq!(scope, default_workspace_scope());
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Policy hook + audit metadata tests
+    // -----------------------------------------------------------------------
+
+    /// A host policy: `audit_events` is server-owned, nobody may write to it.
+    struct LockedCollectionsPolicy;
+
+    #[async_trait]
+    impl EnginePolicy for LockedCollectionsPolicy {
+        async fn authorize_operation(&self, ctx: OperationContext<'_>) -> PolicyVerdict {
+            if ctx.operation.key.collection.to_string() == "audit_events" {
+                PolicyVerdict::Reject {
+                    reason: "audit_events is server-owned".into(),
+                }
+            } else {
+                PolicyVerdict::Allow
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_policy_rejects_per_operation_and_accepts_the_rest() {
+        let state =
+            test_state_with(AuthConfig::disabled(), Arc::new(LockedCollectionsPolicy)).await;
+        let app = engine_routes().with_state(state);
+        let scope = default_workspace_scope();
+
+        let allowed = Operation::new(
+            engine_record_key("issues", "issue-policy-1"),
+            ActorId::from("client-a"),
+            OperationKind::Upsert {
+                value: serde_json::json!({ "id": "issue-policy-1" }),
+            },
+        );
+        let locked = Operation::new(
+            engine_record_key("audit_events", "event-1"),
+            ActorId::from("client-a"),
+            OperationKind::Upsert {
+                value: serde_json::json!({ "id": "event-1" }),
+            },
+        );
+
+        let resp = app
+            .clone()
+            .oneshot(json_post(
+                "/api/engine/push",
+                None,
+                serde_json::to_string(&PushRequest {
+                    scope: scope.clone(),
+                    operations: vec![allowed.clone(), locked.clone()],
+                    cursor: None,
+                })
+                .unwrap(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let pushed: PushResult = serde_json::from_slice(&body).unwrap();
+        assert_eq!(pushed.decisions.len(), 2);
+        assert!(matches!(
+            &pushed.decisions[0],
+            PushDecision::Accepted { operation_id, .. } if *operation_id == allowed.id
+        ));
+        match &pushed.decisions[1] {
+            PushDecision::Rejected {
+                operation_id,
+                reason,
+            } => {
+                assert_eq!(*operation_id, locked.id);
+                assert!(reason.contains("server-owned"));
+            }
+            other => panic!("expected a rejection, got {other:?}"),
+        }
+
+        // The rejected operation never reached the log.
+        let pull_resp = app
+            .oneshot(json_post(
+                "/api/engine/pull",
+                None,
+                serde_json::to_string(&PullRequest {
+                    scope,
+                    cursor: None,
+                    limit: None,
+                })
+                .unwrap(),
+            ))
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(pull_resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let pulled: PullResult = serde_json::from_slice(&body).unwrap();
+        assert_eq!(pulled.operations.len(), 1);
+        assert_eq!(pulled.operations[0].operation.id, allowed.id);
+    }
+
+    #[tokio::test]
+    async fn test_accepted_operations_carry_audit_metadata() {
+        let state = authed_test_state().await;
+        let app = engine_routes().with_state(state);
+        let scope = workspace_scope("acme", "roadmap");
+
+        let operation = Operation::new(
+            engine_record_key_for_scope(scope.clone(), "issues", "issue-audit-1"),
+            ActorId::from("client-acme"),
+            OperationKind::Upsert {
+                value: serde_json::json!({ "id": "issue-audit-1" }),
+            },
+        );
+
+        let push = Request::builder()
+            .method("POST")
+            .uri("/api/engine/push")
+            .header("content-type", "application/json")
+            .header("authorization", "Bearer acme-token")
+            .header("x-photon-request-id", "req-audit-123")
+            .body(Body::from(
+                serde_json::to_string(&PushRequest {
+                    scope: scope.clone(),
+                    operations: vec![operation.clone()],
+                    cursor: None,
+                })
+                .unwrap(),
+            ))
+            .unwrap();
+        assert_eq!(
+            app.clone().oneshot(push).await.unwrap().status(),
+            StatusCode::OK
+        );
+
+        let pull_resp = app
+            .oneshot(json_post(
+                "/api/engine/pull",
+                Some("acme-token"),
+                serde_json::to_string(&PullRequest {
+                    scope,
+                    cursor: None,
+                    limit: None,
+                })
+                .unwrap(),
+            ))
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(pull_resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let pulled: PullResult = serde_json::from_slice(&body).unwrap();
+        assert_eq!(pulled.operations.len(), 1);
+
+        let audit = &pulled.operations[0].operation.metadata[AUDIT_METADATA_KEY];
+        assert_eq!(audit["authorized"], "tenant");
+        assert_eq!(audit["tenant_id"], "acme");
+        assert_eq!(audit["request_id"], "req-audit-123");
+        assert!(audit["received_at_ms"].as_i64().unwrap() > 0);
+    }
+
+    #[test]
+    fn test_audit_stamp_preserves_existing_metadata() {
+        let mut operation = Operation::new(
+            engine_record_key("issues", "issue-meta-1"),
+            ActorId::from("client-a"),
+            OperationKind::Upsert {
+                value: serde_json::json!({}),
+            },
+        );
+        operation.metadata = serde_json::json!({ "client_tag": "keep-me" });
+        stamp_audit_metadata(&mut operation, &TokenGrant::AllTenants, "req-1", 42);
+        assert_eq!(operation.metadata["client_tag"], "keep-me");
+        assert_eq!(
+            operation.metadata[AUDIT_METADATA_KEY]["authorized"],
+            "service"
+        );
+        assert_eq!(operation.metadata[AUDIT_METADATA_KEY]["received_at_ms"], 42);
+
+        // A non-object metadata value belongs to the client; never destroy it.
+        let mut odd = operation.clone();
+        odd.metadata = serde_json::json!("opaque-client-string");
+        stamp_audit_metadata(&mut odd, &TokenGrant::AllTenants, "req-2", 43);
+        assert_eq!(odd.metadata, serde_json::json!("opaque-client-string"));
+    }
+
     #[test]
     fn test_engine_database_url_normalization_keeps_mysql_driver_compatible() {
         assert_eq!(
@@ -1614,6 +2421,7 @@ mod tests {
     fn make_test_state(pool: SqlitePool) -> Arc<RoomState> {
         let (broadcast_tx, _) = broadcast::channel::<Vec<u8>>(256);
         let (presence_tx, _) = broadcast::channel::<String>(256);
+        let (tenant_id, engine_scope) = room_tenant_and_scope(DEFAULT_ROOM_ID);
         Arc::new(RoomState {
             db: pool.clone(),
             engine: PhotonEngine::new(ServerEngineAdapter::Sqlite(SqliteAdapter::from_pool(pool))),
@@ -1622,6 +2430,8 @@ mod tests {
             presence_tx,
             active_connections: AtomicUsize::new(0),
             room_id: DEFAULT_ROOM_ID.to_string(),
+            tenant_id,
+            engine_scope,
             next_seq: AtomicI64::new(0),
         })
     }
@@ -1669,7 +2479,10 @@ mod tests {
         let engine_updates = state
             .engine
             .storage()
-            .list_snapshot_updates(&engine_yjs_snapshot_key(DEFAULT_ROOM_ID), 0)
+            .list_snapshot_updates(
+                &engine_yjs_snapshot_key(&default_workspace_scope(), DEFAULT_ROOM_ID),
+                0,
+            )
             .await
             .unwrap();
         assert_eq!(engine_updates.len(), 1);
@@ -1729,7 +2542,10 @@ mod tests {
         let engine_updates = state
             .engine
             .storage()
-            .list_snapshot_updates(&engine_yjs_snapshot_key(DEFAULT_ROOM_ID), 0)
+            .list_snapshot_updates(
+                &engine_yjs_snapshot_key(&default_workspace_scope(), DEFAULT_ROOM_ID),
+                0,
+            )
             .await
             .unwrap();
         assert!(engine_updates.is_empty());
@@ -1765,7 +2581,10 @@ mod tests {
         let engine_snapshot = state
             .engine
             .storage()
-            .get_snapshot(&engine_yjs_snapshot_key(DEFAULT_ROOM_ID))
+            .get_snapshot(&engine_yjs_snapshot_key(
+                &default_workspace_scope(),
+                DEFAULT_ROOM_ID,
+            ))
             .await
             .unwrap()
             .unwrap();
@@ -1775,7 +2594,10 @@ mod tests {
         let engine_updates = state
             .engine
             .storage()
-            .list_snapshot_updates(&engine_yjs_snapshot_key(DEFAULT_ROOM_ID), 0)
+            .list_snapshot_updates(
+                &engine_yjs_snapshot_key(&default_workspace_scope(), DEFAULT_ROOM_ID),
+                0,
+            )
             .await
             .unwrap();
         assert!(engine_updates

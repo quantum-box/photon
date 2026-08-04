@@ -166,6 +166,39 @@ jobs:
           cargo test -p photon-engine \
             --no-default-features --features "memory,${{ matrix.features }}"
 
+  rust-mysql:
+    name: MySQL storage contract
+    runs-on: ubuntu-latest
+    # The production storage path. Without a real MySQL in CI the adapter's
+    # contract test silently skips and mysql.rs ships unexecuted.
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: photon-ci
+          MYSQL_DATABASE: photon_engine_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -pphoton-ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: MySQL storage contract tests
+        env:
+          PHOTON_ENGINE_MYSQL_TEST_DATABASE_URL: mysql://root:photon-ci@127.0.0.1:3306/photon_engine_test
+        run: |
+          cargo test -p photon-engine --no-default-features \
+            --features memory,mysql --test storage_contract
+
   wasm:
     name: Photon Engine WASM
     runs-on: ubuntu-latest

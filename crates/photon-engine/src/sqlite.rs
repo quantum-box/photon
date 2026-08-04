@@ -35,7 +35,60 @@ impl SqliteAdapter {
         &self.pool
     }
 
+    /// Apply every schema migration this build knows about, in order,
+    /// recording each in `photon_engine_schema_migrations`. Statements are
+    /// individually idempotent so an interrupted run is repaired by calling
+    /// `migrate()` again.
     pub async fn migrate(&self) -> Result<()> {
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS photon_engine_schema_migrations (
+                version INTEGER NOT NULL PRIMARY KEY,
+                name TEXT NOT NULL,
+                applied_at_ms INTEGER NOT NULL
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        let current = self.schema_version().await?;
+        for (version, name) in SCHEMA_MIGRATIONS {
+            if *version <= current {
+                continue;
+            }
+            self.apply_migration(*version).await?;
+            sqlx::query(
+                "INSERT INTO photon_engine_schema_migrations (version, name, applied_at_ms) VALUES (?, ?, ?)",
+            )
+            .bind(version)
+            .bind(name)
+            .bind(unix_time_ms())
+            .execute(&self.pool)
+            .await?;
+        }
+        Ok(())
+    }
+
+    /// Highest applied schema migration version, 0 when none have run.
+    pub async fn schema_version(&self) -> Result<i64> {
+        let version: Option<i64> =
+            sqlx::query_scalar("SELECT MAX(version) FROM photon_engine_schema_migrations")
+                .fetch_one(&self.pool)
+                .await?;
+        Ok(version.unwrap_or(0))
+    }
+
+    async fn apply_migration(&self, version: i64) -> Result<()> {
+        match version {
+            1 => self.migrate_v1_initial_schema().await,
+            unknown => Err(EngineError::Storage(format!(
+                "unknown photon-engine schema migration version {unknown}"
+            ))),
+        }
+    }
+
+    async fn migrate_v1_initial_schema(&self) -> Result<()> {
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS photon_engine_operations (
@@ -154,6 +207,10 @@ impl SqliteAdapter {
         Ok(())
     }
 }
+
+/// Every schema version this build knows how to reach, in order. Append-only:
+/// a released migration is never edited, schema changes get a new entry.
+const SCHEMA_MIGRATIONS: &[(i64, &str)] = &[(1, "initial engine schema")];
 
 #[async_trait]
 impl StorageAdapter for SqliteAdapter {

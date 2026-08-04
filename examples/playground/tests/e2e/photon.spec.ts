@@ -398,6 +398,114 @@ test.describe('Photon shell', () => {
     await secondPage.close()
   })
 
+  test('keeps an offline Engine record across a reload and converges after reconnect', async ({
+    page,
+    context,
+    browser,
+  }) => {
+    const title = `E2E offline engine record ${Date.now()}`
+
+    await page.goto('/databases')
+    await expect(page.getByText(/\d+ records/)).toBeVisible()
+
+    // Sever only the Engine sync path. The app itself stays reachable, so the
+    // reload below exercises PGlite durability, not the HTTP cache.
+    await context.route('**/api/engine/**', (route) => route.abort())
+
+    await page.getByTestId('open-create-record').click()
+    await page.getByLabel(/Record title/i).fill(title)
+    await page.getByLabel('Description').fill('Written while the Engine server was unreachable')
+    await page.getByTestId('create-record-submit').click()
+    await expect(page.getByTestId('create-record-modal')).toBeHidden()
+
+    // The optimistic write is on screen immediately.
+    await page.getByPlaceholder('Filter records...').fill(title)
+    await expect(page.getByText(title).first()).toBeVisible()
+
+    // Reload while the server is still unreachable: the record must come back
+    // from the durable local operation log.
+    await page.reload()
+    await page.getByPlaceholder('Filter records...').fill(title)
+    await expect(page.getByText(title).first()).toBeVisible({ timeout: 15_000 })
+
+    // Reconnect. Re-bootstrapping re-registers the pending operation and the
+    // startup sync pushes it to the server.
+    await context.unroute('**/api/engine/**')
+    await page.reload()
+    await page.getByPlaceholder('Filter records...').fill(title)
+    await expect(page.getByText(title).first()).toBeVisible({ timeout: 15_000 })
+
+    // A separate browser profile has no shared local storage, so seeing the
+    // record there proves the offline write converged through the server.
+    const secondContext = await browser.newContext()
+    const secondPage = await secondContext.newPage()
+    await expect(async () => {
+      await secondPage.goto('/databases')
+      await secondPage.getByPlaceholder('Filter records...').fill(title)
+      await expect(secondPage.getByText(title).first()).toBeVisible({ timeout: 15_000 })
+    }).toPass({ timeout: 60_000 })
+
+    await secondContext.close()
+  })
+
+  test('converges records written by two disconnected writers', async ({ browser }) => {
+    const stamp = Date.now()
+    const titleA = `E2E writer-a record ${stamp}`
+    const titleB = `E2E writer-b record ${stamp}`
+
+    // Two independent browser profiles: separate PGlite databases, separate
+    // actors, one shared server.
+    const contextA = await browser.newContext()
+    const contextB = await browser.newContext()
+    const pageA = await contextA.newPage()
+    const pageB = await contextB.newPage()
+
+    // Warm both clients while online so each has bootstrapped its storage.
+    await pageA.goto('/databases')
+    await expect(pageA.getByText(/\d+ records/)).toBeVisible()
+    await pageB.goto('/databases')
+    await expect(pageB.getByText(/\d+ records/)).toBeVisible()
+
+    // Both writers lose the Engine server, then write concurrently.
+    await contextA.route('**/api/engine/**', (route) => route.abort())
+    await contextB.route('**/api/engine/**', (route) => route.abort())
+
+    for (const [page, title] of [
+      [pageA, titleA],
+      [pageB, titleB],
+    ] as const) {
+      await page.getByTestId('open-create-record').click()
+      await page.getByLabel(/Record title/i).fill(title)
+      await page.getByLabel('Description').fill('Written while disconnected from the Engine server')
+      await page.getByTestId('create-record-submit').click()
+      await expect(page.getByTestId('create-record-modal')).toBeHidden()
+      await page.getByPlaceholder('Filter records...').fill(title)
+      await expect(page.getByText(title).first()).toBeVisible()
+    }
+
+    // Reconnect both. Reloading re-bootstraps each client, which re-registers
+    // its pending operation and pushes it on the startup sync.
+    await contextA.unroute('**/api/engine/**')
+    await contextB.unroute('**/api/engine/**')
+
+    // Each writer must end up seeing the *other* writer's offline record:
+    // that round trip is what proves both pushes landed and both pulls
+    // converged, with neither write lost.
+    for (const [page, otherTitle] of [
+      [pageA, titleB],
+      [pageB, titleA],
+    ] as const) {
+      await expect(async () => {
+        await page.reload()
+        await page.getByPlaceholder('Filter records...').fill(otherTitle)
+        await expect(page.getByText(otherTitle).first()).toBeVisible({ timeout: 15_000 })
+      }).toPass({ timeout: 60_000 })
+    }
+
+    await contextA.close()
+    await contextB.close()
+  })
+
   test('sends a chat prompt and streams an assistant response', async ({ page }) => {
     await page.goto('/chat')
 
