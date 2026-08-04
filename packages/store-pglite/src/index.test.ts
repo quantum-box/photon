@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { PGlite } from '@electric-sql/pglite'
 
 import { createPGliteStore, PGliteStoreLockedError } from './index.js'
@@ -37,17 +37,17 @@ function fakeClient(): PGlite {
   return { close: async () => {} } as unknown as PGlite
 }
 
-const globals = globalThis as { navigator?: unknown }
-const originalNavigator = globals.navigator
-
+// Node exposes `globalThis.navigator` as a getter-only property, so plain
+// assignment throws there; `vi.stubGlobal` redefines it properly and
+// `unstubAllGlobals` restores the original.
 afterEach(() => {
-  globals.navigator = originalNavigator
+  vi.unstubAllGlobals()
 })
 
 describe('exclusiveLock', () => {
   it('makes a second holder of the same dataDir fail loudly', async () => {
     const manager = fakeLockManager()
-    globals.navigator = { locks: manager.locks }
+    vi.stubGlobal('navigator', { locks: manager.locks })
 
     const first = await createPGliteStore({
       dataDir: 'idb://photon-test',
@@ -75,7 +75,7 @@ describe('exclusiveLock', () => {
 
   it('releases the lock on close so the next holder can open', async () => {
     const manager = fakeLockManager()
-    globals.navigator = { locks: manager.locks }
+    vi.stubGlobal('navigator', { locks: manager.locks })
 
     const first = await createPGliteStore({
       dataDir: 'idb://photon-test',
@@ -96,7 +96,7 @@ describe('exclusiveLock', () => {
   })
 
   it('degrades to the in-process guard when Web Locks are unavailable', async () => {
-    globals.navigator = undefined
+    vi.stubGlobal('navigator', undefined)
 
     const store = await createPGliteStore({
       dataDir: 'idb://photon-test',
@@ -108,7 +108,7 @@ describe('exclusiveLock', () => {
 
   it('does not touch Web Locks unless asked to', async () => {
     const manager = fakeLockManager()
-    globals.navigator = { locks: manager.locks }
+    vi.stubGlobal('navigator', { locks: manager.locks })
 
     const store = await createPGliteStore({
       dataDir: 'idb://photon-test',

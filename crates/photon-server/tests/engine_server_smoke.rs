@@ -94,7 +94,8 @@ fn remove_sqlite_files(path: &PathBuf) {
 #[tokio::test]
 async fn photon_engine_server_accepts_push_and_returns_pull() {
     let server = EngineServer::spawn().await;
-    let scope = ScopeId::from("workspace:server-smoke");
+    // The server's auth boundary only accepts the canonical scope shape.
+    let scope = ScopeId::from("tenant:photon:workspace:server-smoke");
     let operation = Operation::new(
         RecordKey::new(scope.as_str(), "smoke_records", "record-1"),
         ActorId::from("engine-smoke-client"),
