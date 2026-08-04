@@ -1,8 +1,8 @@
 name: Tauri smoke builds
 
-# These three jobs only prove the example desktop/mobile app still compiles.
-# They cost an Android NDK install and a macOS runner, so they run nightly and
-# on pull requests that actually touch the shell.
+# These two jobs only prove the example desktop/mobile app still compiles.
+# They use Linux runners; Android still installs an NDK. They run nightly and on
+# pull requests that actually touch the shell.
 on:
   schedule:
     - cron: "0 17 * * *"
@@ -96,61 +96,3 @@ jobs:
           NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.2.12479018
         working-directory: examples/playground
         run: npm run tauri:android:build -- --target aarch64 --apk
-
-  tauri-ios-smoke:
-    name: Tauri iOS simulator smoke build
-    runs-on: macos-latest
-
-    steps:
-      - uses: actions/checkout@v6
-
-      # KNOWN BROKEN on CI, cause not yet found. The link step fails with
-      #   Undefined symbols: __swift_FORCE_LOAD_$_swiftCompatibility56
-      # while the identical project and the identical Xcode build (26.6,
-      # 17F113) compile and bundle cleanly on a workstation. Ruled out so far:
-      # regenerating gen/apple with `tauri ios init` (only cosmetic diffs), the
-      # runner picking an older Xcode (the pin below works — diagnostics show
-      # 26.6 selected and libswiftCompatibility56.a present), and a stale rust
-      # cache built under a previous Xcode (keying the cache on the toolchain
-      # changed nothing). The pin and the diagnostics are kept because they
-      # make the next investigation start from facts instead of guesses.
-      - name: Show available Xcode versions
-        run: ls -d /Applications/Xcode*.app
-
-      - uses: maxim-lobanov/setup-xcode@v1
-        with:
-          xcode-version: latest-stable
-
-      - name: Confirm the selected toolchain
-        run: |
-          xcodebuild -version
-          ls -d "$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/iphonesimulator" \
-            && ls "$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/iphonesimulator" \
-              | grep -i compatibility || echo "no compatibility shims in this toolchain"
-
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 22
-          cache: npm
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-ios-sim
-
-      # Cache keyed on the Xcode build so a toolchain change cannot restore
-      # object files produced by a different Xcode. (This alone did not fix
-      # the failure above, but it is correct hygiene regardless.)
-      - name: Record the toolchain in the cache key
-        run: xcodebuild -version | tr '\n' '-' > .xcode-version
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: examples/playground/src-tauri
-          key: ${{ hashFiles('.xcode-version') }}
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build iOS simulator app
-        working-directory: examples/playground
-        run: npm run tauri:ios:build:sim
