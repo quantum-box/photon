@@ -39,6 +39,20 @@ export interface PushResult {
   readonly decisions: readonly PushDecision[]
 }
 
+/**
+ * The remote answered, but its payload cannot be reconciled safely.
+ *
+ * This is deliberately distinct from a network failure: retrying is safe
+ * because no local operation status is changed until the complete decision
+ * set has passed validation.
+ */
+export class SyncProtocolError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'SyncProtocolError'
+  }
+}
+
 export interface PullRequest {
   readonly scope: Scope
   readonly cursor: number | null

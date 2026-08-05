@@ -120,10 +120,16 @@ statements are individually idempotent, so an interrupted MySQL/TiDB migration
 again. Treat that adapter as the storage implementation behind cloud-server
 business logic. Incoming Engine operations pass the service auth boundary
 (`PHOTON_AUTH_TOKENS`: bearer token, strict scope shape, tenant grant), are
-evaluated per operation against the host-supplied `EnginePolicy`
+evaluated as a complete push batch against the host-supplied `EnginePolicy`
 (`build_state_with_auth_and_policy`; the default allows what the token grant
-allows), and each accepted operation is stamped with `metadata.photon_audit`
-(principal kind, tenant, request id, receive time) before entering the log.
+allows). A policy can override the batch hook to avoid per-operation network
+lookups; policy infrastructure failures return 503 and persist no decisions.
+Each accepted operation is stamped with typed `metadata.photon_audit`
+(principal type, service grant, tenant, workspace, server request id, receive
+time) before entering the log. Client metadata must be an object or null, so an
+operation can never be accepted without its server-owned audit stamp.
+When user identity is connected, store only the verified stable opaque user id;
+never stamp a token, email address, display name, or other profile data.
 Domain rules — per-user permissions, collection rules, schema validation,
 conflict policy — belong in the host's `EnginePolicy` implementation. App-domain SQLite migrations under
 `crates/photon-axum/migrations/` are still for the local compatibility app
@@ -161,7 +167,7 @@ Use these roles in production:
 
 | Role | Binary | Endpoints | Storage |
 | --- | --- | --- | --- |
-| Edge | Worker, ingress, or lightweight Rust edge role | public TLS, rate limit, auth/session check, optional `/ws`, Engine proxy | no durable truth |
+| Edge | Worker, ingress, or lightweight Rust edge role | public TLS, rate limit, auth/session check, Engine proxy; `/ws` only after principal-aware authentication | no durable truth |
 | Engine | `photon-engine-server` on cloud server | `/api/health`, `/api/engine/push`, `/api/engine/pull`, REST APIs | cloud business logic, then `PHOTON_ENGINE_DATABASE_URL`, TiDB/MySQL preferred |
 | Live | `photon-live-server` or edge-hosted Live room | `/ws` | `PHOTON_LIVE_DATABASE_URL` for room state; optional `PHOTON_LIVE_ENGINE_DATABASE_URL` |
 | Test/mock | `mock-tachyon-api` | `/v1/sync/push`, `/v1/sync/pull`, admin scenario routes | SQLite only, local scenario verification |

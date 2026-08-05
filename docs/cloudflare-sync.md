@@ -1,8 +1,9 @@
 # Cloudflare Sync Backend
 
 Photon can run its current Rust sync server for local, on-premise, and Cloud Run
-style deployments, or use a Cloudflare Workers + Durable Objects relay for
-`/ws`.
+style deployments. The Cloudflare Workers + Durable Objects relay code is kept
+for the future authenticated Live deployment, but its public `/ws` route is
+fail-closed with HTTP 403 until user-session verification is wired in.
 
 The Worker is modeled as a frontend-side component rather than as Photon's
 canonical application server. It is the edge companion for frontend runtime
@@ -13,10 +14,10 @@ Workers runtime beside the frontend assets.
 
 ## Runtime Model
 
-- Frontend keeps the same WebSocket contract: `/ws` receives Yjs binary updates
-  and text presence messages.
+- The future authenticated frontend route keeps the same WebSocket contract:
+  `/ws` receives Yjs binary updates and text presence messages.
 - Rust backend remains the default local backend.
-- Cloudflare backend routes `/ws` to a Durable Object room.
+- Cloudflare backend rejects public `/ws` access until its user auth boundary exists.
 - Each Durable Object stores a bounded Yjs update log and replays it to newly
   connected clients.
 - Presence is computed from the Durable Object WebSocket set and sent as:
@@ -28,12 +29,16 @@ Workers runtime beside the frontend assets.
 The Cloudflare backend intentionally starts as a relay. It does not interpret
 Yjs updates or compact them into a canonical Y.Doc snapshot yet.
 
+Engine proxy requests must carry caller authorization. The Worker never falls
+back to an edge service credential for an anonymous request; workload identity
+will be added as a separate edge-to-engine credential in the identity phase.
+
 The relay is not Photon's canonical application server. The responsibility
 boundary between the frontend Yjs relay, application server, and durable domain
 stores is recorded in
 [`ADR-0001: Sync Responsibility Boundaries`](./architecture/decisions/ADR-0001-sync-responsibility-boundaries.md).
 
-## Local Cloudflare Sync
+## Local Cloudflare Security Check
 
 Start the Durable Object worker:
 
@@ -41,29 +46,28 @@ Start the Durable Object worker:
 npm run worker:dev
 ```
 
-In another shell, start the frontend pointed at the worker:
+In another shell, start the frontend with Engine traffic pointed at the Worker
+and Live traffic pointed at the authenticated local Rust server:
 
 ```bash
 npm run dev:cf-sync -- --host 127.0.0.1
 ```
 
-Open two browser tabs at `http://127.0.0.1:5173/databases`.
-
-Expected behavior:
-
-- Sidebar shows `2 online`.
-- Creating or editing a record in one tab appears in the other tab.
-- Refreshing a tab replays stored updates from the Durable Object room.
+Verify that an unauthenticated WebSocket upgrade to `/ws` receives HTTP 403.
+For local Live behavior, use the Rust `/ws` server and its bearer-token boundary.
 
 ## Deploy
 
-Deploy the worker:
+Do not deploy the Durable Object relay as a public Live endpoint until its
+principal-aware authentication boundary has been implemented and tested.
+
+After that boundary exists, deploy the worker:
 
 ```bash
 npm run worker:deploy
 ```
 
-Build the frontend with the deployed worker URL:
+Build the frontend with the authenticated worker URL:
 
 ```bash
 VITE_PHOTON_SYNC_WS_URL=wss://<worker-host>/ws npm run build

@@ -13,6 +13,9 @@ pub enum EngineError {
     #[error("operation status is invalid: {0}")]
     InvalidOperationStatus(String),
 
+    #[error("sync protocol response is invalid: {0}")]
+    SyncProtocol(String),
+
     #[error("serialization failed: {0}")]
     Serialization(#[from] serde_json::Error),
 

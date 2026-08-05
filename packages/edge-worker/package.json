@@ -3,17 +3,19 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Cloudflare Worker: Photon Engine push/pull proxy and Live Durable Object relay",
+  "description": "Cloudflare Worker: authenticated Photon Engine proxy with a fail-closed Live relay",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "type-check": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
     "dev": "wrangler dev --config wrangler.jsonc --port 8787",
     "deploy": "wrangler deploy --config wrangler.jsonc"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260505.1",
+    "vitest": "^4.1.2",
     "wrangler": "^4.87.0"
   }
 }

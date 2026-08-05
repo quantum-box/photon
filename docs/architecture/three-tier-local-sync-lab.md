@@ -137,7 +137,7 @@ Expected result:
 `remoteSequence` may be higher when the database already contains accepted
 operations.
 
-### 3. Start Edge Worker For Live And Engine Proxy
+### 3. Start Edge Worker For Engine Proxy And Live Security Check
 
 ```bash
 npm run worker:dev
@@ -155,7 +155,7 @@ from `wrangler.jsonc` by default.
 ### 4. Start Client Against The Edge
 
 ```bash
-VITE_PHOTON_SYNC_WS_URL=ws://127.0.0.1:8787/ws \
+VITE_PHOTON_SYNC_WS_URL=ws://127.0.0.1:3001/ws \
 VITE_PHOTON_API_BASE_URL=http://127.0.0.1:8787 \
   npm run dev -- --host 127.0.0.1
 ```
@@ -166,8 +166,10 @@ or:
 mise run sync:web
 ```
 
-This keeps Live traffic and Engine sync traffic on the same edge Worker. The
-Worker forwards Engine traffic to the cloud Engine authority.
+The Worker forwards authenticated Engine traffic to the cloud Engine authority.
+Its public Live `/ws` route intentionally returns HTTP 403 until user-session
+verification is implemented. Point local Live traffic at the authenticated Rust
+server instead; do not use the Worker as a Live relay in this lab.
 
 ### 5. Open The Sync Dashboard
 
@@ -253,7 +255,7 @@ between parsed Engine operations and storage writes.
 | Cloud Engine push/pull smoke | supported | supported |
 | Client direct Engine push | supported | optional |
 | Client Engine push through edge | supported | required |
-| Live WebSocket on edge Worker | supported | supported |
+| Live WebSocket on edge Worker | fail-closed (HTTP 403) | authenticated users only |
 | Edge request ID propagation | supported | required |
 | Edge auth/session check | not yet | required |
 | Cloud business validation boundary | partial | required |
@@ -261,7 +263,7 @@ between parsed Engine operations and storage writes.
 
 ## Suggested Implementation Tasks
 
-1. Add Worker tests for pass-through proxy behavior.
+1. Add Worker tests for authenticated pass-through proxy behavior.
 2. Add cloud server request ID logging for push/pull.
 3. Add a domain validation boundary in `crates/photon-axum`.
 4. Add client pull apply and cursor persistence.
@@ -279,6 +281,6 @@ The local three-tier lab is credible when:
 - Edge forwards to cloud without changing operation JSON.
 - Cloud accepts the operation and writes to MySQL.
 - Client can pull from `http://127.0.0.1:8787/api/engine/pull`.
-- Live `/ws` still works through the same edge Worker.
+- An unauthenticated Live `/ws` upgrade on the edge Worker receives HTTP 403.
 - Stopping the edge does not corrupt cloud Engine state.
 - Restarting cloud Engine preserves accepted operations from MySQL.
