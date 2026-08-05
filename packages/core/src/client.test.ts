@@ -182,6 +182,9 @@ function memoryStore(): LocalStore & { writes: StoreWrite[] } {
         })
       }
       for (const record of write.records ?? []) records.set(index(record.key), record)
+      for (const target of write.deleteRecords ?? []) {
+        records.delete(`${target.scope}/${target.collection}/${target.recordId}`)
+      }
       for (const update of write.statusUpdates ?? []) {
         const existing = operations.get(update.operationId)
         if (existing) operations.set(update.operationId, { ...existing, status: update.status })

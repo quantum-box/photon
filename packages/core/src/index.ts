@@ -63,6 +63,7 @@ export type {
   SyncSummary,
   SyncTransport,
 } from './sync/types.js'
+export { SyncProtocolError } from './sync/types.js'
 
 export type {
   AckResult,

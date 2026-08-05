@@ -14,7 +14,7 @@ import { createPhotonClient, type PhotonClient, type PhotonClientOptions } from 
 import { createRestTransport, type RestResource } from './index.js'
 import type { PhotonKernelModule } from '../kernel.js'
 import type { LocalStore } from '../store.js'
-import type { SyncTransport } from '../sync/types.js'
+import type { PushDecision, SyncTransport } from '../sync/types.js'
 import type { EngineRecord, Operation } from '../types.js'
 
 // Reuses the same fake kernel and store shape as client.test.ts, kept local so
@@ -162,6 +162,9 @@ function memoryStore(): LocalStore {
         }
       }
       for (const record of write.records ?? []) records.set(key(record.key), record)
+      for (const target of write.deleteRecords ?? []) {
+        records.delete(`${target.scope}/${target.collection}/${target.recordId}`)
+      }
       for (const update of write.statusUpdates ?? []) {
         const existing = operations.get(update.operationId)
         if (existing) existing.status = update.status
@@ -435,33 +438,194 @@ describe('rest-backed specifics', () => {
     query.destroy()
   })
 
-  it('does not let a refetch erase an unacknowledged local edit', async () => {
-    // The server has not decided on our write yet, and meanwhile a listing
-    // arrives with its older value. Losing the user's in-flight edit to that
-    // refetch is the classic way this goes wrong.
+  it('fails loud and keeps an operation pending when a decision is missing', async () => {
+    const pull = vi.fn(async () => ({
+      kind: 'snapshot' as const,
+      collection: 'issues',
+      records: [{ collection: 'issues', recordId: 'r1', value: { id: 'r1', title: 'from server' } }],
+      complete: true,
+    }))
     const photon = await client({
       async push() {
         return { decisions: [] }
       },
-      async pull() {
-        return {
-          kind: 'snapshot',
-          collection: 'issues',
-          records: [{ collection: 'issues', recordId: 'r1', value: { id: 'r1', title: 'from server' } }],
-          complete: true,
-        }
-      },
+      pull,
     })
 
     photon.upsert('issues', 'r1', { id: 'r1', title: 'my unsaved edit' })
     await photon.sync.syncNow('manual')
     await tick()
 
+    expect(photon.sync.getStatus()).toMatchObject({
+      phase: 'error',
+      lastError: { kind: 'protocol' },
+      pendingOperations: 1,
+    })
+    expect(pull).not.toHaveBeenCalled()
     const query = photon.query<{ title: string }>({ collection: 'issues' })
     await query.ready()
     await tick()
     expect(query.getSnapshot().data[0]?.value.title).toBe('my unsaved edit')
     query.destroy()
+  })
+
+  it('commits a mixed decision batch before replaying a rejected sibling', async () => {
+    const photon = await client({
+      async push(request) {
+        return {
+          decisions: [
+            { kind: 'accepted', operationId: request.operations[0]!.id },
+            {
+              kind: 'rejected',
+              operationId: request.operations[1]!.id,
+              reason: 'title is locked',
+            },
+          ],
+        }
+      },
+      async pull(request) {
+        return { kind: 'operations', operations: [], cursor: request.cursor }
+      },
+    })
+
+    const accepted = photon.upsert('issues', 'r1', { id: 'r1', title: 'accepted' })
+    await accepted.local
+    const rejected = photon.patch('issues', 'r1', { title: 'rejected' })
+    await rejected.local
+
+    await photon.sync.syncNow('manual')
+    await expect(accepted.settled).resolves.toMatchObject({ status: 'accepted' })
+    await expect(rejected.settled).resolves.toMatchObject({ status: 'rejected' })
+
+    const query = photon.query<{ title: string }>({ collection: 'issues' })
+    await query.ready()
+    expect(query.getSnapshot().data[0]?.value.title).toBe('accepted')
+    expect(query.getSnapshot().data[0]?.pending).toBe(false)
+    query.destroy()
+  })
+
+  it.each([
+    {
+      name: 'foreign operation id',
+      decisions: [{ kind: 'accepted' as const, operationId: 'op-from-another-request' }],
+    },
+    {
+      name: 'unknown decision kind',
+      decisions: [{ kind: 'future-kind', operationId: 'filled-at-runtime' }],
+    },
+  ])('fails loud for a $name', async ({ name, decisions }) => {
+    const photon = await client({
+      async push(request) {
+        const runtimeDecisions = decisions.map((decision) =>
+          name === 'unknown decision kind'
+            ? { ...decision, operationId: request.operations[0]!.id }
+            : decision,
+        )
+        return { decisions: runtimeDecisions as never }
+      },
+      async pull(request) {
+        return { kind: 'operations', operations: [], cursor: request.cursor }
+      },
+    })
+
+    photon.upsert('issues', 'r1', { id: 'r1' })
+    await photon.sync.syncNow('manual')
+
+    expect(photon.sync.getStatus()).toMatchObject({
+      phase: 'error',
+      lastError: { kind: 'protocol' },
+      pendingOperations: 1,
+    })
+  })
+
+  it('fails loud for duplicate decisions and keeps both operations pending', async () => {
+    const photon = await client({
+      async push(request) {
+        const operationId = request.operations[0]!.id
+        return {
+          decisions: [
+            { kind: 'accepted', operationId },
+            { kind: 'accepted', operationId },
+          ],
+        }
+      },
+      async pull(request) {
+        return { kind: 'operations', operations: [], cursor: request.cursor }
+      },
+    })
+
+    photon.upsert('issues', 'r1', { id: 'r1' })
+    photon.upsert('issues', 'r2', { id: 'r2' })
+    await photon.sync.syncNow('manual')
+
+    expect(photon.sync.getStatus()).toMatchObject({
+      phase: 'error',
+      lastError: { kind: 'protocol' },
+      pendingOperations: 2,
+    })
+  })
+
+  it('reapplies a newer pending edit after an in-flight rejection', async () => {
+    let finishPush: ((operationId: string) => void) | undefined
+    let pushedOperationId: string | undefined
+    const pushResult = new Promise<{ decisions: readonly PushDecision[] }>((resolve) => {
+      finishPush = (operationId) =>
+        resolve({
+          decisions: [{ kind: 'rejected', operationId, reason: 'first edit denied' }],
+        })
+    })
+    const photon = await client({
+      async push(request) {
+        pushedOperationId = request.operations[0]!.id
+        return pushResult
+      },
+      async pull(request) {
+        return { kind: 'operations', operations: [], cursor: request.cursor }
+      },
+    })
+
+    const rejected = photon.upsert('issues', 'r1', { id: 'r1', title: 'rejected' })
+    await rejected.local
+    const syncing = photon.sync.syncNow('manual')
+    await tick()
+    const newer = photon.patch('issues', 'r1', { title: 'newer pending' })
+    await newer.local
+    finishPush!(pushedOperationId!)
+    await syncing
+    await rejected.settled
+
+    const query = photon.query<{ title: string }>({ collection: 'issues' })
+    await query.ready()
+    expect(query.getSnapshot().data[0]?.value.title).toBe('newer pending')
+    expect(query.getSnapshot().data[0]?.pending).toBe(true)
+    query.destroy()
+  })
+
+  it('keeps a rejection retryable when replay preparation fails', async () => {
+    const storage = memoryStore()
+    vi.spyOn(storage, 'loadAcceptedOperations').mockRejectedValueOnce(
+      new Error('accepted history unavailable'),
+    )
+    const photon = await client(engineTransport('reject'), { storage })
+    const handle = photon.upsert('issues', 'r1', { id: 'r1', title: 'optimistic' })
+    await handle.local
+
+    await photon.sync.syncNow('manual')
+
+    expect(photon.sync.getStatus()).toMatchObject({ phase: 'error', pendingOperations: 1 })
+    expect(photon.pendingCount()).toBe(1)
+    expect(await storage.loadPendingOperations('workspace:test')).toHaveLength(1)
+    expect(photon.query({ collection: 'issues' }).getSnapshot().data[0]).toMatchObject({
+      pending: true,
+      value: { title: 'optimistic' },
+    })
+
+    await photon.sync.syncNow('manual')
+    await expect(handle.settled).resolves.toMatchObject({ status: 'rejected' })
+    expect(photon.pendingCount()).toBe(0)
+    expect(await storage.loadPendingOperations('workspace:test')).toHaveLength(0)
+    expect(await storage.loadRecords('workspace:test')).toHaveLength(0)
+    expect(photon.query({ collection: 'issues' }).getSnapshot().data).toHaveLength(0)
   })
 })
 

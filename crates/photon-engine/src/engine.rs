@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use crate::{
     projection::apply_operation,
     protocol::{PullRequest, PushDecision, PushRequest, SyncEndpoint, SyncSummary},
@@ -98,10 +100,18 @@ where
                 self.storage.save_conflict(conflict).await
             }
             PushDecision::ServerPatch {
+                operation_id,
                 operation,
                 remote_sequence,
                 ..
             } => {
+                self.storage
+                    .mark_operation_status(
+                        &operation_id,
+                        OperationStatus::Accepted,
+                        Some(remote_sequence),
+                    )
+                    .await?;
                 self.apply_remote_operation(operation, remote_sequence)
                     .await?;
                 Ok(())
@@ -133,13 +143,35 @@ where
                 })
                 .await?;
 
+            validate_push_decisions(&pending, &push_result.decisions)?;
+
             summary.pushed = pending.len();
+
+            let pending_by_id = pending
+                .iter()
+                .map(|operation| (&operation.id, &operation.key))
+                .collect::<std::collections::HashMap<_, _>>();
+            let non_applied_keys = push_result
+                .decisions
+                .iter()
+                .filter_map(|decision| match decision {
+                    PushDecision::Rejected { operation_id, .. }
+                    | PushDecision::Conflict { operation_id, .. } => {
+                        pending_by_id.get(operation_id).copied().cloned()
+                    }
+                    _ => None,
+                })
+                .collect::<HashSet<_>>();
 
             for decision in push_result.decisions {
                 if matches!(decision, PushDecision::Conflict { .. }) {
                     summary.conflicts += 1;
                 }
                 self.apply_push_decision(decision).await?;
+            }
+
+            for key in non_applied_keys {
+                self.reproject_non_rejected_operations(&key).await?;
             }
 
             for operation in push_result.server_operations {
@@ -183,6 +215,73 @@ where
         self.storage.upsert_record(projected.clone()).await?;
         Ok(projected)
     }
+
+    async fn reproject_non_rejected_operations(&self, key: &RecordKey) -> Result<()> {
+        let mut operations = self
+            .storage
+            .list_operations(OperationFilter {
+                scope: Some(key.scope.clone()),
+                collection: Some(key.collection.clone()),
+                ..OperationFilter::default()
+            })
+            .await?
+            .into_iter()
+            .filter(|stored| {
+                stored.operation.key == *key
+                    && matches!(
+                        stored.status,
+                        OperationStatus::Accepted | OperationStatus::Pending
+                    )
+            })
+            .collect::<Vec<_>>();
+        operations.sort_by_key(|stored| stored.local_sequence);
+
+        let mut rebuilt = None;
+        for stored in operations {
+            rebuilt = Some(apply_operation(rebuilt, &stored.operation)?);
+        }
+
+        if let Some(record) = rebuilt {
+            self.storage.upsert_record(record).await
+        } else {
+            self.storage.delete_record_projection(key).await
+        }
+    }
+}
+
+fn validate_push_decisions(pending: &[Operation], decisions: &[PushDecision]) -> Result<()> {
+    let expected = pending
+        .iter()
+        .map(|operation| operation.id.clone())
+        .collect::<HashSet<_>>();
+    if expected.len() != pending.len() {
+        return Err(crate::EngineError::SyncProtocol(
+            "push request contains duplicate operation ids".to_owned(),
+        ));
+    }
+    if decisions.len() != pending.len() {
+        return Err(crate::EngineError::SyncProtocol(format!(
+            "server returned {} decisions for {} operations",
+            decisions.len(),
+            pending.len()
+        )));
+    }
+
+    let mut seen = HashSet::with_capacity(decisions.len());
+    for decision in decisions {
+        let operation_id = decision.operation_id();
+        if !expected.contains(operation_id) {
+            return Err(crate::EngineError::SyncProtocol(format!(
+                "server returned a decision for unknown operation {operation_id}"
+            )));
+        }
+        if !seen.insert(operation_id.clone()) {
+            return Err(crate::EngineError::SyncProtocol(format!(
+                "server returned duplicate decisions for operation {operation_id}"
+            )));
+        }
+    }
+    Ok(())
 }
 
 pub async fn mark_accepted<A>(

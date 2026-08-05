@@ -42,6 +42,17 @@ pub enum PushDecision {
     },
 }
 
+impl PushDecision {
+    pub fn operation_id(&self) -> &OperationId {
+        match self {
+            Self::Accepted { operation_id, .. }
+            | Self::Rejected { operation_id, .. }
+            | Self::Conflict { operation_id, .. }
+            | Self::ServerPatch { operation_id, .. } => operation_id,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PulledOperation {
     pub operation: Operation,

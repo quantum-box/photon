@@ -14,8 +14,9 @@
  */
 
 import { createBackoff } from './backoff.js'
-import type { LocalStore, OperationStatusUpdate } from '../store.js'
+import type { LocalStore, OperationStatusUpdate, StoreWrite } from '../store.js'
 import type { Collection, Operation, Scope } from '../types.js'
+import { SyncProtocolError } from './types.js'
 import type {
   PullResult,
   PushDecision,
@@ -38,7 +39,10 @@ export interface SyncEngineOptions {
   readonly pullPageSize: number
   readonly requestTimeoutMs?: number
   collectPending(): Operation[]
-  onDecision(decision: PushDecision): void
+  prepareDecisions(decisions: readonly PushDecision[]): Promise<{
+    readonly write: StoreWrite
+    apply(): void
+  }>
   applyRemote(operations: readonly Operation[]): void
   /** A server with no operation log returned current state instead. */
   applySnapshot(page: Extract<PullResult, { kind: 'snapshot' }>): void
@@ -197,13 +201,16 @@ export class SyncEngine implements SyncController {
       const pending = this.options.collectPending()
       if (pending.length) {
         const result = await transport.push({ scope: this.options.scope, operations: pending })
+        validatePushDecisions(pending, result?.decisions)
         const statusUpdates: OperationStatusUpdate[] = []
+        let pushed = 0
+        let rejected = 0
+        let conflicts = 0
 
         for (const decision of result.decisions) {
-          this.options.onDecision(decision)
           switch (decision.kind) {
             case 'accepted':
-              summary.pushed += 1
+              pushed += 1
               statusUpdates.push({
                 operationId: decision.operationId,
                 status: 'accepted',
@@ -211,17 +218,25 @@ export class SyncEngine implements SyncController {
               })
               break
             case 'rejected':
-              summary.rejected += 1
+              rejected += 1
               statusUpdates.push({ operationId: decision.operationId, status: 'rejected' })
               break
             case 'conflict':
-              summary.conflicts += 1
+              conflicts += 1
               statusUpdates.push({ operationId: decision.operationId, status: 'conflict' })
               break
           }
         }
 
-        if (statusUpdates.length) await this.options.store.commit({ statusUpdates })
+        // Decision reconciliation may need accepted history to rebuild a
+        // rejected record. Prepare it without mutating memory, then make the
+        // statuses, rebuilt records, and conflicts durable in one transaction.
+        const reconciliation = await this.options.prepareDecisions(result.decisions)
+        await this.options.store.commit({ ...reconciliation.write, statusUpdates })
+        reconciliation.apply()
+        summary.pushed += pushed
+        summary.rejected += rejected
+        summary.conflicts += conflicts
       }
 
       // --- pull -----------------------------------------------------------
@@ -338,10 +353,68 @@ function classify(error: unknown): SyncError {
   const status = (error as { status?: number } | null)?.status
   const message = error instanceof Error ? error.message : String(error)
 
+  if (error instanceof SyncProtocolError) return { kind: 'protocol', message }
   if (status === 401 || status === 403) return { kind: 'auth', message, status }
   if (typeof status === 'number' && status >= 500) return { kind: 'server', message, status }
   if (typeof status === 'number' && status >= 400) return { kind: 'protocol', message, status }
   return { kind: 'network', message }
+}
+
+function validatePushDecisions(
+  operations: readonly Operation[],
+  decisions: readonly PushDecision[] | undefined,
+): asserts decisions is readonly PushDecision[] {
+  if (!Array.isArray(decisions)) {
+    throw new SyncProtocolError('Push response must contain a decisions array')
+  }
+
+  const expected = new Set(operations.map((operation) => operation.id))
+  if (expected.size !== operations.length) {
+    throw new SyncProtocolError('Push request contains duplicate operation ids')
+  }
+  if (decisions.length !== operations.length) {
+    throw new SyncProtocolError(
+      `Push response returned ${decisions.length} decisions for ${operations.length} operations`,
+    )
+  }
+
+  const seen = new Set<string>()
+  for (const decision of decisions as readonly unknown[]) {
+    if (!isPushDecision(decision)) {
+      throw new SyncProtocolError('Push response contains a malformed decision')
+    }
+    if (!expected.has(decision.operationId)) {
+      throw new SyncProtocolError(
+        `Push response contains a decision for unknown operation ${decision.operationId}`,
+      )
+    }
+    if (seen.has(decision.operationId)) {
+      throw new SyncProtocolError(
+        `Push response contains duplicate decisions for operation ${decision.operationId}`,
+      )
+    }
+    seen.add(decision.operationId)
+  }
+}
+
+function isPushDecision(value: unknown): value is PushDecision {
+  if (typeof value !== 'object' || value === null) return false
+  const decision = value as Partial<PushDecision>
+  if (typeof decision.operationId !== 'string' || !decision.operationId) return false
+  switch (decision.kind) {
+    case 'accepted':
+      return (
+        (decision.remoteSequence === undefined ||
+          (Number.isSafeInteger(decision.remoteSequence) && decision.remoteSequence >= 0)) &&
+        (decision.aliasRecordId === undefined ||
+          (typeof decision.aliasRecordId === 'string' && decision.aliasRecordId.length > 0))
+      )
+    case 'rejected':
+    case 'conflict':
+      return typeof decision.reason === 'string' && decision.reason.length > 0
+    default:
+      return false
+  }
 }
 
 export type { Collection }

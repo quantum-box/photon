@@ -30,12 +30,16 @@ cargo run --bin photon-server
 npm run dev -- --host 127.0.0.1
 ```
 
-Cloudflare Worker sync development:
+Cloudflare Worker Engine-proxy development and Live security check:
 
 ```bash
 npm run worker:dev
 npm run dev:cf-sync -- --host 127.0.0.1
 ```
+
+The Worker `/ws` route must return HTTP 403 in this phase. End-to-end Live
+behavior uses the authenticated Rust `/ws` endpoint until the Worker gains a
+principal-aware session boundary.
 
 Desktop smoke:
 
@@ -66,11 +70,12 @@ npm run tauri:build
   chips, not durable binary download.
 - The Rust server now has a service-level auth boundary (`PHOTON_AUTH_TOKENS`
   bearer tokens with tenant grants on Engine push/pull/debug and Live `/ws`,
-  strict `tenant:{t}:workspace:{w}` scope enforcement), a per-operation
-  `EnginePolicy` hook for domain-level write rules, and audit metadata stamped
-  into every accepted operation. What remains is wiring Tachyon's real user
-  sessions into an `EnginePolicy` implementation. Legacy record/chat/attachment
-  REST endpoints remain open.
+  strict `tenant:{t}:workspace:{w}` scope enforcement), a batch-capable
+  `EnginePolicy` hook for domain-level write rules, and typed audit metadata
+  stamped into every accepted operation. The Cloudflare Worker `/ws` route is
+  fail-closed until it has a principal-aware user-session boundary. What
+  remains is wiring Tachyon's real user sessions into an `EnginePolicy`
+  implementation. Legacy record/chat/attachment REST endpoints remain open.
 - Playwright covers Chromium workspace flows only. Native desktop packaging is
   covered by Tauri smoke builds, not full desktop UI automation.
 - Offline coverage now includes the Engine round trip (offline record write →

@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, HashSet},
     sync::{
         atomic::{AtomicI64, AtomicUsize, Ordering},
         Arc,
@@ -33,12 +33,18 @@ use utoipa::{OpenApi, ToSchema};
 use utoipa_swagger_ui::SwaggerUi;
 use yrs::{updates::decoder::Decode, Doc, ReadTxn, StateVector, Transact, Update};
 
+mod audit;
 mod auth;
 mod policy;
 
+use audit::{stamp_audit_metadata, validate_audit_metadata};
+pub use audit::{AuditPrincipalType, AuditServiceGrant, PhotonAuditStamp, AUDIT_METADATA_KEY};
 use auth::bearer_token;
 pub use auth::{parse_workspace_scope, AuthConfig, AuthError, TokenGrant, WorkspaceScope};
-pub use policy::{AllowAllPolicy, EnginePolicy, OperationContext, PolicyVerdict};
+pub use policy::{
+    AllowAllPolicy, EnginePolicy, OperationContext, PolicyDecision, PolicyError, PolicyVerdict,
+    PushContext,
+};
 
 // ---------------------------------------------------------------------------
 // OpenAPI
@@ -595,57 +601,18 @@ fn authorize_scoped_request(
     Ok((grant, workspace))
 }
 
-/// The key under which the server records audit metadata on an accepted
-/// operation. Stored inside `Operation::metadata`, so it is durable in the
-/// same row as the operation itself and travels with every pull.
-const AUDIT_METADATA_KEY: &str = "photon_audit";
-
-/// Stamp who was authorized to push this operation, and under which request.
-///
-/// `Operation::metadata` is the designed slot for out-of-band annotations: it
-/// does not participate in projection, so stamping it cannot change what any
-/// client renders. Existing metadata keys are preserved; a non-object
-/// metadata value is left untouched rather than destroyed.
-fn stamp_audit_metadata(
-    operation: &mut Operation,
-    grant: &TokenGrant,
-    request_id: &str,
-    received_at_ms: i64,
-) {
-    let audit = match grant {
-        TokenGrant::AllTenants => serde_json::json!({
-            "authorized": "service",
-            "request_id": request_id,
-            "received_at_ms": received_at_ms,
-        }),
-        TokenGrant::Tenant(tenant_id) => serde_json::json!({
-            "authorized": "tenant",
-            "tenant_id": tenant_id,
-            "request_id": request_id,
-            "received_at_ms": received_at_ms,
-        }),
-    };
-
-    match &mut operation.metadata {
-        serde_json::Value::Null => {
-            operation.metadata = serde_json::json!({ AUDIT_METADATA_KEY: audit });
-        }
-        serde_json::Value::Object(existing) => {
-            existing.insert(AUDIT_METADATA_KEY.to_owned(), audit);
-        }
-        _ => {}
-    }
-}
-
 async fn push_engine_operations(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Json(payload): Json<PushRequest>,
 ) -> Result<Json<PushResult>, AppError> {
-    let request_id = headers
+    let upstream_request_id = headers
         .get("x-photon-request-id")
         .and_then(|value| value.to_str().ok())
         .unwrap_or("none");
+    // Audit identity must not be caller-controlled. Keep an upstream id only
+    // for trace correlation and generate the durable audit request id here.
+    let request_id = photon_engine::OperationId::random().to_string();
     let (grant, workspace) = authorize_scoped_request(&state, &headers, &payload.scope)?;
     let scope = payload.scope.clone();
     let operation_count = payload.operations.len();
@@ -669,18 +636,76 @@ async fn push_engine_operations(
         )));
     }
 
+    if let Some(error) = payload
+        .operations
+        .iter()
+        .find_map(|operation| validate_audit_metadata(operation).err())
+    {
+        return Err(AppError::BadRequest(error.to_string()));
+    }
+
+    let mut operation_ids = HashSet::with_capacity(payload.operations.len());
+    if let Some(operation) = payload
+        .operations
+        .iter()
+        .find(|operation| !operation_ids.insert(operation.id.clone()))
+    {
+        return Err(AppError::BadRequest(format!(
+            "operation {} appears more than once in the push batch",
+            operation.id
+        )));
+    }
+
+    let policy_decisions = state
+        .policy
+        .authorize_operations(PushContext {
+            grant: &grant,
+            workspace: &workspace,
+            operations: &payload.operations,
+        })
+        .await?;
+    if policy_decisions.len() != payload.operations.len() {
+        return Err(PolicyError::invalid_response(format!(
+            "policy returned {} decisions for {} operations",
+            policy_decisions.len(),
+            payload.operations.len()
+        ))
+        .into());
+    }
+
+    let mut verdicts = HashMap::with_capacity(policy_decisions.len());
+    for decision in policy_decisions {
+        if !operation_ids.contains(&decision.operation_id) {
+            return Err(PolicyError::invalid_response(format!(
+                "policy returned a decision for unknown operation {}",
+                decision.operation_id
+            ))
+            .into());
+        }
+        if verdicts
+            .insert(decision.operation_id.clone(), decision.verdict)
+            .is_some()
+        {
+            return Err(PolicyError::invalid_response(format!(
+                "policy returned duplicate decisions for operation {}",
+                decision.operation_id
+            ))
+            .into());
+        }
+    }
+
     for mut operation in payload.operations {
-        // The host's domain rules get the final say, one operation at a time.
+        let verdict = verdicts.remove(&operation.id).ok_or_else(|| {
+            PolicyError::invalid_response(format!(
+                "policy returned no decision for operation {}",
+                operation.id
+            ))
+        })?;
+        // The host's domain rules get the final say. The default policy method
+        // evaluates one operation at a time; a remote policy may authorize the
+        // complete batch in one lookup.
         // A rejection is a decision, not an error: the rest of the batch still
         // lands, and the client rolls this one back by replay.
-        let verdict = state
-            .policy
-            .authorize_operation(OperationContext {
-                grant: &grant,
-                workspace: &workspace,
-                operation: &operation,
-            })
-            .await;
         if let PolicyVerdict::Reject { reason } = verdict {
             rejected_count += 1;
             decisions.push(PushDecision::Rejected {
@@ -690,12 +715,14 @@ async fn push_engine_operations(
             continue;
         }
 
-        stamp_audit_metadata(
-            &mut operation,
+        let audit = PhotonAuditStamp::for_service(
             &grant,
-            request_id,
+            &workspace,
+            request_id.clone(),
             chrono::Utc::now().timestamp_millis(),
         );
+        stamp_audit_metadata(&mut operation, &audit)
+            .map_err(|error| AppError::BadRequest(error.to_string()))?;
 
         let remote_sequence = state.engine_next_seq.fetch_add(1, Ordering::SeqCst) + 1;
         state
@@ -722,6 +749,7 @@ async fn push_engine_operations(
 
     info!(
         request_id,
+        upstream_request_id,
         scope = %scope,
         operation_count,
         accepted = accepted_count,
@@ -1145,6 +1173,7 @@ enum AppError {
     Sqlx(sqlx::Error),
     Engine(photon_engine::EngineError),
     Serde(serde_json::Error),
+    Policy(PolicyError),
     Unauthorized(&'static str),
     Forbidden(&'static str),
     BadRequest(String),
@@ -1177,6 +1206,12 @@ impl From<serde_json::Error> for AppError {
     }
 }
 
+impl From<PolicyError> for AppError {
+    fn from(error: PolicyError) -> Self {
+        AppError::Policy(error)
+    }
+}
+
 impl IntoResponse for AppError {
     fn into_response(self) -> axum::response::Response {
         let (status, message) = match self {
@@ -1199,6 +1234,13 @@ impl IntoResponse for AppError {
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "Internal server error".to_owned(),
+                )
+            }
+            AppError::Policy(e) => {
+                tracing::error!(error = %e, "Photon policy infrastructure failure");
+                (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "Authorization policy is temporarily unavailable".to_owned(),
                 )
             }
             AppError::Unauthorized(message) => (StatusCode::UNAUTHORIZED, message.to_owned()),
@@ -2212,14 +2254,19 @@ mod tests {
 
     #[async_trait]
     impl EnginePolicy for LockedCollectionsPolicy {
-        async fn authorize_operation(&self, ctx: OperationContext<'_>) -> PolicyVerdict {
-            if ctx.operation.key.collection.to_string() == "audit_events" {
-                PolicyVerdict::Reject {
-                    reason: "audit_events is server-owned".into(),
-                }
-            } else {
-                PolicyVerdict::Allow
-            }
+        async fn authorize_operation(
+            &self,
+            ctx: OperationContext<'_>,
+        ) -> Result<PolicyVerdict, PolicyError> {
+            Ok(
+                if ctx.operation.key.collection.to_string() == "audit_events" {
+                    PolicyVerdict::Reject {
+                        reason: "audit_events is server-owned".into(),
+                    }
+                } else {
+                    PolicyVerdict::Allow
+                },
+            )
         }
     }
 
@@ -2302,6 +2349,278 @@ mod tests {
         assert_eq!(pulled.operations[0].operation.id, allowed.id);
     }
 
+    struct CountingBatchPolicy {
+        calls: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl EnginePolicy for CountingBatchPolicy {
+        async fn authorize_operations(
+            &self,
+            ctx: PushContext<'_>,
+        ) -> Result<Vec<PolicyDecision>, PolicyError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(ctx
+                .operations
+                .iter()
+                .rev()
+                .map(|operation| {
+                    PolicyDecision::new(
+                        operation.id.clone(),
+                        if operation.key.collection.to_string() == "audit_events" {
+                            PolicyVerdict::Reject {
+                                reason: "audit_events is server-owned".into(),
+                            }
+                        } else {
+                            PolicyVerdict::Allow
+                        },
+                    )
+                })
+                .collect())
+        }
+
+        async fn authorize_operation(
+            &self,
+            _ctx: OperationContext<'_>,
+        ) -> Result<PolicyVerdict, PolicyError> {
+            Err(PolicyError::unavailable(
+                "per-operation path must not be called",
+            ))
+        }
+    }
+
+    #[tokio::test]
+    async fn test_policy_can_authorize_a_push_in_one_batch_call() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let policy = CountingBatchPolicy {
+            calls: calls.clone(),
+        };
+        let state = test_state_with(AuthConfig::disabled(), Arc::new(policy)).await;
+        let app = engine_routes().with_state(state);
+        let scope = default_workspace_scope();
+        let allowed = Operation::new(
+            engine_record_key("issues", "issue-batch-1"),
+            ActorId::from("client-a"),
+            OperationKind::Upsert {
+                value: serde_json::json!({ "id": "issue-batch-1" }),
+            },
+        );
+        let rejected = Operation::new(
+            engine_record_key("audit_events", "event-batch-1"),
+            ActorId::from("client-a"),
+            OperationKind::Upsert {
+                value: serde_json::json!({ "id": "event-batch-1" }),
+            },
+        );
+
+        let response = app
+            .oneshot(json_post(
+                "/api/engine/push",
+                None,
+                serde_json::to_string(&PushRequest {
+                    scope,
+                    operations: vec![allowed, rejected],
+                    cursor: None,
+                })
+                .unwrap(),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let result: PushResult = serde_json::from_slice(&body).unwrap();
+        assert!(matches!(result.decisions[0], PushDecision::Accepted { .. }));
+        assert!(matches!(result.decisions[1], PushDecision::Rejected { .. }));
+    }
+
+    struct UnavailablePolicy;
+
+    #[async_trait]
+    impl EnginePolicy for UnavailablePolicy {
+        async fn authorize_operation(
+            &self,
+            _ctx: OperationContext<'_>,
+        ) -> Result<PolicyVerdict, PolicyError> {
+            Err(PolicyError::unavailable("upstream policy timed out"))
+        }
+    }
+
+    #[tokio::test]
+    async fn test_policy_infrastructure_failure_is_retryable_and_persists_nothing() {
+        let state = test_state_with(AuthConfig::disabled(), Arc::new(UnavailablePolicy)).await;
+        let app = engine_routes().with_state(state.clone());
+        let scope = default_workspace_scope();
+        let operation = Operation::new(
+            engine_record_key("issues", "issue-policy-down"),
+            ActorId::from("client-a"),
+            OperationKind::Upsert {
+                value: serde_json::json!({ "id": "issue-policy-down" }),
+            },
+        );
+
+        let response = app
+            .oneshot(json_post(
+                "/api/engine/push",
+                None,
+                push_body(scope.clone(), operation),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(
+            body["error"],
+            "Authorization policy is temporarily unavailable"
+        );
+        assert!(!body.to_string().contains("timed out"));
+        assert!(state
+            .engine
+            .storage()
+            .list_operations(OperationFilter {
+                scope: Some(scope),
+                ..OperationFilter::default()
+            })
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
+    struct IncompleteBatchPolicy;
+
+    #[async_trait]
+    impl EnginePolicy for IncompleteBatchPolicy {
+        async fn authorize_operations(
+            &self,
+            _ctx: PushContext<'_>,
+        ) -> Result<Vec<PolicyDecision>, PolicyError> {
+            Ok(Vec::new())
+        }
+
+        async fn authorize_operation(
+            &self,
+            _ctx: OperationContext<'_>,
+        ) -> Result<PolicyVerdict, PolicyError> {
+            Ok(PolicyVerdict::Allow)
+        }
+    }
+
+    #[tokio::test]
+    async fn test_incomplete_batch_policy_response_fails_before_persistence() {
+        let state = test_state_with(AuthConfig::disabled(), Arc::new(IncompleteBatchPolicy)).await;
+        let app = engine_routes().with_state(state.clone());
+        let scope = default_workspace_scope();
+        let operation = Operation::new(
+            engine_record_key("issues", "issue-incomplete-policy"),
+            ActorId::from("client-a"),
+            OperationKind::Upsert {
+                value: serde_json::json!({ "id": "issue-incomplete-policy" }),
+            },
+        );
+
+        let response = app
+            .oneshot(json_post(
+                "/api/engine/push",
+                None,
+                push_body(scope.clone(), operation),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(state
+            .engine
+            .storage()
+            .list_operations(OperationFilter {
+                scope: Some(scope),
+                ..OperationFilter::default()
+            })
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_duplicate_operation_ids_are_rejected_before_policy() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let state = test_state_with(
+            AuthConfig::disabled(),
+            Arc::new(CountingBatchPolicy {
+                calls: calls.clone(),
+            }),
+        )
+        .await;
+        let app = engine_routes().with_state(state);
+        let scope = default_workspace_scope();
+        let operation = Operation::new(
+            engine_record_key("issues", "issue-duplicate"),
+            ActorId::from("client-a"),
+            OperationKind::Upsert {
+                value: serde_json::json!({ "id": "issue-duplicate" }),
+            },
+        );
+
+        let response = app
+            .oneshot(json_post(
+                "/api/engine/push",
+                None,
+                serde_json::to_string(&PushRequest {
+                    scope,
+                    operations: vec![operation.clone(), operation],
+                    cursor: None,
+                })
+                .unwrap(),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn test_non_object_metadata_is_rejected_before_policy_or_persistence() {
+        let state = test_state_with(AuthConfig::disabled(), Arc::new(AllowAllPolicy)).await;
+        let app = engine_routes().with_state(state.clone());
+        let scope = default_workspace_scope();
+        let operation = Operation::new(
+            engine_record_key("issues", "issue-odd-metadata"),
+            ActorId::from("client-a"),
+            OperationKind::Upsert {
+                value: serde_json::json!({ "id": "issue-odd-metadata" }),
+            },
+        )
+        .with_metadata(serde_json::json!("opaque-client-string"));
+
+        let response = app
+            .oneshot(json_post(
+                "/api/engine/push",
+                None,
+                push_body(scope.clone(), operation),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(state
+            .engine
+            .storage()
+            .list_operations(OperationFilter {
+                scope: Some(scope),
+                ..OperationFilter::default()
+            })
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
     #[tokio::test]
     async fn test_accepted_operations_carry_audit_metadata() {
         let state = authed_test_state().await;
@@ -2355,11 +2674,18 @@ mod tests {
         let pulled: PullResult = serde_json::from_slice(&body).unwrap();
         assert_eq!(pulled.operations.len(), 1);
 
-        let audit = &pulled.operations[0].operation.metadata[AUDIT_METADATA_KEY];
-        assert_eq!(audit["authorized"], "tenant");
-        assert_eq!(audit["tenant_id"], "acme");
-        assert_eq!(audit["request_id"], "req-audit-123");
-        assert!(audit["received_at_ms"].as_i64().unwrap() > 0);
+        let audit: PhotonAuditStamp = serde_json::from_value(
+            pulled.operations[0].operation.metadata[AUDIT_METADATA_KEY].clone(),
+        )
+        .unwrap();
+        assert_eq!(audit.principal_type, AuditPrincipalType::Service);
+        assert_eq!(audit.principal_id, None);
+        assert_eq!(audit.service_grant, Some(AuditServiceGrant::Tenant));
+        assert_eq!(audit.tenant_id, "acme");
+        assert_eq!(audit.workspace_id, "roadmap");
+        assert_ne!(audit.request_id, "req-audit-123");
+        assert!(!audit.request_id.is_empty());
+        assert!(audit.received_at_ms > 0);
     }
 
     #[test]
@@ -2371,19 +2697,44 @@ mod tests {
                 value: serde_json::json!({}),
             },
         );
-        operation.metadata = serde_json::json!({ "client_tag": "keep-me" });
-        stamp_audit_metadata(&mut operation, &TokenGrant::AllTenants, "req-1", 42);
+        operation.metadata = serde_json::json!({
+            "client_tag": "keep-me",
+            "photon_audit": {
+                "principal_type": "user",
+                "principal_id": "client-spoof"
+            }
+        });
+        let audit = PhotonAuditStamp::for_service(
+            &TokenGrant::AllTenants,
+            &WorkspaceScope {
+                tenant_id: "photon".into(),
+                workspace_id: "default".into(),
+            },
+            "req-1",
+            42,
+        );
+        stamp_audit_metadata(&mut operation, &audit).unwrap();
         assert_eq!(operation.metadata["client_tag"], "keep-me");
         assert_eq!(
-            operation.metadata[AUDIT_METADATA_KEY]["authorized"],
+            operation.metadata[AUDIT_METADATA_KEY]["principal_type"],
             "service"
         );
+        assert_eq!(
+            operation.metadata[AUDIT_METADATA_KEY]["service_grant"],
+            "all_tenants"
+        );
+        assert!(operation.metadata[AUDIT_METADATA_KEY]
+            .get("principal_id")
+            .is_none());
         assert_eq!(operation.metadata[AUDIT_METADATA_KEY]["received_at_ms"], 42);
 
-        // A non-object metadata value belongs to the client; never destroy it.
+        // A non-object metadata value can never silently bypass the stamp.
         let mut odd = operation.clone();
         odd.metadata = serde_json::json!("opaque-client-string");
-        stamp_audit_metadata(&mut odd, &TokenGrant::AllTenants, "req-2", 43);
+        let error = stamp_audit_metadata(&mut odd, &audit).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("metadata must be an object or null"));
         assert_eq!(odd.metadata, serde_json::json!("opaque-client-string"));
     }
 

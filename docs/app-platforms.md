@@ -13,14 +13,15 @@ topology:
 - Sync backend: either the Rust server WebSocket endpoint or Cloudflare Durable
   Objects behind the frontend Worker.
 
-Production app builds point at the hosted sync Worker:
+The reserved hosted Live endpoint is:
 
 ```text
 wss://photon-sync.quantum-box.workers.dev/ws
 ```
 
-The production Worker endpoint is stored in `.env.production` so Vite builds
-work from macOS, Linux, and Windows shells.
+It currently returns HTTP 403 and is not a Live release target until the Worker
+verifies user sessions. Keeping the URL explicit in `.env.production` makes
+that fail-closed state deterministic across build hosts.
 
 Web release candidates must pass `npm run build` and keep API/WebSocket
 endpoints explicit through Vite environment variables or `src/app/kitConfig.ts`.
@@ -63,7 +64,7 @@ Use `VITE_PHOTON_DEPLOYMENT_MODE` to document the intended topology for a build:
 | Mode | Frontend Worker | Sync default | App API default |
 | --- | --- | --- | --- |
 | `local` | Cloudflare Worker dev server | Rust server `/ws` | Rust server |
-| `cloud` | Cloudflare Workers | Durable Object relay | Rust server or external API |
+| `cloud` | Cloudflare Workers | Disabled until the Durable Object relay has user auth | Rust server or external API |
 | `onprem` | `workerd` container | Rust server `/ws` | Rust server |
 
 The Frontend Worker is always part of the frontend platform contract. In cloud

@@ -133,6 +133,14 @@ interface PendingEntry {
   resolve(result: AckResult): void
 }
 
+interface PlannedDecision {
+  readonly decision: PushDecision
+  readonly entry: PendingEntry
+  readonly collection: Collection
+  readonly recordId: RecordId
+  readonly recordIndex: string
+}
+
 /**
  * PGlite holds a single connection per data directory. Two clients on the same
  * directory corrupt each other, so fail loudly rather than subtly.
@@ -242,7 +250,7 @@ class PhotonClientImpl implements PhotonClient {
         [...this.pending.values()]
           .map((entry) => entry.operation)
           .filter((operation) => this.modeOf(operation.key.collection) !== 'passthrough'),
-      onDecision: (decision) => this.handleDecision(decision),
+      prepareDecisions: (decisions) => this.prepareDecisions(decisions),
       applyRemote: (operations) => this.applyRemoteOperations(operations),
       applySnapshot: (page) => this.applySnapshot(page),
       knownOperationIds: () => this.appliedOperationIds,
@@ -483,13 +491,58 @@ class PhotonClientImpl implements PhotonClient {
       }))
     }
 
+    const acceptedDecisions: Extract<PushDecision, { kind: 'accepted' }>[] = []
     for (const decision of decisions) {
       if (decision.kind === 'rejected') {
         this.resolvePassthroughRejection(decision, byOperationId.get(decision.operationId))
         continue
       }
-      this.handleDecision(decision)
+      if (decision.kind === 'conflict') {
+        await this.resolvePassthroughConflict(
+          decision,
+          byOperationId.get(decision.operationId),
+        )
+        continue
+      }
+      acceptedDecisions.push(decision)
     }
+    this.applyPassthroughAcceptances(acceptedDecisions)
+  }
+
+  private applyPassthroughAcceptances(
+    decisions: readonly Extract<PushDecision, { kind: 'accepted' }>[],
+  ): void {
+    const changes: RecordChange[] = []
+    for (const decision of decisions) {
+      const entry = this.pending.get(decision.operationId)
+      if (!entry) continue
+      this.pending.delete(decision.operationId)
+
+      const { collection, record_id: recordId } = entry.operation.key
+      const released = this.projection.releasePending(collection, recordId)
+      if (released) changes.push(released)
+
+      if (decision.aliasRecordId && decision.aliasRecordId !== recordId) {
+        const local = this.projection.get(collection, recordId)
+        const removed = this.projection.remove(collection, recordId)
+        if (removed) changes.push(removed)
+        if (local) {
+          const aliased: EngineRecord = {
+            key: { scope: this.scope, collection, record_id: decision.aliasRecordId },
+            value: local.value,
+            version: local.version,
+            field_versions: local.fieldVersions,
+            deleted_at: local.deletedAt,
+            updated_by: local.updatedBy,
+          }
+          const added = this.projection.set(aliased, { durable: false, aliasOf: recordId })
+          if (added) changes.push(added)
+        }
+      }
+
+      entry.resolve({ status: 'accepted', operationId: decision.operationId })
+    }
+    this.emit('remote', changes)
   }
 
   /**
@@ -522,6 +575,46 @@ class PhotonClientImpl implements PhotonClient {
       status: 'rejected',
       operationId: decision.operationId,
       reason: decision.reason,
+    })
+    this.emit('rollback', changes)
+  }
+
+  private async resolvePassthroughConflict(
+    decision: Extract<PushDecision, { kind: 'conflict' }>,
+    entry: { operation: Operation; previous: EngineRecord | null } | undefined,
+  ): Promise<void> {
+    const pending = this.pending.get(decision.operationId)
+    if (!pending || !entry) return
+
+    const { collection, record_id: recordId } = pending.operation.key
+    const conflict: Conflict = {
+      id: `${decision.operationId}:conflict`,
+      key: pending.operation.key,
+      operationId: decision.operationId,
+      reason: decision.reason,
+      localValue: this.projection.get(collection, recordId)?.value ?? null,
+      remoteValue: decision.remoteValue ?? null,
+      createdAtMs: this.clock(),
+    }
+    await this.commit({ conflicts: [conflict] })
+
+    this.pending.delete(decision.operationId)
+    const changes: RecordChange[] = []
+    const released = this.projection.releasePending(collection, recordId)
+    if (released) changes.push(released)
+    if (entry.previous) {
+      const change = this.projection.set(entry.previous, { durable: false })
+      if (change) changes.push(change)
+    } else {
+      const change = this.projection.remove(collection, recordId)
+      if (change) changes.push(change)
+    }
+
+    this.conflictRows = [...this.conflictRows, conflict]
+    pending.resolve({
+      status: 'conflict',
+      operationId: decision.operationId,
+      conflictId: conflict.id,
     })
     this.emit('rollback', changes)
   }
@@ -612,81 +705,170 @@ class PhotonClientImpl implements PhotonClient {
   // Sync callbacks
   // -------------------------------------------------------------------------
 
-  private handleDecision(decision: {
-    kind: 'accepted' | 'rejected' | 'conflict'
-    operationId: string
-    reason?: string
-    remoteValue?: unknown
-    remoteSequence?: number
-    aliasRecordId?: string
-  }): void {
-    const entry = this.pending.get(decision.operationId)
-    if (!entry) return
+  private async prepareDecisions(decisions: readonly PushDecision[]): Promise<{
+    readonly write: StoreWrite
+    apply(): void
+  }> {
+    const planned: PlannedDecision[] = []
+    const replayRecords = new Map<string, { collection: Collection; recordId: RecordId }>()
+    const excludedFromReplay = new Set<string>()
+    const conflictsByOperation = new Map<string, Conflict>()
 
-    const { collection, record_id: recordId } = entry.operation.key
-    this.pending.delete(decision.operationId)
+    for (const decision of decisions) {
+      const entry = this.pending.get(decision.operationId)
+      // The sync controller already proved this id belongs to the request. A
+      // missing entry here means the caller explicitly rolled it back while
+      // the request was in flight; its durable server decision still stands.
+      if (!entry) continue
 
-    const changes: RecordChange[] = []
-    const released = this.projection.releasePending(collection, recordId)
-    if (released) changes.push(released)
+      const { collection, record_id: recordId } = entry.operation.key
+      const recordIndex = this.projection.index(collection, recordId)
+      planned.push({ decision, entry, collection, recordId, recordIndex })
 
-    switch (decision.kind) {
-      case 'accepted': {
-        // A REST backend that assigns its own id: move the record in one
-        // ChangeSet so nothing ever observes both ids at once.
-        if (decision.aliasRecordId && decision.aliasRecordId !== recordId) {
-          const local = this.projection.get(collection, recordId)
-          const removed = this.projection.remove(collection, recordId)
-          if (removed) changes.push(removed)
-          if (local) {
-            const aliased: EngineRecord = {
-              key: { scope: this.scope, collection, record_id: decision.aliasRecordId },
-              value: local.value,
-              version: local.version,
-              field_versions: local.fieldVersions,
-              deleted_at: local.deletedAt,
-              updated_by: local.updatedBy,
-            }
-            const added = this.projection.set(aliased, { durable: true, aliasOf: recordId })
-            if (added) changes.push(added)
-          }
-        }
-        entry.resolve({ status: 'accepted', operationId: decision.operationId })
-        break
+      if (decision.kind === 'rejected' || decision.kind === 'conflict') {
+        excludedFromReplay.add(decision.operationId)
+        replayRecords.set(recordIndex, { collection, recordId })
       }
-
-      case 'rejected': {
-        entry.resolve({
-          status: 'rejected',
-          operationId: decision.operationId,
-          reason: decision.reason ?? 'rejected by server',
-        })
-        void this.reproject(collection, recordId, 'rollback')
-        break
-      }
-
-      case 'conflict': {
-        const conflict: Conflict = {
+      if (decision.kind === 'conflict') {
+        conflictsByOperation.set(decision.operationId, {
           id: `${decision.operationId}:conflict`,
           key: entry.operation.key,
           operationId: decision.operationId,
-          reason: decision.reason ?? 'conflicting concurrent write',
+          reason: decision.reason,
           localValue: this.projection.get(collection, recordId)?.value ?? null,
           remoteValue: decision.remoteValue ?? null,
           createdAtMs: this.clock(),
-        }
-        this.conflictRows = [...this.conflictRows, conflict]
-        void this.commit({ conflicts: [conflict] })
-        entry.resolve({
-          status: 'conflict',
-          operationId: decision.operationId,
-          conflictId: conflict.id,
         })
-        break
       }
     }
 
-    this.emit(decision.kind === 'rejected' ? 'rollback' : 'remote', changes)
+    const rebuiltRecords = new Map<
+      string,
+      { collection: Collection; recordId: RecordId; rebuilt: EngineRecord | null }
+    >()
+    for (const [recordIndex, { collection, recordId }] of replayRecords) {
+      const rebuilt = await this.rebuildRecord(collection, recordId, excludedFromReplay)
+      rebuiltRecords.set(recordIndex, { collection, recordId, rebuilt })
+    }
+
+    const records = new Map<string, EngineRecord>()
+    const deleteRecords = new Map<
+      string,
+      { scope: Scope; collection: Collection; recordId: RecordId }
+    >()
+    for (const [recordIndex, { collection, recordId, rebuilt }] of rebuiltRecords) {
+      if (rebuilt) records.set(recordIndex, rebuilt)
+      else deleteRecords.set(recordIndex, { scope: this.scope, collection, recordId })
+    }
+
+    // A REST backend may replace a temporary client id. Persist the swap in
+    // the same transaction as the accepted decision so reload cannot revive
+    // the temporary record.
+    for (const { decision, collection, recordId } of planned) {
+      if (
+        decision.kind !== 'accepted' ||
+        !decision.aliasRecordId ||
+        decision.aliasRecordId === recordId
+      ) {
+        continue
+      }
+      const local = this.toEngineRecord(collection, recordId)
+      if (!local) continue
+      const aliasIndex = this.projection.index(collection, decision.aliasRecordId)
+      records.set(aliasIndex, {
+        ...local,
+        key: { scope: this.scope, collection, record_id: decision.aliasRecordId },
+      })
+      deleteRecords.set(this.projection.index(collection, recordId), {
+        scope: this.scope,
+        collection,
+        recordId,
+      })
+    }
+
+    const conflicts = [...conflictsByOperation.values()]
+    return {
+      write: {
+        ...(records.size ? { records: [...records.values()] } : {}),
+        ...(deleteRecords.size ? { deleteRecords: [...deleteRecords.values()] } : {}),
+        ...(conflicts.length ? { conflicts } : {}),
+      },
+      apply: () => {
+        const remoteChanges: RecordChange[] = []
+        const rollbackChanges: RecordChange[] = []
+        const settlements: { resolve: (result: AckResult) => void; result: AckResult }[] = []
+
+        for (const { decision, entry, collection, recordId, recordIndex } of planned) {
+          this.pending.delete(decision.operationId)
+          const released = this.projection.releasePending(collection, recordId)
+          if (released) {
+            const changes = replayRecords.has(recordIndex) ? rollbackChanges : remoteChanges
+            changes.push(released)
+          }
+
+          switch (decision.kind) {
+            case 'accepted': {
+              if (decision.aliasRecordId && decision.aliasRecordId !== recordId) {
+                const local = this.projection.get(collection, recordId)
+                const removed = this.projection.remove(collection, recordId)
+                if (removed) remoteChanges.push(removed)
+                if (local) {
+                  const aliased: EngineRecord = {
+                    key: { scope: this.scope, collection, record_id: decision.aliasRecordId },
+                    value: local.value,
+                    version: local.version,
+                    field_versions: local.fieldVersions,
+                    deleted_at: local.deletedAt,
+                    updated_by: local.updatedBy,
+                  }
+                  const added = this.projection.set(aliased, {
+                    durable: true,
+                    aliasOf: recordId,
+                  })
+                  if (added) remoteChanges.push(added)
+                }
+              }
+              settlements.push({
+                resolve: entry.resolve,
+                result: { status: 'accepted', operationId: decision.operationId },
+              })
+              break
+            }
+            case 'rejected':
+              settlements.push({
+                resolve: entry.resolve,
+                result: {
+                  status: 'rejected',
+                  operationId: decision.operationId,
+                  reason: decision.reason,
+                },
+              })
+              break
+            case 'conflict': {
+              const conflict = conflictsByOperation.get(decision.operationId)!
+              settlements.push({
+                resolve: entry.resolve,
+                result: {
+                  status: 'conflict',
+                  operationId: decision.operationId,
+                  conflictId: conflict.id,
+                },
+              })
+              break
+            }
+          }
+        }
+
+        for (const { collection, recordId, rebuilt } of rebuiltRecords.values()) {
+          rollbackChanges.push(...this.applyRebuiltRecord(collection, recordId, rebuilt))
+        }
+        if (conflicts.length) this.conflictRows = [...this.conflictRows, ...conflicts]
+
+        this.emit('remote', remoteChanges)
+        this.emit('rollback', rollbackChanges)
+        for (const settlement of settlements) settlement.resolve(settlement.result)
+      },
+    }
   }
 
   /**
@@ -701,12 +883,49 @@ class PhotonClientImpl implements PhotonClient {
     recordId: RecordId,
     origin: 'rollback' | 'remote',
   ): Promise<void> {
+    this.emit(origin, await this.reprojectRecord(collection, recordId))
+  }
+
+  private async reprojectRecord(
+    collection: Collection,
+    recordId: RecordId,
+  ): Promise<RecordChange[]> {
+    const rebuilt = await this.rebuildRecord(collection, recordId)
+    return this.applyRebuiltRecord(collection, recordId, rebuilt)
+  }
+
+  private async rebuildRecord(
+    collection: Collection,
+    recordId: RecordId,
+    excludedPendingIds: ReadonlySet<string> = new Set(),
+  ): Promise<EngineRecord | null> {
     const accepted = await this.storage.loadAcceptedOperations(this.scope, collection, recordId)
-    const rebuilt = this.kernel.replay(
+    let rebuilt = this.kernel.replay(
       null,
       accepted.map((stored) => stored.operation),
     )
 
+    // A newer local operation can be created while the rejected request is in
+    // flight. It was not part of the response and must remain optimistic on
+    // top of the accepted base after rollback.
+    for (const entry of this.pending.values()) {
+      if (
+        entry.operation.key.collection === collection &&
+        entry.operation.key.record_id === recordId &&
+        !excludedPendingIds.has(entry.operation.id)
+      ) {
+        rebuilt = this.kernel.applyOperation(rebuilt, entry.operation)
+      }
+    }
+
+    return rebuilt
+  }
+
+  private applyRebuiltRecord(
+    collection: Collection,
+    recordId: RecordId,
+    rebuilt: EngineRecord | null,
+  ): RecordChange[] {
     const changes: RecordChange[] = []
     if (rebuilt) {
       const change = this.projection.set(rebuilt, { durable: true })
@@ -715,7 +934,7 @@ class PhotonClientImpl implements PhotonClient {
       const change = this.projection.remove(collection, recordId)
       if (change) changes.push(change)
     }
-    this.emit(origin, changes)
+    return changes
   }
 
   /**

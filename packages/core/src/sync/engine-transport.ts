@@ -7,6 +7,7 @@
  */
 
 import type { Operation } from '../types.js'
+import { SyncProtocolError } from './types.js'
 import type {
   PullRequest,
   PullResult,
@@ -36,33 +37,10 @@ export class SyncHttpError extends Error {
   }
 }
 
-interface WirePushResponse {
-  decisions?: {
-    operation_id: string
-    decision?: string
-    kind?: string
-    reason?: string
-    remote_sequence?: number
-    alias_record_id?: string
-    remote_value?: unknown
-  }[]
-}
-
 interface WirePullResponse {
   operations?: { operation: Operation; remote_sequence: number }[]
   cursor?: number | null
   has_more?: boolean
-}
-
-function normalizeDecisionKind(raw: string | undefined): PushDecision['kind'] {
-  switch (raw) {
-    case 'rejected':
-      return 'rejected'
-    case 'conflict':
-      return 'conflict'
-    default:
-      return 'accepted'
-  }
 }
 
 export function createEngineTransport(options: EngineTransportOptions): SyncTransport {
@@ -108,35 +86,13 @@ export function createEngineTransport(options: EngineTransportOptions): SyncTran
 
   return {
     async push(request: PushRequest): Promise<PushResult> {
-      const body = await post<WirePushResponse>(
+      const body = await post<unknown>(
         pushPath,
         { scope: request.scope, operations: request.operations },
         request.signal,
       )
 
-      const decisions: PushDecision[] = (body.decisions ?? []).map((raw) => {
-        const operationId = raw.operation_id
-        switch (normalizeDecisionKind(raw.decision ?? raw.kind)) {
-          case 'rejected':
-            return { kind: 'rejected', operationId, reason: raw.reason ?? 'rejected by server' }
-          case 'conflict':
-            return {
-              kind: 'conflict',
-              operationId,
-              reason: raw.reason ?? 'conflicting concurrent write',
-              ...(raw.remote_value === undefined ? {} : { remoteValue: raw.remote_value }),
-            }
-          default:
-            return {
-              kind: 'accepted',
-              operationId,
-              ...(raw.remote_sequence === undefined ? {} : { remoteSequence: raw.remote_sequence }),
-              ...(raw.alias_record_id === undefined ? {} : { aliasRecordId: raw.alias_record_id }),
-            }
-        }
-      })
-
-      return { decisions }
+      return { decisions: parsePushDecisions(body) }
     },
 
     async pull(request: PullRequest): Promise<PullResult> {
@@ -169,6 +125,93 @@ export function createEngineTransport(options: EngineTransportOptions): SyncTran
       }
     },
   }
+}
+
+function parsePushDecisions(body: unknown): PushDecision[] {
+  if (!isObject(body) || !Array.isArray(body.decisions)) {
+    throw new SyncProtocolError('Engine push response must contain a decisions array')
+  }
+  return body.decisions.map((raw, index) => parsePushDecision(raw, index))
+}
+
+function parsePushDecision(raw: unknown, index: number): PushDecision {
+  if (!isObject(raw)) {
+    throw new SyncProtocolError(`Engine push decision ${index} must be an object`)
+  }
+
+  const operationId = requiredString(raw.operation_id, `decision ${index} operation_id`)
+  const providedDiscriminants = [raw.type, raw.decision, raw.kind].filter(
+    (value) => value !== undefined,
+  )
+  if (
+    providedDiscriminants.some(
+      (value) => typeof value !== 'string' || value.length === 0,
+    )
+  ) {
+    throw new SyncProtocolError(`Engine push decision ${operationId} has an invalid decision kind`)
+  }
+  const discriminants = providedDiscriminants as string[]
+  if (!discriminants.length || new Set(discriminants).size !== 1) {
+    throw new SyncProtocolError(`Engine push decision ${operationId} has no single decision kind`)
+  }
+
+  switch (discriminants[0]) {
+    case 'accepted':
+      return {
+        kind: 'accepted',
+        operationId,
+        remoteSequence: requiredSafeInteger(raw.remote_sequence, 'remote_sequence'),
+        ...optionalString(raw.alias_record_id, 'alias_record_id'),
+      }
+    case 'rejected':
+      return {
+        kind: 'rejected',
+        operationId,
+        reason: requiredString(raw.reason, `rejected decision ${operationId} reason`),
+      }
+    case 'conflict': {
+      const conflict = isObject(raw.conflict) ? raw.conflict : raw
+      return {
+        kind: 'conflict',
+        operationId,
+        reason: requiredString(conflict.reason, `conflict decision ${operationId} reason`),
+        ...(conflict.remote_value === undefined ? {} : { remoteValue: conflict.remote_value }),
+      }
+    }
+    default:
+      throw new SyncProtocolError(
+        `Engine push decision ${operationId} has unsupported kind ${discriminants[0]}`,
+      )
+  }
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function requiredString(value: unknown, field: string): string {
+  if (typeof value !== 'string' || !value.length) {
+    throw new SyncProtocolError(`Engine push response ${field} must be a non-empty string`)
+  }
+  return value
+}
+
+function optionalString(
+  value: unknown,
+  field: string,
+): { aliasRecordId?: string } {
+  if (value === undefined) return {}
+  if (typeof value !== 'string' || !value.length) {
+    throw new SyncProtocolError(`Engine push response ${field} must be a non-empty string`)
+  }
+  return { aliasRecordId: value }
+}
+
+function requiredSafeInteger(value: unknown, field: string): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 0) {
+    throw new SyncProtocolError(`Engine push response ${field} must be a non-negative safe integer`)
+  }
+  return value as number
 }
 
 /** `AbortSignal.any` is not available everywhere yet. */

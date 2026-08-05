@@ -176,6 +176,30 @@ impl SyncEndpoint for RemoteHub {
     }
 }
 
+#[derive(Clone)]
+struct FixedDecisionEndpoint {
+    decisions: Vec<PushDecision>,
+}
+
+#[async_trait]
+impl SyncEndpoint for FixedDecisionEndpoint {
+    async fn push(&self, _request: PushRequest) -> photon_engine::Result<PushResult> {
+        Ok(PushResult {
+            decisions: self.decisions.clone(),
+            server_operations: Vec::new(),
+            cursor: None,
+        })
+    }
+
+    async fn pull(&self, request: PullRequest) -> photon_engine::Result<PullResult> {
+        Ok(PullResult {
+            operations: Vec::new(),
+            cursor: Some(SyncCursor::new(request.scope, "origin", 0)),
+            has_more: false,
+        })
+    }
+}
+
 #[tokio::test]
 async fn sync_once_converges_two_offline_clients_after_out_of_order_pushes() {
     let remote = RemoteHub::default();
@@ -318,6 +342,7 @@ async fn sync_once_records_conflicts_as_first_class_state() {
     assert_eq!(stored.status, OperationStatus::Conflict);
     assert_eq!(conflicts.len(), 1);
     assert_eq!(conflicts[0].operation_id, operation.id);
+    assert!(engine.record(&operation.key).await.unwrap().is_none());
 }
 
 #[tokio::test]
@@ -398,6 +423,76 @@ async fn sync_once_marks_server_rejections_without_retrying_them() {
     assert_eq!(first_summary.pushed, 1);
     assert_eq!(second_summary.pushed, 0);
     assert_eq!(stored.status, OperationStatus::Rejected);
+    assert!(engine.record(&operation.key).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn rejection_replays_an_accepted_sibling_on_the_same_record() {
+    let remote = RemoteHub::default();
+    let storage = MemoryAdapter::new();
+    let engine = PhotonEngine::new(storage);
+    let accepted = patch(
+        "issue-replay",
+        "actor-a",
+        10,
+        json!({ "title": "accepted" }),
+    )
+    .with_id("op-accepted");
+    engine.apply_local_operation(accepted).await.unwrap();
+    engine
+        .sync_once("workspace:test", "origin", &remote)
+        .await
+        .unwrap();
+
+    let rejected = patch(
+        "issue-replay",
+        "actor-a",
+        20,
+        json!({ "title": "rejected" }),
+    )
+    .with_id("op-rejected-sibling");
+    remote.clone().reject_operation(rejected.id.as_str());
+    engine.apply_local_operation(rejected).await.unwrap();
+    engine
+        .sync_once("workspace:test", "origin", &remote)
+        .await
+        .unwrap();
+
+    let record = engine.record(&key("issue-replay")).await.unwrap().unwrap();
+    assert_eq!(record.value["title"], "accepted");
+}
+
+#[tokio::test]
+async fn invalid_decision_set_keeps_the_operation_pending() {
+    let operation = patch(
+        "issue-protocol",
+        "actor-a",
+        10,
+        json!({ "title": "pending" }),
+    )
+    .with_id("op-pending-protocol");
+    let storage = MemoryAdapter::new();
+    let engine = PhotonEngine::new(storage.clone());
+    engine
+        .apply_local_operation(operation.clone())
+        .await
+        .unwrap();
+    let endpoint = FixedDecisionEndpoint {
+        decisions: Vec::new(),
+    };
+
+    let error = engine
+        .sync_once("workspace:test", "origin", &endpoint)
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, photon_engine::EngineError::SyncProtocol(_)));
+    let stored = storage.get_operation(&operation.id).await.unwrap().unwrap();
+    assert_eq!(stored.status, OperationStatus::Pending);
+    assert_eq!(
+        engine.record(&operation.key).await.unwrap().unwrap().value["title"],
+        "pending"
+    );
 }
 
 #[cfg(feature = "sqlite")]

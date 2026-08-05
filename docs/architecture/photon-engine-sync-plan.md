@@ -173,19 +173,37 @@ Use this map when tracing a sync bug from UI to storage:
   `/api/engine/debug`, and `/ws` (`crates/photon-axum/src/auth.rs`). Live
   rooms are pinned to the tenant in their room id, and `engine-changed`
   wake-ups only reach rooms of the pushing tenant.
-- Done: per-operation domain authorization hook — every pushed operation is
-  evaluated against an `EnginePolicy` before it is applied; a rejection
+- Done: the separate Cloudflare Durable Object `/ws` route fails closed with
+  HTTP 403 until it has an authenticated user-session boundary. Its relay code
+  is not a public write path.
+- Done: batch-capable domain authorization hook — every pushed batch is
+  evaluated against an `EnginePolicy` before it is applied (with a default
+  per-operation adapter); a rejection
   becomes a per-operation `PushDecision::Rejected` that the client rolls back
   by replay (`crates/photon-axum/src/policy.rs`). The host supplies the
   policy via `build_state_with_auth_and_policy`; the default allows whatever
   the token grant allowed.
-- Done: audit metadata on accepted operations — the server stamps
-  `metadata.photon_audit` (authorized principal kind, tenant, request id,
-  receive time) into each accepted operation before it enters the log, so
-  audit travels durably with the operation itself.
+- Done: typed audit metadata on accepted operations — the server stamps
+  `metadata.photon_audit` (principal type, optional opaque user id,
+  service grant, tenant/workspace, server request id, receive time) into each
+  accepted operation before it enters the log, so audit travels durably with
+  the operation itself. Tokens, names, email addresses, and other profile data
+  are not audit fields.
 - Remaining: wire Tachyon's identity into an `EnginePolicy` implementation so
   the per-user answer ("may this user move this issue?") comes from real
   sessions rather than token grants.
+- Approved identity design: Photon will verify a short-lived Tachyon JWT
+  locally for authentication, then evaluate domain authorization at the
+  protected Photon write boundary. Service/workload identity and user identity
+  remain separate credentials. Local verification intentionally accepts that
+  account disable or token revocation can take up to the current five-minute
+  token lifetime to affect Photon; that delay is an explicit availability
+  tradeoff, not an immediate-revocation guarantee.
+- Approved delivery split: the first MVP protects push/write behavior. Read
+  authorization, visibility-specific workspaces/cursors, authenticated Live,
+  and multi-record ERP commands are a separate phase. The pull cursor remains
+  unchanged in the write MVP so that phase can define visibility semantics
+  without inheriting a client-side filtering shortcut.
 - Keep business validation outside Photon Live.
 
 ### 6. TiDB/MySQL Production Hardening

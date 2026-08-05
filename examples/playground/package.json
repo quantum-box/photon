@@ -6,7 +6,7 @@
   "description": "Dogfooding app for the Photon engine. Not a product \u2014 a regression surface.",
   "scripts": {
     "dev": "vite",
-    "dev:cf-sync": "VITE_PHOTON_SYNC_WS_URL=ws://127.0.0.1:8787/ws vite",
+    "dev:cf-sync": "VITE_PHOTON_SYNC_WS_URL=ws://127.0.0.1:3001/ws VITE_PHOTON_API_BASE_URL=http://127.0.0.1:8787 vite",
     "build": "tsc -b && vite build",
     "type-check": "tsc -b --noEmit",
     "test": "vitest run",

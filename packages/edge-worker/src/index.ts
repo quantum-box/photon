@@ -1,10 +1,16 @@
 import { DurableObject } from 'cloudflare:workers'
 import * as Y from 'yjs'
 
+import {
+  CLOSED_UNAUTHENTICATED_LIVE_ROUTE,
+  MISSING_USER_IDENTITY,
+  callerAuthorization,
+  closedUnauthenticatedLiveRoute,
+} from './security.js'
+
 export interface Env {
   PHOTON_SYNC_ROOMS: DurableObjectNamespace<PhotonSyncRoom>
   PHOTON_CLOUD_ENGINE_BASE_URL?: string
-  PHOTON_EDGE_SERVICE_TOKEN?: string
 }
 
 const DEFAULT_ROOM_ID = 'records'
@@ -117,6 +123,14 @@ async function proxyEngineRequest(request: Request, env: Env, path: string): Pro
   let requestBytes = 0
 
   try {
+    const authorization = callerAuthorization(request.headers.get('authorization'))
+    if (!authorization) {
+      return jsonResponse(
+        { error: MISSING_USER_IDENTITY.error },
+        { status: MISSING_USER_IDENTITY.status },
+      )
+    }
+
     const body = request.method === 'GET' ? undefined : await request.arrayBuffer()
     requestBytes = body?.byteLength ?? 0
     if (requestBytes > MAX_PROXY_BODY_BYTES) {
@@ -141,16 +155,10 @@ async function proxyEngineRequest(request: Request, env: Env, path: string): Pro
     const headers = new Headers()
     headers.set('content-type', request.headers.get('content-type') || 'application/json')
     headers.set('x-photon-request-id', id)
-    // The caller's own bearer token wins: the cloud engine authorizes per
-    // tenant, and a user token carries a narrower grant than the edge's
-    // service token. The service token is the fallback for callers the edge
-    // itself has already authenticated some other way.
-    const callerAuthorization = request.headers.get('authorization')
-    if (callerAuthorization) {
-      headers.set('authorization', callerAuthorization)
-    } else if (env.PHOTON_EDGE_SERVICE_TOKEN) {
-      headers.set('authorization', `Bearer ${env.PHOTON_EDGE_SERVICE_TOKEN}`)
-    }
+    // User identity and edge-to-engine workload identity are separate
+    // credentials. Until workload identity is wired in, forward only the
+    // caller credential and never upgrade an anonymous request to a service.
+    headers.set('authorization', authorization)
 
     const response = await fetch(target, {
       method: request.method,
@@ -213,11 +221,6 @@ const ENGINE_CHANGED_MESSAGE = JSON.stringify({ type: 'engine-changed' })
 /** Text frames relayed verbatim between sockets in a room. */
 const RELAYED_TEXT_TYPES = new Set(['awareness', 'engine-changed'])
 
-function getRoomId(request: Request): string {
-  const url = new URL(request.url)
-  return url.searchParams.get('room') || DEFAULT_ROOM_ID
-}
-
 function toUint8Array(message: ArrayBuffer | ArrayBufferView): Uint8Array {
   if (message instanceof ArrayBuffer) return new Uint8Array(message)
   return new Uint8Array(message.buffer, message.byteOffset, message.byteLength)
@@ -248,6 +251,7 @@ export default {
           cloudEngineBaseUrl: cloudEngineBaseUrl(env),
           engineProxyPaths: Array.from(ENGINE_PROXY_PATHS),
           logLimit: EDGE_LOG_LIMIT,
+          livePublicAccess: 'disabled',
         },
         logs: edgeSyncLogs,
       })
@@ -279,12 +283,12 @@ export default {
       return response
     }
 
-    if (url.pathname !== '/ws') {
-      return new Response('Not found', { status: 404 })
+    const liveDenial = closedUnauthenticatedLiveRoute(url.pathname)
+    if (liveDenial) {
+      return jsonResponse({ error: liveDenial.error }, { status: liveDenial.status })
     }
 
-    const id = env.PHOTON_SYNC_ROOMS.idFromName(getRoomId(request))
-    return env.PHOTON_SYNC_ROOMS.get(id).fetch(request)
+    return new Response('Not found', { status: 404 })
   },
 }
 
@@ -299,25 +303,21 @@ export class PhotonSyncRoom extends DurableObject<Env> {
     super(ctx, env)
   }
 
-  async fetch(request: Request): Promise<Response> {
-    if (request.headers.get('Upgrade') !== 'websocket') {
-      return new Response('Expected WebSocket upgrade', { status: 426 })
-    }
-
-    const pair = new WebSocketPair()
-    const [client, server] = Object.values(pair)
-
-    this.ctx.acceptWebSocket(server)
-    await this.sendInitialSnapshot(server)
-    this.broadcastPresence()
-
-    return new Response(null, {
-      status: 101,
-      webSocket: client,
-    })
+  async fetch(): Promise<Response> {
+    const denial = CLOSED_UNAUTHENTICATED_LIVE_ROUTE
+    return jsonResponse({ error: denial.error }, { status: denial.status })
   }
 
   async webSocketMessage(sender: WebSocket, message: string | ArrayBuffer | ArrayBufferView) {
+    // A connection created by an older deployment can outlive a Worker
+    // rollout. Do not let such a socket retain a write path after `/ws` has
+    // been closed at both HTTP entry points.
+    const liveDenial = closedUnauthenticatedLiveRoute('/ws')
+    if (liveDenial) {
+      sender.close(1008, liveDenial.error)
+      return
+    }
+
     if (typeof message === 'string') {
       this.relayTextFrame(sender, message)
       return
@@ -395,12 +395,6 @@ export class PhotonSyncRoom extends DurableObject<Env> {
     )
 
     return doc
-  }
-
-  private async sendInitialSnapshot(socket: WebSocket) {
-    const doc = await this.ensureDoc()
-    const snapshot = Y.encodeStateAsUpdate(doc)
-    socket.send(snapshot)
   }
 
   private async tryApplyAndPersist(update: Uint8Array): Promise<boolean> {
