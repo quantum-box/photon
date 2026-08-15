@@ -60,7 +60,8 @@ jobs:
           # the self-hosted runner container has no FUSE to mount them with.
           # Extracting instead of mounting is the supported fallback.
           APPIMAGE_EXTRACT_AND_RUN: "1"
-        run: npm run tauri:build
+          NO_STRIP: "true"
+        run: npm run tauri:build -- --verbose
 
   tauri-android-smoke:
     name: Tauri Android smoke build
