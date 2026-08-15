@@ -23,7 +23,7 @@ concurrency:
 jobs:
   tauri-smoke:
     name: Tauri smoke build
-    runs-on: ubuntu-22.04
+    runs-on: tachyoncloud-4vcpu
 
     steps:
       - uses: actions/checkout@v6
@@ -59,7 +59,7 @@ jobs:
 
   tauri-android-smoke:
     name: Tauri Android smoke build
-    runs-on: ubuntu-latest
+    runs-on: tachyoncloud-4vcpu
 
     steps:
       - uses: actions/checkout@v6
