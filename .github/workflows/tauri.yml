@@ -55,6 +55,11 @@ jobs:
         # Run from the workspace itself: `npm run x -- --flag` through a
         # delegating root script hands --flag to npm, not to the tauri CLI.
         working-directory: examples/playground
+        env:
+          # linuxdeploy and its AppImage plugin are themselves AppImages, and
+          # the self-hosted runner container has no FUSE to mount them with.
+          # Extracting instead of mounting is the supported fallback.
+          APPIMAGE_EXTRACT_AND_RUN: "1"
         run: npm run tauri:build
 
   tauri-android-smoke:

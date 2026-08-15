@@ -130,6 +130,10 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # linuxdeploy and its AppImage plugin are themselves AppImages, and
+          # the self-hosted runner container has no FUSE to mount them with.
+          # Extracting instead of mounting is the supported fallback.
+          APPIMAGE_EXTRACT_AND_RUN: "1"
         with:
           releaseId: ${{ needs.prepare-release.outputs.release_id }}
           args: ${{ matrix.args }}
