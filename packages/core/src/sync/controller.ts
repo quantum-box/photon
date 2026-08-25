@@ -19,6 +19,7 @@ import type { Collection, EngineRecord, Operation, Scope } from '../types.js'
 import type {
   PullResult,
   PushDecision,
+  RemoteChangeHint,
   SyncController,
   SyncError,
   SyncReason,
@@ -67,6 +68,7 @@ export class SyncEngine implements SyncController {
   private queued: Promise<SyncSummary> | null = null
   private consecutiveNetworkFailures = 0
   private pushTimer: ReturnType<typeof setTimeout> | null = null
+  private pullHintTimer: ReturnType<typeof setTimeout> | null = null
   private pollTimer: ReturnType<typeof setInterval> | null = null
   private retryTimer: ReturnType<typeof setTimeout> | null = null
   private readonly backoff = createBackoff()
@@ -133,9 +135,10 @@ export class SyncEngine implements SyncController {
   stop(): void {
     this.running = false
     if (this.pushTimer) clearTimeout(this.pushTimer)
+    if (this.pullHintTimer) clearTimeout(this.pullHintTimer)
     if (this.pollTimer) clearInterval(this.pollTimer)
     if (this.retryTimer) clearTimeout(this.retryTimer)
-    this.pushTimer = this.retryTimer = null
+    this.pushTimer = this.pullHintTimer = this.retryTimer = null
     this.pollTimer = null
     for (const off of this.detach) off()
     this.detach = []
@@ -152,10 +155,30 @@ export class SyncEngine implements SyncController {
     }, this.options.pushDebounceMs)
   }
 
-  /** Called when a realtime frame says the server has news. */
-  notifyRemoteChange(): void {
+  /**
+   * Called when a realtime frame says the server has news.
+   *
+   * Rides the same debounce as local mutations, so a burst of frames becomes
+   * one pull, and the single-flight in `syncNow` keeps it from overlapping a
+   * running cycle. When the frame carried a cursor at or behind ours, the
+   * server has nothing we lack — usually the echo of our own push — and no
+   * pull is scheduled at all.
+   */
+  notifyRemoteChange(hint?: RemoteChangeHint): void {
     if (!this.running || !this.options.transport) return
-    void this.syncNow('realtime')
+    const hintCursor = hint?.cursor
+    if (
+      typeof hintCursor === 'number' &&
+      this.status.cursor !== null &&
+      hintCursor <= this.status.cursor
+    ) {
+      return
+    }
+    if (this.pullHintTimer) clearTimeout(this.pullHintTimer)
+    this.pullHintTimer = setTimeout(() => {
+      this.pullHintTimer = null
+      void this.syncNow('realtime')
+    }, this.options.pushDebounceMs)
   }
 
   setRealtimeState(state: SyncStatus['realtime']): void {

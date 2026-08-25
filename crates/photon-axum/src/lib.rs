@@ -173,6 +173,14 @@ pub struct AppState {
     pub db: SqlitePool,
     pub engine: PhotonEngine<ServerEngineAdapter>,
     pub engine_next_seq: AtomicI64,
+    /// Serializes remote-sequence assignment with the operation write.
+    ///
+    /// Without it two concurrent pushes can commit out of sequence order, and
+    /// a pull issued in that window returns sequence N+1 while N is still
+    /// uncommitted — the client's cursor then advances past N and never sees
+    /// it. The op-log is the durable truth, so a permanently skipped
+    /// operation is data loss on every other client.
+    pub engine_push_lock: tokio::sync::Mutex<()>,
     pub rooms: RwLock<HashMap<String, Arc<RoomState>>>,
     pub auth: AuthConfig,
     /// Domain-level write authorization, consulted per pushed operation.
@@ -530,6 +538,7 @@ pub async fn build_state_with_auth_and_policy(
         db: pool,
         engine,
         engine_next_seq: AtomicI64::new(engine_next_seq),
+        engine_push_lock: tokio::sync::Mutex::new(()),
         rooms: RwLock::new(HashMap::new()),
         auth,
         policy,
@@ -697,11 +706,18 @@ async fn push_engine_operations(
             chrono::Utc::now().timestamp_millis(),
         );
 
-        let remote_sequence = state.engine_next_seq.fetch_add(1, Ordering::SeqCst) + 1;
-        state
-            .engine
-            .apply_remote_operation(operation.clone(), remote_sequence)
-            .await?;
+        // Assign and commit under one lock: commit order must equal sequence
+        // order, or a concurrent pull skips the not-yet-committed sequence
+        // forever (see `engine_push_lock`).
+        let remote_sequence = {
+            let _guard = state.engine_push_lock.lock().await;
+            let remote_sequence = state.engine_next_seq.fetch_add(1, Ordering::SeqCst) + 1;
+            state
+                .engine
+                .apply_remote_operation(operation.clone(), remote_sequence)
+                .await?;
+            remote_sequence
+        };
         accepted_count += 1;
         decisions.push(PushDecision::Accepted {
             operation_id: operation.id,
@@ -735,7 +751,7 @@ async fn push_engine_operations(
     // a change-notification frame is cheap, but it still must not leak the
     // fact that another tenant's data changed.
     if accepted_count > 0 {
-        broadcast_engine_changed(&state, &workspace.tenant_id).await;
+        broadcast_engine_changed(&state, &workspace.tenant_id, max_remote_sequence).await;
     }
 
     Ok(Json(PushResult {
@@ -746,15 +762,22 @@ async fn push_engine_operations(
 }
 
 /// Text frame sent over Photon Live sockets when the Engine op-log advanced.
-const ENGINE_CHANGED_FRAME: &str = r#"{"type":"engine-changed"}"#;
+///
+/// The payload is a pull hint, nothing more: the cursor lets a client skip the
+/// pull when it has already caught up, but the operations themselves only ever
+/// travel over the Engine pull endpoint. Live never carries durable truth.
+fn engine_changed_frame(cursor: i64) -> String {
+    format!(r#"{{"type":"engine-changed","cursor":{cursor}}}"#)
+}
 
-async fn broadcast_engine_changed(state: &AppState, tenant_id: &str) {
+async fn broadcast_engine_changed(state: &AppState, tenant_id: &str, cursor: i64) {
+    let frame = engine_changed_frame(cursor);
     for room in state.rooms.read().await.values() {
         if room.tenant_id != tenant_id {
             continue;
         }
         // Send fails only when a room has no subscribers, which is fine.
-        let _ = room.presence_tx.send(ENGINE_CHANGED_FRAME.to_string());
+        let _ = room.presence_tx.send(frame.clone());
     }
 }
 
@@ -787,6 +810,7 @@ async fn pull_engine_operations(
             ..OperationFilter::default()
         })
         .await?;
+    let fetched_count = operations.len();
 
     let mut max_remote_sequence = payload
         .cursor
@@ -818,7 +842,9 @@ async fn pull_engine_operations(
 
     Ok(Json(PullResult {
         // A full page means there is very likely another one behind it.
-        has_more: pulled_count >= limit,
+        // Counted before the remote-sequence filter: one legacy accepted row
+        // without a sequence must not end paging for everything behind it.
+        has_more: fetched_count >= limit,
         operations: pulled,
         cursor: Some(SyncCursor::new(
             payload.scope,
@@ -1587,6 +1613,7 @@ mod tests {
             db: pool,
             engine,
             engine_next_seq: AtomicI64::new(engine_next_seq),
+            engine_push_lock: tokio::sync::Mutex::new(()),
             rooms: RwLock::new(HashMap::new()),
             auth,
             policy,
@@ -2177,13 +2204,144 @@ mod tests {
         let mut acme_rx = acme_room.presence_tx.subscribe();
         let mut default_rx = default_room.presence_tx.subscribe();
 
-        broadcast_engine_changed(&state, "acme").await;
+        broadcast_engine_changed(&state, "acme", 42).await;
 
-        assert_eq!(acme_rx.try_recv().unwrap(), ENGINE_CHANGED_FRAME);
+        // The frame is a pull hint: the cursor rides along, operations do not.
+        let frame = acme_rx.try_recv().unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&frame).unwrap();
+        assert_eq!(parsed["type"], "engine-changed");
+        assert_eq!(parsed["cursor"], 42);
         assert!(
             default_rx.try_recv().is_err(),
             "a default-tenant room must not learn about another tenant's push"
         );
+    }
+
+    #[tokio::test]
+    async fn test_pull_paging_survives_a_legacy_row_without_a_remote_sequence() {
+        let (app, state) = engine_test_app().await;
+
+        // A legacy row: accepted before the server started assigning remote
+        // sequences. It sits first in local order, inside the first page.
+        state
+            .engine
+            .storage()
+            .append_operation(
+                Operation::new(
+                    engine_record_key("records", "legacy-1"),
+                    ActorId::from("legacy-client"),
+                    OperationKind::Upsert {
+                        value: serde_json::json!({ "id": "legacy-1" }),
+                    },
+                ),
+                OperationStatus::Accepted,
+            )
+            .await
+            .unwrap();
+
+        let operations: Vec<_> = (1..=3)
+            .map(|i| {
+                Operation::new(
+                    engine_record_key("records", &format!("record-page-{i}")),
+                    ActorId::from("client-a"),
+                    OperationKind::Upsert {
+                        value: serde_json::json!({ "id": format!("record-page-{i}") }),
+                    },
+                )
+            })
+            .collect();
+        let push_resp = app
+            .clone()
+            .oneshot(json_post(
+                "/api/engine/push",
+                None,
+                serde_json::to_string(&PushRequest {
+                    scope: default_workspace_scope(),
+                    operations,
+                    cursor: None,
+                })
+                .unwrap(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(push_resp.status(), StatusCode::OK);
+
+        // First page, limit 3: the fetch is [legacy, seq 1, seq 2]. Only two
+        // rows have a sequence, but the page was full — paging must continue,
+        // or everything behind the legacy row becomes unreachable.
+        let pull = |cursor: Option<SyncCursor>| {
+            let app = app.clone();
+            async move {
+                let resp = app
+                    .oneshot(json_post(
+                        "/api/engine/pull",
+                        None,
+                        serde_json::to_string(&PullRequest {
+                            scope: default_workspace_scope(),
+                            cursor,
+                            limit: Some(3),
+                        })
+                        .unwrap(),
+                    ))
+                    .await
+                    .unwrap();
+                assert_eq!(resp.status(), StatusCode::OK);
+                let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+                    .await
+                    .unwrap();
+                serde_json::from_slice::<PullResult>(&body).unwrap()
+            }
+        };
+
+        let first = pull(None).await;
+        assert_eq!(first.operations.len(), 2);
+        assert!(first.has_more, "a full fetch page must keep paging");
+
+        let second = pull(first.cursor.clone()).await;
+        assert_eq!(second.operations.len(), 1);
+        assert_eq!(second.operations[0].remote_sequence, 3);
+    }
+
+    #[tokio::test]
+    async fn test_push_broadcasts_the_advanced_cursor_as_a_pull_hint() {
+        let (app, state) = engine_test_app().await;
+        let room = get_or_create_room(&state, "records").await.unwrap();
+        let mut rx = room.presence_tx.subscribe();
+
+        let operations: Vec<_> = (1..=2)
+            .map(|i| {
+                Operation::new(
+                    engine_record_key("issues", &format!("issue-hint-{i}")),
+                    ActorId::from("client-a"),
+                    OperationKind::Upsert {
+                        value: serde_json::json!({ "id": format!("issue-hint-{i}") }),
+                    },
+                )
+            })
+            .collect();
+
+        let resp = app
+            .oneshot(json_post(
+                "/api/engine/push",
+                None,
+                serde_json::to_string(&PushRequest {
+                    scope: default_workspace_scope(),
+                    operations,
+                    cursor: None,
+                })
+                .unwrap(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // The hint carries the sequence the push advanced to — cursor only,
+        // never the operations themselves.
+        let frame = rx.try_recv().unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&frame).unwrap();
+        assert_eq!(parsed["type"], "engine-changed");
+        assert_eq!(parsed["cursor"], 2);
+        assert!(parsed.get("operations").is_none());
     }
 
     #[test]

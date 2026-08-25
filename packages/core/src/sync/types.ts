@@ -130,15 +130,27 @@ export interface SyncSummary {
   readonly conflicts: number
 }
 
+/**
+ * What a realtime pull hint may carry: at most a cursor. The operations
+ * themselves only ever arrive through `SyncTransport.pull` — the realtime
+ * channel is a doorbell, not a delivery.
+ */
+export interface RemoteChangeHint {
+  /** The remote sequence the server's op-log advanced to, if the frame said. */
+  readonly cursor?: number | null
+}
+
 export interface SyncController {
   getStatus(): SyncStatus
   subscribe(listener: () => void): () => void
   syncNow(reason?: SyncReason): Promise<SyncSummary>
   /**
    * A realtime frame said the server has news. No-op unless the loop is
-   * running: a stopped loop must stay stopped, realtime or not.
+   * running: a stopped loop must stay stopped, realtime or not. A hint cursor
+   * at or behind the local cursor skips the pull entirely — that frame was the
+   * echo of work this client has already synced.
    */
-  notifyRemoteChange(): void
+  notifyRemoteChange(hint?: RemoteChangeHint): void
   /**
    * Mirror the realtime channel's connection state. While `connected`, the
    * poll timer stands down; anything else re-arms polling as the safety net.

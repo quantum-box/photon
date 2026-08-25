@@ -398,6 +398,85 @@ test.describe('Photon shell', () => {
     await secondPage.close()
   })
 
+  test('delivers a record to a second client through the Live pull hint without reloading', async ({
+    page,
+    browser,
+  }) => {
+    const title = `E2E live hint record ${Date.now()}`
+
+    await page.goto('/databases')
+
+    // A separate browser profile: the reader shares no local storage with the
+    // writer, so the record can only arrive through the server.
+    const readerContext = await browser.newContext()
+    const reader = await readerContext.newPage()
+    await reader.goto('/databases')
+
+    // Both tabs must be on the Live socket before the write — the pull hint
+    // is a realtime frame, so a reader still connecting would miss it.
+    for (const target of [page, reader]) {
+      await expect
+        .poll(
+          async () =>
+            Number((await target.getByTestId('sync-presence-status').innerText()).split(' ')[0]),
+          { timeout: 15_000 }
+        )
+        .toBeGreaterThanOrEqual(2)
+    }
+
+    // Filter first, so the reader never reloads or navigates after the write.
+    await reader.getByPlaceholder('Filter records...').fill(title)
+
+    await page.getByTestId('open-create-record').click()
+    await page.getByLabel(/Record title/i).fill(title)
+    await page.getByLabel('Description').fill('Delivered through the engine-changed pull hint')
+    await page.getByTestId('create-record-submit').click()
+    await expect(page.getByTestId('create-record-modal')).toBeHidden()
+
+    // No reload, and well inside the 30 s poll interval: appearing here means
+    // the pull was triggered by the Live hint, not by polling.
+    await expect(reader.getByText(title).first()).toBeVisible({ timeout: 20_000 })
+
+    await readerContext.close()
+  })
+
+  test('keeps syncing records between clients when the Live socket is unreachable', async ({
+    browser,
+  }) => {
+    const title = `E2E live-down record ${Date.now()}`
+
+    // Kill the Photon Live socket at the browser boundary (and only it — the
+    // vite dev client's HMR socket must survive): Live is down for both
+    // profiles, the Engine REST endpoints stay up. Sync must keep working on
+    // its existing triggers (startup, mutation, poll) alone.
+    const writerContext = await browser.newContext()
+    await writerContext.routeWebSocket(/\/ws(\?|$)/, (ws) => {
+      ws.close()
+    })
+    const writer = await writerContext.newPage()
+    await writer.goto('/databases')
+
+    await writer.getByTestId('open-create-record').click()
+    await writer.getByLabel(/Record title/i).fill(title)
+    await writer.getByLabel('Description').fill('Written while Photon Live was unreachable')
+    await writer.getByTestId('create-record-submit').click()
+    await expect(writer.getByTestId('create-record-modal')).toBeHidden()
+
+    const readerContext = await browser.newContext()
+    await readerContext.routeWebSocket(/\/ws(\?|$)/, (ws) => {
+      ws.close()
+    })
+    const reader = await readerContext.newPage()
+    await expect(async () => {
+      await reader.goto('/databases')
+      await reader.getByPlaceholder('Filter records...').fill(title)
+      await expect(reader.getByText(title).first()).toBeVisible({ timeout: 15_000 })
+    }).toPass({ timeout: 60_000 })
+
+    await readerContext.close()
+    await writerContext.close()
+  })
+
   test('keeps an offline Engine record across a reload and converges after reconnect', async ({
     page,
     context,
