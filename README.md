@@ -2,7 +2,7 @@
 
 ローカルファーストな同期エンジン。**オフラインでも書き込みが消えず、操作が即座に画面に出て、復帰時に収束する** — これだけを提供する。
 
-UI は持たない。データに集中している。
+UI は持たない。データに集中している。設計思想は [docs/architecture/design-principles.md](docs/architecture/design-principles.md) を参照。
 
 ```ts
 import { createPhotonClient, createEngineTransport } from '@quantum-box/photon'
