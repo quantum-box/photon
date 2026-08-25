@@ -881,8 +881,10 @@ class PhotonClientImpl implements PhotonClient {
     this.emit('remote', changes)
   }
 
-  private async applyRemoteOperations(operations: readonly Operation[]): Promise<void> {
-    if (!operations.length) return
+  private async applyRemoteOperations(
+    operations: readonly Operation[],
+  ): Promise<readonly EngineRecord[]> {
+    if (!operations.length) return []
 
     // Merging a remote operation needs the record's current state as its base.
     // For a lazy collection that base may still be in storage only, so pull
@@ -920,6 +922,7 @@ class PhotonClientImpl implements PhotonClient {
       if (change) changes.push(change)
     }
     this.emit('remote', changes)
+    return result.records
   }
 
   // -------------------------------------------------------------------------

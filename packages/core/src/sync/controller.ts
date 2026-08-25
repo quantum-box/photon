@@ -15,7 +15,7 @@
 
 import { createBackoff } from './backoff.js'
 import type { LocalStore, OperationStatusUpdate } from '../store.js'
-import type { Collection, Operation, Scope } from '../types.js'
+import type { Collection, EngineRecord, Operation, Scope } from '../types.js'
 import type {
   PullResult,
   PushDecision,
@@ -39,8 +39,17 @@ export interface SyncEngineOptions {
   readonly requestTimeoutMs?: number
   collectPending(): Operation[]
   onDecision(decision: PushDecision): void
-  /** May be async: applying to a lazy collection hydrates it first. */
-  applyRemote(operations: readonly Operation[]): void | Promise<void>
+  /**
+   * Apply pulled operations and return the merged records, so they can be
+   * committed alongside the operations. The projection alone is memory: without
+   * this, a pulled edit is filtered as already-applied on the next sync and its
+   * value simply does not exist after a reload.
+   *
+   * May be async: applying to a lazy collection hydrates it first.
+   */
+  applyRemote(
+    operations: readonly Operation[],
+  ): readonly EngineRecord[] | Promise<readonly EngineRecord[]>
   /** A server with no operation log returned current state instead. */
   applySnapshot(page: Extract<PullResult, { kind: 'snapshot' }>): void
   knownOperationIds(): ReadonlySet<string>
@@ -254,15 +263,16 @@ export class SyncEngine implements SyncController {
         const fresh = page.operations.filter((row) => !known.has(row.operation.id))
         const operations = fresh.map((row) => row.operation)
 
-        await this.options.applyRemote(operations)
+        const records = await this.options.applyRemote(operations)
         summary.pulled += operations.length
 
         cursor = page.cursor ?? page.operations[page.operations.length - 1]!.remoteSequence
 
-        // Operations and cursor commit together: a crash between them would
-        // otherwise skip a page permanently.
+        // Operations, their merged records, and cursor commit together: a
+        // crash between them would otherwise skip a page permanently.
         await this.options.store.commit({
           operations,
+          records,
           statusUpdates: operations.map((operation) => ({
             operationId: operation.id,
             status: 'accepted' as const,
