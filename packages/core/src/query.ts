@@ -81,7 +81,7 @@ function isComparison(value: unknown): value is Comparison {
   return ['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'in', 'nin', 'contains', 'exists'].includes(keys[0]!)
 }
 
-function readField(value: unknown, field: string): unknown {
+export function readField(value: unknown, field: string): unknown {
   if (typeof value !== 'object' || value === null) return undefined
   // Dotted paths so nested values are reachable without a function predicate.
   let current: unknown = value

@@ -22,7 +22,7 @@ export type { PhotonKernel, PhotonKernelModule, OperationIntent } from './kernel
 export { buildRoomId, buildWorkspaceScope, namespacedKey, recordKeyIndex } from './scope.js'
 export type { WorkspaceScopeInput } from './scope.js'
 
-export { buildComparator, matchesWhere } from './query.js'
+export { buildComparator, matchesWhere, readField } from './query.js'
 export type {
   Comparison,
   LiveQuery,
