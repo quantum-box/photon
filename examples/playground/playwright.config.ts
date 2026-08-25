@@ -28,9 +28,12 @@ export default defineConfig({
     {
       command: 'cargo run --bin photon-server',
       cwd: '../..',
-      // Every Playwright invocation owns a fresh server database. Reusing the
-      // development database makes E2E timing and results depend on prior runs.
-      env: { DATABASE_URL: 'sqlite::memory:' },
+      // Override both server database inputs so an inherited Engine-specific
+      // URL cannot bypass this fresh E2E database.
+      env: {
+        DATABASE_URL: 'sqlite::memory:',
+        PHOTON_ENGINE_DATABASE_URL: 'sqlite::memory:',
+      },
       url: 'http://127.0.0.1:3001/api/health',
       reuseExistingServer: false,
       timeout: 120_000,
