@@ -698,6 +698,10 @@ test.describe('Photon shell', () => {
   })
 
   test('creates a doc and syncs Yjs blocks from a shared document URL', async ({ page, browser }) => {
+    // The retry below needs up to 90s after both clients have cold-booted.
+    // Keep the enclosing test timeout large enough for that budget to exist.
+    test.setTimeout(180_000)
+
     const title = `E2E local doc ${Date.now()}`
 
     await page.goto('/docs')

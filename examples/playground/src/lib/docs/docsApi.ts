@@ -4,6 +4,7 @@ import {
   listClientEngineRecords,
   getClientEngineRecord,
   patchClientEngineRecord,
+  syncClientEngineOperations,
   upsertClientEngineRecord,
 } from '../photonEngine/client'
 
@@ -54,6 +55,14 @@ export async function fetchServerDocuments(): Promise<DocMetadata[]> {
 }
 
 export async function fetchServerDocument(docId: string): Promise<DocMetadata> {
+  // Engine queries become ready when local storage is hydrated, which can be
+  // earlier than the initial remote pull in a fresh browser context. Complete
+  // a sync cycle before treating a direct-link miss as authoritative.
+  await syncClientEngineOperations()
+  return getLocalDocument(docId)
+}
+
+async function getLocalDocument(docId: string): Promise<DocMetadata> {
   const record = await getClientEngineRecord<DocMetadata>('documents', docId)
   if (!record) throw new DocsApiError('Document metadata not found', 404)
   return record.value
@@ -76,7 +85,9 @@ export async function updateServerDocument(
   docId: string,
   input: UpdateDocInput
 ): Promise<DocMetadata> {
-  const existing = await fetchServerDocument(docId)
+  // A local edit must not wait for a remote sync before it reaches the local
+  // op-log. Callers persist the current document first and sync it afterward.
+  const existing = await getLocalDocument(docId)
   const document: DocMetadata = {
     ...existing,
     ...withoutUndefined({ title: input.title?.trim() || appKitConfig.docs.defaultTitle }),

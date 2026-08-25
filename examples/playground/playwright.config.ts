@@ -28,14 +28,20 @@ export default defineConfig({
     {
       command: 'cargo run --bin photon-server',
       cwd: '../..',
+      // Override both server database inputs so an inherited Engine-specific
+      // URL cannot bypass this fresh E2E database.
+      env: {
+        DATABASE_URL: 'sqlite::memory:',
+        PHOTON_ENGINE_DATABASE_URL: 'sqlite::memory:',
+      },
       url: 'http://127.0.0.1:3001/api/health',
-      reuseExistingServer: true,
+      reuseExistingServer: false,
       timeout: 120_000,
     },
     {
       command: 'npm run dev -- --host 127.0.0.1',
       url: 'http://127.0.0.1:5173',
-      reuseExistingServer: true,
+      reuseExistingServer: false,
       timeout: 120_000,
     },
   ],
