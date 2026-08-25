@@ -41,5 +41,6 @@ export function createBootingPhotonClient(): PhotonClient {
   return {
     query: () => constantQuery(loadingList),
     liveRecord: () => constantQuery(loadingRecord),
+    hydrateCollection: () => Promise.resolve(),
   } as unknown as PhotonClient
 }

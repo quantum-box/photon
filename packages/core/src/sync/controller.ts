@@ -39,7 +39,8 @@ export interface SyncEngineOptions {
   readonly requestTimeoutMs?: number
   collectPending(): Operation[]
   onDecision(decision: PushDecision): void
-  applyRemote(operations: readonly Operation[]): void
+  /** May be async: applying to a lazy collection hydrates it first. */
+  applyRemote(operations: readonly Operation[]): void | Promise<void>
   /** A server with no operation log returned current state instead. */
   applySnapshot(page: Extract<PullResult, { kind: 'snapshot' }>): void
   knownOperationIds(): ReadonlySet<string>
@@ -253,7 +254,7 @@ export class SyncEngine implements SyncController {
         const fresh = page.operations.filter((row) => !known.has(row.operation.id))
         const operations = fresh.map((row) => row.operation)
 
-        this.options.applyRemote(operations)
+        await this.options.applyRemote(operations)
         summary.pulled += operations.length
 
         cursor = page.cursor ?? page.operations[page.operations.length - 1]!.remoteSequence

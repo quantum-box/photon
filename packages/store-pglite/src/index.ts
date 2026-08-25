@@ -16,6 +16,7 @@ import type {
   Conflict,
   CursorRow,
   EngineRecord,
+  LoadRecordsOptions,
   LocalStore,
   OperationStatus,
   RecordId,
@@ -195,10 +196,24 @@ class PGliteStore implements LocalStore {
     await this.db.exec(SCHEMA)
   }
 
-  async loadRecords(scope: Scope): Promise<EngineRecord[]> {
+  async loadRecords(scope: Scope, options?: LoadRecordsOptions): Promise<EngineRecord[]> {
+    const conditions = ['scope = $1']
+    const params: unknown[] = [scope]
+
+    if (options?.collection !== undefined) {
+      params.push(options.collection)
+      conditions.push(`collection = $${params.length}`)
+    } else if (options?.excludeCollections?.length) {
+      const placeholders = options.excludeCollections.map((collection) => {
+        params.push(collection)
+        return `$${params.length}`
+      })
+      conditions.push(`collection NOT IN (${placeholders.join(', ')})`)
+    }
+
     const result = await this.db.query<{ record_json: string }>(
-      'SELECT record_json FROM photon_engine_records WHERE scope = $1',
-      [scope],
+      `SELECT record_json FROM photon_engine_records WHERE ${conditions.join(' AND ')}`,
+      params,
     )
     return result.rows.map((row) => JSON.parse(row.record_json) as EngineRecord)
   }

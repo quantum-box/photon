@@ -35,6 +35,19 @@ export interface OperationStatusUpdate {
   readonly remoteSequence?: number | null
 }
 
+/**
+ * Narrow a `loadRecords` call to part of the scope.
+ *
+ * Bootstrap uses `excludeCollections` to skip lazily hydrated collections;
+ * `hydrateCollection()` uses `collection` to load exactly one of them later.
+ */
+export interface LoadRecordsOptions {
+  /** Load only this collection. Takes precedence over `excludeCollections`. */
+  readonly collection?: Collection
+  /** Load everything except these collections. */
+  readonly excludeCollections?: readonly Collection[]
+}
+
 /** One durable transaction. Everything inside commits or nothing does. */
 export interface StoreWrite {
   /** Operations to append. Re-appending a known id is a no-op, not an error. */
@@ -56,8 +69,8 @@ export interface LocalStore {
   /** Create tables if absent. Safe to call repeatedly. */
   migrate(): Promise<void>
 
-  /** Every non-deleted record in the scope, for startup hydration. */
-  loadRecords(scope: Scope): Promise<EngineRecord[]>
+  /** Every non-deleted record in the scope (or the slice `options` selects), for hydration. */
+  loadRecords(scope: Scope, options?: LoadRecordsOptions): Promise<EngineRecord[]>
 
   /** Operations not yet accepted by the server, oldest first. */
   loadPendingOperations(scope: Scope): Promise<StoredOperation[]>

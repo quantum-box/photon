@@ -9,7 +9,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createPhotonClient, type PhotonClient } from './client.js'
 import type { PhotonKernelModule } from './kernel.js'
-import type { LocalStore, StoreWrite } from './store.js'
+import type { LoadRecordsOptions, LocalStore, StoreWrite } from './store.js'
 import type { Conflict, EngineRecord, Operation, StoredOperation } from './types.js'
 
 // --- a kernel that implements just enough real semantics -------------------
@@ -133,18 +133,48 @@ function project(current: EngineRecord | null, operation: Operation): EngineReco
 
 // --- an in-memory store ----------------------------------------------------
 
-function memoryStore(): LocalStore & { writes: StoreWrite[] } {
+function memoryStore(): LocalStore & {
+  writes: StoreWrite[]
+  loadRecordsCalls: { options: LoadRecordsOptions | undefined; served: number }[]
+  seedRecord(record: EngineRecord): void
+  seedPendingOperation(operation: Operation): void
+} {
   const records = new Map<string, EngineRecord>()
   const operations = new Map<string, StoredOperation>()
   const conflicts: Conflict[] = []
   let sequence = 0
   const writes: StoreWrite[] = []
+  const loadRecordsCalls: { options: LoadRecordsOptions | undefined; served: number }[] = []
 
   return {
     writes,
+    loadRecordsCalls,
+    seedRecord(record) {
+      records.set(index(record.key), record)
+    },
+    seedPendingOperation(operation) {
+      sequence += 1
+      operations.set(operation.id, {
+        operation,
+        status: 'pending',
+        localSequence: sequence,
+        remoteSequence: null,
+        receivedAtMs: 0,
+      })
+    },
     async migrate() {},
-    async loadRecords() {
-      return [...records.values()]
+    async loadRecords(_scope, options) {
+      const rows = [...records.values()].filter((record) => {
+        if (options?.collection !== undefined) {
+          return record.key.collection === options.collection
+        }
+        if (options?.excludeCollections?.length) {
+          return !options.excludeCollections.includes(record.key.collection)
+        }
+        return true
+      })
+      loadRecordsCalls.push({ options, served: rows.length })
+      return rows
     },
     async loadPendingOperations() {
       return [...operations.values()].filter((o) => o.status === 'pending')
@@ -386,6 +416,155 @@ describe('ingest', () => {
     client.ingest('issues', [{ recordId: 'i1', value: { n: 1 } }], { complete: true })
     await tick()
     expect(query.getSnapshot().data).toHaveLength(1)
+    query.destroy()
+  })
+})
+
+describe('lazy hydration', () => {
+  const scope = 'workspace:test'
+
+  function engineRecord(
+    collection: string,
+    recordId: string,
+    value: unknown,
+    wallTimeMs = 1,
+  ): EngineRecord {
+    return {
+      key: { scope, collection, record_id: recordId },
+      value,
+      version: { wall_time_ms: wallTimeMs, counter: 0, actor_id: 'seed' },
+      field_versions: {},
+      deleted_at: null,
+      updated_by: 'seed',
+    }
+  }
+
+  function lazyClient(store: LocalStore): Promise<PhotonClient> {
+    let now = 1_700_000_000_000
+    return createPhotonClient({
+      scope,
+      actorId: 'actor-1',
+      storage: store,
+      kernel: fakeKernelModule(),
+      clock: () => (now += 1),
+      collections: { records: { mode: 'engine-native', hydration: 'lazy' } },
+    })
+  }
+
+  it('bootstraps from structure only, independent of lazy record count', async () => {
+    const store = memoryStore()
+    store.seedRecord(engineRecord('databases', 'db1', { name: 'Roadmap' }))
+    for (let i = 0; i < 500; i += 1) {
+      store.seedRecord(engineRecord('records', `r${i}`, { n: i }))
+    }
+
+    const client = await lazyClient(store)
+
+    // One structural row crossed the storage boundary at startup; the 500
+    // lazy records did not. That is the whole point of this feature.
+    expect(store.loadRecordsCalls).toEqual([
+      { options: { excludeCollections: ['records'] }, served: 1 },
+    ])
+
+    const structure = client.query({ collection: 'databases' })
+    await structure.ready()
+    await tick()
+    expect(structure.getSnapshot().status).toBe('ready')
+    expect(structure.getSnapshot().data).toHaveLength(1)
+    structure.destroy()
+  })
+
+  it('keeps a lazy query loading until hydration completes, then serves stored data', async () => {
+    const store = memoryStore()
+    store.seedRecord(engineRecord('records', 'r1', { title: 'stored' }))
+    const client = await lazyClient(store)
+
+    const query = client.query({ collection: 'records' })
+    expect(query.getSnapshot().status).toBe('loading')
+    expect(query.getSnapshot().data).toHaveLength(0)
+
+    await query.ready()
+    await tick()
+    expect(query.getSnapshot().status).toBe('ready')
+    expect(query.getSnapshot().data[0]?.value).toEqual({ title: 'stored' })
+    query.destroy()
+  })
+
+  it('hydrates explicitly through hydrateCollection() without a query', async () => {
+    const store = memoryStore()
+    store.seedRecord(engineRecord('records', 'r1', { title: 'stored' }))
+    const client = await lazyClient(store)
+
+    await client.hydrateCollection('records')
+
+    const query = client.query({ collection: 'records' })
+    expect(query.getSnapshot().status).toBe('ready')
+    expect(query.getSnapshot().data).toHaveLength(1)
+    // Loaded exactly once: the query did not trigger a second load.
+    expect(store.loadRecordsCalls.filter((call) => call.options?.collection === 'records')).toHaveLength(1)
+    query.destroy()
+  })
+
+  it('restores pending operations for lazy collections at bootstrap', async () => {
+    const store = memoryStore()
+    const operation: Operation = {
+      id: 'op-offline-1',
+      key: { scope, collection: 'records', record_id: 'r1' },
+      actor_id: 'actor-1',
+      timestamp: { wall_time_ms: 5, counter: 0, actor_id: 'actor-1' },
+      kind: { type: 'upsert', value: { title: 'offline write' } },
+    }
+    store.seedPendingOperation(operation)
+    // The row the operation's own durable commit wrote before the reload.
+    store.seedRecord(engineRecord('records', 'r1', { title: 'offline write' }, 5))
+
+    const client = await lazyClient(store)
+
+    // The unpushed write is queued for push even though its collection has
+    // not hydrated yet — laziness must never lose an offline operation.
+    expect(client.pendingCount()).toBe(1)
+
+    await client.hydrateCollection('records')
+    await tick()
+    const query = client.query({ collection: 'records' })
+    const row = query.getSnapshot().data[0]
+    expect(row?.value).toEqual({ title: 'offline write' })
+    expect(row?.pending).toBe(true)
+    query.destroy()
+  })
+
+  it('does not clobber an optimistic write that raced ahead of hydration', async () => {
+    const store = memoryStore()
+    store.seedRecord(engineRecord('records', 'r1', { title: 'stale stored' }))
+
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    // Snapshot the rows first, then hold them until released: the load
+    // resolves with genuinely stale data from before the optimistic write.
+    const loadRecords = store.loadRecords.bind(store)
+    store.loadRecords = async (loadScope, options) => {
+      const rows = await loadRecords(loadScope, options)
+      if (options?.collection === 'records') await gate
+      return rows
+    }
+
+    const client = await lazyClient(store)
+    const query = client.query({ collection: 'records' })
+    client.upsert('records', 'r1', { title: 'optimistic' })
+    await tick()
+
+    // Data moves for the subscriber, but the contract is that the status
+    // stays `loading` until the collection's stored records are in.
+    expect(query.getSnapshot().status).toBe('loading')
+    expect(query.getSnapshot().data[0]?.value).toEqual({ title: 'optimistic' })
+
+    release()
+    await query.ready()
+    await tick()
+    expect(query.getSnapshot().status).toBe('ready')
+    expect(query.getSnapshot().data[0]?.value).toEqual({ title: 'optimistic' })
     query.destroy()
   })
 })
