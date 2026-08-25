@@ -110,6 +110,91 @@ async function acquireExclusiveLock(lockName: string): Promise<() => void> {
   })
 }
 
+/**
+ * The write-ahead commit journal.
+ *
+ * PGlite's `idb://` filesystem is best-effort about when bytes actually reach
+ * IndexedDB: its per-query flush is coalesced and diffed by file mtime, and in
+ * practice a committed transaction can sit only in WASM memory long after the
+ * query resolved — sometimes for the whole session. A reload in that state
+ * silently loses committed writes, which is exactly the offline mutation this
+ * store exists to preserve.
+ *
+ * So durability does not ride on PGlite's flush at all. Every `commit()` first
+ * appends its `StoreWrite` to this journal — a plain IndexedDB store written
+ * with `durability: 'strict'`, whose transaction completion is a real
+ * durability point — and then applies it to PGlite. The same PGlite
+ * transaction records the journal sequence it covers in a checkpoint row. On
+ * boot, entries newer than the checkpoint that survived in PGlite's durable
+ * image are replayed; entries at or below it are pruned. Replay is idempotent:
+ * operations insert with ON CONFLICT DO NOTHING, records and cursors upsert,
+ * and entries apply oldest-first so the newest write wins.
+ */
+class CommitJournal {
+  private constructor(private readonly db: IDBDatabase) {}
+
+  static readonly STORE = 'commits'
+
+  static async open(dataDir: string): Promise<CommitJournal> {
+    const idb = (globalThis as { indexedDB?: IDBFactory }).indexedDB
+    if (!idb) throw new Error('IndexedDB is unavailable')
+    const db = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = idb.open(`photon-commit-journal:${dataDir}`, 1)
+      request.onupgradeneeded = () => {
+        if (!request.result.objectStoreNames.contains(CommitJournal.STORE)) {
+          request.result.createObjectStore(CommitJournal.STORE)
+        }
+      }
+      request.onsuccess = () => resolve(request.result)
+      request.onerror = () => reject(request.error ?? new Error('failed to open the commit journal'))
+    })
+    return new CommitJournal(db)
+  }
+
+  /** Resolves when the entry is durably committed, not merely queued. */
+  append(seq: number, payload: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const tx = this.db.transaction(CommitJournal.STORE, 'readwrite', { durability: 'strict' })
+      tx.objectStore(CommitJournal.STORE).put(payload, seq)
+      tx.oncomplete = () => resolve()
+      tx.onerror = tx.onabort = () => reject(tx.error ?? new Error('commit journal write failed'))
+    })
+  }
+
+  entriesAfter(seq: number): Promise<{ seq: number; payload: string }[]> {
+    return new Promise((resolve, reject) => {
+      const tx = this.db.transaction(CommitJournal.STORE, 'readonly')
+      const entries: { seq: number; payload: string }[] = []
+      const cursor = tx
+        .objectStore(CommitJournal.STORE)
+        .openCursor(IDBKeyRange.lowerBound(seq, true))
+      cursor.onsuccess = () => {
+        const row = cursor.result
+        if (!row) {
+          resolve(entries)
+          return
+        }
+        entries.push({ seq: Number(row.key), payload: row.value as string })
+        row.continue()
+      }
+      cursor.onerror = () => reject(cursor.error ?? new Error('commit journal read failed'))
+    })
+  }
+
+  deleteUpTo(seq: number): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const tx = this.db.transaction(CommitJournal.STORE, 'readwrite')
+      tx.objectStore(CommitJournal.STORE).delete(IDBKeyRange.upperBound(seq))
+      tx.oncomplete = () => resolve()
+      tx.onerror = tx.onabort = () => reject(tx.error ?? new Error('commit journal prune failed'))
+    })
+  }
+
+  close(): void {
+    this.db.close()
+  }
+}
+
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS photon_engine_operations (
   operation_id     TEXT PRIMARY KEY,
@@ -160,6 +245,11 @@ CREATE TABLE IF NOT EXISTS photon_engine_conflicts (
 );
 CREATE INDEX IF NOT EXISTS idx_photon_conflicts_scope
   ON photon_engine_conflicts(scope, resolved);
+
+CREATE TABLE IF NOT EXISTS photon_engine_journal_checkpoint (
+  id   INTEGER PRIMARY KEY CHECK (id = 1),
+  seq  BIGINT NOT NULL
+);
 `
 
 interface OperationRow {
@@ -186,6 +276,10 @@ function toStored(row: OperationRow): StoredOperation {
 }
 
 class PGliteStore implements LocalStore {
+  /** Non-null only for `idb://` data directories — see [`CommitJournal`]. */
+  private journal: CommitJournal | null = null
+  private journalSeq = 0
+
   constructor(
     private readonly db: PGlite,
     readonly dataDir: string,
@@ -194,6 +288,39 @@ class PGliteStore implements LocalStore {
 
   async migrate(): Promise<void> {
     await this.db.exec(SCHEMA)
+    if (!this.dataDir.startsWith('idb://') || this.journal) return
+
+    try {
+      this.journal = await CommitJournal.open(this.dataDir)
+    } catch (error) {
+      // No journal means falling back to PGlite's own (leaky) persistence —
+      // degraded durability, not a broken store. Say so once and move on.
+      console.warn(
+        'Photon: commit journal unavailable, offline writes may not survive a reload',
+        error,
+      )
+      return
+    }
+
+    // Everything at or below the checkpoint is already inside the durable
+    // PGlite image this boot loaded — the checkpoint row commits in the same
+    // PGlite transaction as the data it covers, so they survive or vanish
+    // together. Entries above it are the writes PGlite's filesystem lost;
+    // replaying them oldest-first puts them back.
+    const durableSeq = await this.readCheckpoint()
+    await this.journal.deleteUpTo(durableSeq)
+    const entries = await this.journal.entriesAfter(durableSeq)
+    for (const entry of entries) {
+      await this.applyWrite(JSON.parse(entry.payload) as StoreWrite, entry.seq)
+    }
+    this.journalSeq = entries.length ? entries[entries.length - 1]!.seq : durableSeq
+  }
+
+  private async readCheckpoint(): Promise<number> {
+    const result = await this.db.query<{ seq: string | number }>(
+      'SELECT seq FROM photon_engine_journal_checkpoint WHERE id = 1',
+    )
+    return toNumber(result.rows[0]?.seq)
   }
 
   async loadRecords(scope: Scope, options?: LoadRecordsOptions): Promise<EngineRecord[]> {
@@ -297,6 +424,21 @@ class PGliteStore implements LocalStore {
   }
 
   async commit(write: StoreWrite): Promise<void> {
+    if (!this.journal) {
+      await this.applyWrite(write, null)
+      return
+    }
+
+    // Journal first: once `append` resolves the write can always be replayed,
+    // so a crash or reload at any later point cannot lose it. The reverse
+    // order would reopen the exact hole this journal exists to close — a
+    // PGlite "commit" whose bytes never reach IndexedDB.
+    const seq = ++this.journalSeq
+    await this.journal.append(seq, JSON.stringify(write))
+    await this.applyWrite(write, seq)
+  }
+
+  private async applyWrite(write: StoreWrite, journalSeq: number | null): Promise<void> {
     await this.db.transaction(async (tx) => {
       const now = Date.now()
 
@@ -398,6 +540,19 @@ class PGliteStore implements LocalStore {
           [write.cursor.scope, write.cursor.remote, write.cursor.position, write.cursor.updatedAtMs],
         )
       }
+
+      // In the same transaction as the data, so whatever durable image a
+      // future boot recovers, its checkpoint names exactly the journal
+      // entries that image contains.
+      if (journalSeq !== null) {
+        await tx.query(
+          `INSERT INTO photon_engine_journal_checkpoint (id, seq)
+           VALUES (1, $1)
+           ON CONFLICT (id)
+           DO UPDATE SET seq = GREATEST(photon_engine_journal_checkpoint.seq, EXCLUDED.seq)`,
+          [journalSeq],
+        )
+      }
     })
   }
 
@@ -443,6 +598,8 @@ class PGliteStore implements LocalStore {
     try {
       await this.db.close()
     } finally {
+      this.journal?.close()
+      this.journal = null
       this.releaseLock()
     }
   }

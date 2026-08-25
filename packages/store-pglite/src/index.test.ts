@@ -166,3 +166,109 @@ describe('loadRecords filters', () => {
     expect(client.calls[0]?.params).toEqual(['workspace:a', 'records', 'comments'])
   })
 })
+
+describe('commit journal', () => {
+  /**
+   * A fake PGlite that records every statement. `checkpointSeq` plays the
+   * role of the durable image: it is what the next boot's checkpoint read
+   * returns, no matter what was "written" — exactly how a lost PGlite flush
+   * behaves.
+   */
+  function journalClient(checkpointSeq: number) {
+    const applied: { sql: string; params?: unknown[] }[] = []
+    const tx = {
+      async query(sql: string, params?: unknown[]) {
+        applied.push({ sql, params })
+        return { rows: [] }
+      },
+    }
+    const client = {
+      applied,
+      async exec() {},
+      async query(sql: string) {
+        if (sql.includes('photon_engine_journal_checkpoint')) {
+          return { rows: [{ seq: checkpointSeq }] }
+        }
+        return { rows: [] }
+      },
+      async transaction(cb: (t: typeof tx) => Promise<void>) {
+        await cb(tx)
+      },
+      async close() {},
+    }
+    return client as unknown as PGlite & { applied: { sql: string; params?: unknown[] }[] }
+  }
+
+  const operation = {
+    id: 'op_journal_1',
+    key: { scope: 'workspace:a', collection: 'records', record_id: 'r1' },
+    actor_id: 'actor',
+    kind: { type: 'upsert', value: { title: 'kept' } },
+  }
+
+  it('replays journaled commits that the durable image lost', async () => {
+    const { indexedDB, IDBKeyRange } = await import('fake-indexeddb')
+    vi.stubGlobal('indexedDB', indexedDB)
+    vi.stubGlobal('IDBKeyRange', IDBKeyRange)
+    const dataDir = `idb://journal-replay-${Date.now()}`
+
+    // First session: the commit lands in the journal (checkpoint says 0).
+    const first = await createPGliteStore({ dataDir, client: journalClient(0) })
+    await first.migrate()
+    await first.commit({ operations: [operation as never] })
+    await first.close()
+
+    // Second session: PGlite comes back empty (checkpoint still 0), so the
+    // journal entry must be replayed into it during migrate().
+    const client = journalClient(0)
+    const second = await createPGliteStore({ dataDir, client })
+    await second.migrate()
+
+    const replayedOp = client.applied.find((call) =>
+      call.sql.includes('INSERT INTO photon_engine_operations'),
+    )
+    expect(replayedOp?.params?.[0]).toBe('op_journal_1')
+    const checkpoint = client.applied.find((call) =>
+      call.sql.includes('photon_engine_journal_checkpoint'),
+    )
+    expect(checkpoint?.params).toEqual([1])
+    await second.close()
+  })
+
+  it('prunes journal entries the durable image already contains', async () => {
+    const { indexedDB, IDBKeyRange } = await import('fake-indexeddb')
+    vi.stubGlobal('indexedDB', indexedDB)
+    vi.stubGlobal('IDBKeyRange', IDBKeyRange)
+    const dataDir = `idb://journal-prune-${Date.now()}`
+
+    const first = await createPGliteStore({ dataDir, client: journalClient(0) })
+    await first.migrate()
+    await first.commit({ operations: [operation as never] })
+    await first.close()
+
+    // This boot's durable image already covers seq 1: nothing to replay.
+    const client = journalClient(1)
+    const second = await createPGliteStore({ dataDir, client })
+    await second.migrate()
+    expect(
+      client.applied.filter((call) => call.sql.includes('INSERT INTO photon_engine_operations')),
+    ).toHaveLength(0)
+    await second.close()
+  })
+
+  it('keeps working without a journal when IndexedDB is missing', async () => {
+    vi.stubGlobal('indexedDB', undefined)
+    const client = journalClient(0)
+    const store = await createPGliteStore({ dataDir: 'idb://journal-none', client })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await store.migrate()
+    await store.commit({ operations: [operation as never] })
+    warn.mockRestore()
+
+    const write = client.applied.find((call) =>
+      call.sql.includes('INSERT INTO photon_engine_operations'),
+    )
+    expect(write?.params?.[0]).toBe('op_journal_1')
+    await store.close()
+  })
+})
