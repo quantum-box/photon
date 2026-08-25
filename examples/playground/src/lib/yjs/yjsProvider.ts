@@ -70,10 +70,14 @@ function forwardRealtimeStateToEngine(status: ConnectionStatus) {
   void pending.then((client) => client.sync.setRealtimeState(status)).catch(() => {})
 }
 
-function notifyEngineRemoteChange() {
+function notifyEngineRemoteChange(cursor?: number) {
   const pending = peekPhotonClient()
   if (!pending) return
-  void pending.then((client) => client.sync.notifyRemoteChange()).catch(() => {})
+  void pending
+    .then((client) =>
+      client.sync.notifyRemoteChange(typeof cursor === 'number' ? { cursor } : undefined)
+    )
+    .catch(() => {})
 }
 
 function setPresence(presence: SyncPresence) {
@@ -174,13 +178,15 @@ export function connectWs() {
         const message = JSON.parse(event.data) as {
           type?: string
           onlineCount?: number
+          cursor?: number
         }
         if (message.type === 'presence' && typeof message.onlineCount === 'number') {
           setPresence({ onlineCount: message.onlineCount })
         } else if (message.type === 'engine-changed') {
           // The server accepted engine operations from someone: pull now
-          // instead of waiting for the poll interval.
-          notifyEngineRemoteChange()
+          // instead of waiting for the poll interval. The cursor hint lets
+          // the engine skip pulls for sequences it has already caught up to.
+          notifyEngineRemoteChange(typeof message.cursor === 'number' ? message.cursor : undefined)
         }
       } catch {
         // Ignore non-protocol text messages.

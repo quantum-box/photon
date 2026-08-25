@@ -56,6 +56,7 @@ export type {
   PushDecision,
   PushRequest,
   PushResult,
+  RemoteChangeHint,
   RemoteRecord,
   SyncController,
   SyncError,
