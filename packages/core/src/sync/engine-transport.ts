@@ -50,8 +50,19 @@ interface WirePushResponse {
 
 interface WirePullResponse {
   operations?: { operation: Operation; remote_sequence: number }[]
-  cursor?: number | null
+  /**
+   * The engine server answers with a full cursor object, mirroring the request;
+   * a bare position is also accepted for simpler backends. Committing anything
+   * but a number corrupts the durable cursor write, so both are normalized.
+   */
+  cursor?: number | { position: number } | null
   has_more?: boolean
+}
+
+function cursorPosition(cursor: WirePullResponse['cursor']): number | null {
+  if (typeof cursor === 'number') return cursor
+  if (cursor && typeof cursor.position === 'number') return cursor.position
+  return null
 }
 
 function normalizeDecisionKind(raw: string | undefined): PushDecision['kind'] {
@@ -163,7 +174,7 @@ export function createEngineTransport(options: EngineTransportOptions): SyncTran
         kind: 'operations',
         operations,
         cursor:
-          body.cursor ??
+          cursorPosition(body.cursor) ??
           (operations.length ? operations[operations.length - 1]!.remoteSequence : request.cursor),
         hasMore: body.has_more ?? operations.length >= request.limit,
       }

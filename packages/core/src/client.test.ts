@@ -7,9 +7,10 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { createPhotonClient, type PhotonClient } from './client.js'
+import { createPhotonClient, type PhotonClient, type PhotonClientOptions } from './client.js'
 import type { PhotonKernelModule } from './kernel.js'
-import type { LoadRecordsOptions, LocalStore, StoreWrite } from './store.js'
+import type { CursorRow, LoadRecordsOptions, LocalStore, StoreWrite } from './store.js'
+import type { SyncTransport } from './sync/types.js'
 import type { Conflict, EngineRecord, Operation, StoredOperation } from './types.js'
 
 // --- a kernel that implements just enough real semantics -------------------
@@ -142,6 +143,7 @@ function memoryStore(): LocalStore & {
   const records = new Map<string, EngineRecord>()
   const operations = new Map<string, StoredOperation>()
   const conflicts: Conflict[] = []
+  const cursors = new Map<string, CursorRow>()
   let sequence = 0
   const writes: StoreWrite[] = []
   const loadRecordsCalls: { options: LoadRecordsOptions | undefined; served: number }[] = []
@@ -195,8 +197,8 @@ function memoryStore(): LocalStore & {
     async loadConflicts() {
       return conflicts
     },
-    async getCursor() {
-      return null
+    async getCursor(scope, remote) {
+      return cursors.get(`${scope}/${remote}`) ?? null
     },
     async commit(write) {
       writes.push(write)
@@ -217,6 +219,7 @@ function memoryStore(): LocalStore & {
         if (existing) operations.set(update.operationId, { ...existing, status: update.status })
       }
       for (const conflict of write.conflicts ?? []) conflicts.push(conflict)
+      if (write.cursor) cursors.set(`${write.cursor.scope}/${write.cursor.remote}`, write.cursor)
     },
     async stats() {
       return { operations: { pending: 0, accepted: 0, rejected: 0, conflict: 0 }, recordsByCollection: {} }
@@ -228,7 +231,9 @@ function memoryStore(): LocalStore & {
   }
 }
 
-async function makeClient(overrides: { transport?: never } = {}): Promise<PhotonClient> {
+async function makeClient(
+  overrides: Partial<Pick<PhotonClientOptions, 'storage' | 'transport' | 'sync'>> = {},
+): Promise<PhotonClient> {
   let now = 1_700_000_000_000
   return createPhotonClient({
     scope: 'workspace:test',
@@ -566,6 +571,83 @@ describe('lazy hydration', () => {
     expect(query.getSnapshot().status).toBe('ready')
     expect(query.getSnapshot().data[0]?.value).toEqual({ title: 'optimistic' })
     query.destroy()
+  })
+})
+
+describe('pull persistence', () => {
+  /**
+   * One page holding a single remote-authored upsert, then quiet. The cursor
+   * ends at 1, so a later sync (or a reloaded client) never sees the operation
+   * echoed again — exactly the situation where the record itself has to have
+   * been made durable.
+   */
+  function remoteOnlyTransport(): SyncTransport {
+    return {
+      async push(request) {
+        return {
+          decisions: request.operations.map((operation) => ({
+            kind: 'accepted' as const,
+            operationId: operation.id,
+          })),
+        }
+      },
+      async pull(request) {
+        if ((request.cursor ?? 0) >= 1) {
+          return { kind: 'operations', operations: [], cursor: request.cursor ?? 1 }
+        }
+        return {
+          kind: 'operations',
+          operations: [
+            {
+              remoteSequence: 1,
+              operation: {
+                id: 'remote-op-1',
+                key: { scope: 'workspace:test', collection: 'records', record_id: 'r-remote' },
+                actor_id: 'actor-2',
+                timestamp: { wall_time_ms: 1_700_000_000_500, counter: 0, actor_id: 'actor-2' },
+                kind: { type: 'upsert', value: { title: 'from remote' } },
+              },
+            },
+          ],
+          cursor: 1,
+          hasMore: false,
+        }
+      },
+    }
+  }
+
+  it('keeps a pulled remote record across a reload of the same store', async () => {
+    const storage = memoryStore()
+    const transport = remoteOnlyTransport()
+
+    const first = await makeClient({ storage, transport, sync: { autoStart: false } })
+    await first.sync.syncNow()
+
+    const before = first.query({ collection: 'records' })
+    await before.ready()
+    await tick()
+    expect(before.getSnapshot().data.map((r) => r.value)).toEqual([{ title: 'from remote' }])
+    before.destroy()
+    await first.close()
+
+    // Same store, fresh client: a browser reload. The cursor is already past
+    // the operation and its id is in the applied set, so nothing will ever
+    // deliver it again — hydration alone must restore the record.
+    const second = await makeClient({ storage, transport, sync: { autoStart: false } })
+    const after = second.query({ collection: 'records' })
+    await after.ready()
+    await tick()
+    expect(after.getSnapshot().data.map((r) => r.value)).toEqual([{ title: 'from remote' }])
+    after.destroy()
+
+    // And a manual sync must not resurrect or duplicate anything either.
+    await second.sync.syncNow()
+    const resynced = second.query({ collection: 'records' })
+    await resynced.ready()
+    await tick()
+    expect(resynced.getSnapshot().data).toHaveLength(1)
+    resynced.destroy()
+    await second.close()
   })
 })
 
