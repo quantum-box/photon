@@ -5,6 +5,7 @@ import {
   getClientEngineRecord,
   listClientEngineRecords,
   patchClientEngineRecord,
+  syncClientEngineOperations,
   upsertClientEngineRecord,
 } from './photonEngine/client'
 
@@ -142,6 +143,10 @@ function nextIdentifier(records: DatabaseRecord[]) {
  */
 export async function seedPlaygroundData() {
   seedDefaultRecordsPromise ??= (async () => {
+    // A new browser context starts with an empty local PGlite database. Pull
+    // the shared seed marker before deciding that this context must write the
+    // full demo dataset again.
+    await syncClientEngineOperations()
     const existingSeed = await getClientEngineRecord(seedCollection, defaultRecordSeedId, {
       includeDeleted: true,
     })

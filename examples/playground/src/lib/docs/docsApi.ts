@@ -4,6 +4,7 @@ import {
   listClientEngineRecords,
   getClientEngineRecord,
   patchClientEngineRecord,
+  syncClientEngineOperations,
   upsertClientEngineRecord,
 } from '../photonEngine/client'
 
@@ -47,6 +48,10 @@ export function toDocMetadata(serverDocument: ServerDocumentMetadata): DocMetada
 }
 
 export async function fetchServerDocuments(): Promise<DocMetadata[]> {
+  // Engine queries become ready when local storage is hydrated, which can be
+  // earlier than the initial remote pull in a fresh browser context. Complete
+  // a sync cycle before treating the local projection as the server view.
+  await syncClientEngineOperations()
   const records = await listClientEngineRecords<DocMetadata>('documents')
   return records
     .map((record) => record.value)
@@ -54,6 +59,7 @@ export async function fetchServerDocuments(): Promise<DocMetadata[]> {
 }
 
 export async function fetchServerDocument(docId: string): Promise<DocMetadata> {
+  await syncClientEngineOperations()
   const record = await getClientEngineRecord<DocMetadata>('documents', docId)
   if (!record) throw new DocsApiError('Document metadata not found', 404)
   return record.value

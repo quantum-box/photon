@@ -1,8 +1,35 @@
-import { describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { appKitConfig } from '../../app/kitConfig'
-import { toDocMetadata, type ServerDocumentMetadata } from './docsApi'
+
+const engineMocks = vi.hoisted(() => ({
+  getRecord: vi.fn(),
+  listRecords: vi.fn(),
+  patchRecord: vi.fn(),
+  sync: vi.fn(),
+  upsertRecord: vi.fn(),
+}))
+
+vi.mock('../photonEngine/client', () => ({
+  getClientEngineRecord: engineMocks.getRecord,
+  listClientEngineRecords: engineMocks.listRecords,
+  patchClientEngineRecord: engineMocks.patchRecord,
+  syncClientEngineOperations: engineMocks.sync,
+  upsertClientEngineRecord: engineMocks.upsertRecord,
+}))
+
+import {
+  fetchServerDocument,
+  fetchServerDocuments,
+  toDocMetadata,
+  type ServerDocumentMetadata,
+} from './docsApi'
 
 describe('docsApi', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    engineMocks.sync.mockResolvedValue({ pushed: 0, pulled: 0 })
+  })
+
   it('normalizes engine-backed server document metadata for the local docs cache', () => {
     const serverDocument: ServerDocumentMetadata = {
       id: 'doc-1',
@@ -35,5 +62,28 @@ describe('docsApi', () => {
       title: appKitConfig.docs.defaultTitle,
       workspaceId: appKitConfig.workspace.id,
     })
+  })
+
+  it('syncs before reading the document list from a fresh local store', async () => {
+    engineMocks.listRecords.mockResolvedValue([])
+
+    await expect(fetchServerDocuments()).resolves.toEqual([])
+
+    expect(engineMocks.sync).toHaveBeenCalledOnce()
+    expect(engineMocks.sync.mock.invocationCallOrder[0])
+      .toBeLessThan(engineMocks.listRecords.mock.invocationCallOrder[0])
+  })
+
+  it('syncs before deciding that direct-link metadata is missing', async () => {
+    engineMocks.getRecord.mockResolvedValue(null)
+
+    await expect(fetchServerDocument('shared-doc')).rejects.toMatchObject({
+      name: 'DocsApiError',
+      status: 404,
+    })
+
+    expect(engineMocks.sync).toHaveBeenCalledOnce()
+    expect(engineMocks.sync.mock.invocationCallOrder[0])
+      .toBeLessThan(engineMocks.getRecord.mock.invocationCallOrder[0])
   })
 })
