@@ -2,11 +2,17 @@ import { DndContext } from '@dnd-kit/core'
 import { SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import type { Meta, StoryObj } from '@storybook/react-vite'
 import { expect, fn, userEvent, within } from 'storybook/test'
+import { PhotonProvider } from '@quantum-box/photon-react'
 import { mockDatabaseRecords } from '../data/mock'
+import { createStaticRecordClient } from '../lib/photonEngine/staticClient'
 import { KanbanCard, KanbanColumn, OverlayCard } from './KanbanView'
 
 const selectedRecord = mockDatabaseRecords[2]
 const todoRecords = mockDatabaseRecords.filter((record) => record.status === 'todo').slice(0, 4)
+
+// Cards subscribe per field with useRecordField, so stories serve the same
+// mock records through a static client behind the provider.
+const storyClient = createStaticRecordClient(mockDatabaseRecords)
 
 const meta = {
   title: 'Databases/BoardView/Parts',
@@ -14,6 +20,13 @@ const meta = {
   parameters: {
     layout: 'centered',
   },
+  decorators: [
+    (Story) => (
+      <PhotonProvider client={storyClient}>
+        <Story />
+      </PhotonProvider>
+    ),
+  ],
 } satisfies Meta
 
 export default meta
@@ -28,9 +41,9 @@ export const RecordCard: Story = {
           strategy={verticalListSortingStrategy}
         >
           <KanbanCard
-            record={selectedRecord}
+            recordId={selectedRecord.id}
             isSelected={false}
-            onClick={fn()}
+            onSelect={fn()}
           />
         </SortableContext>
       </DndContext>
@@ -53,9 +66,9 @@ export const SelectedRecordCard: Story = {
           strategy={verticalListSortingStrategy}
         >
           <KanbanCard
-            record={selectedRecord}
+            recordId={selectedRecord.id}
             isSelected
-            onClick={fn()}
+            onSelect={fn()}
           />
         </SortableContext>
       </DndContext>
@@ -77,9 +90,9 @@ export const CompactRecordCard: Story = {
           strategy={verticalListSortingStrategy}
         >
           <KanbanCard
-            record={selectedRecord}
+            recordId={selectedRecord.id}
             isSelected={false}
-            onClick={fn()}
+            onSelect={fn()}
             compact
           />
         </SortableContext>
@@ -102,7 +115,7 @@ export const StatusColumn: Story = {
       <DndContext>
         <KanbanColumn
           status="todo"
-          records={todoRecords}
+          recordIds={todoRecords.map((record) => record.id)}
           selectedRecordId={todoRecords[0]?.id ?? null}
           onSelectRecord={fn()}
           compact={false}
@@ -127,7 +140,7 @@ export const EmptyStatusColumn: Story = {
       <DndContext>
         <KanbanColumn
           status="in_review"
-          records={[]}
+          recordIds={[]}
           selectedRecordId={null}
           onSelectRecord={fn()}
           compact={false}
@@ -145,7 +158,7 @@ export const EmptyStatusColumn: Story = {
 export const DragOverlayCard: Story = {
   render: () => (
     <div className="w-[300px] p-6">
-      <OverlayCard record={selectedRecord} />
+      <OverlayCard recordId={selectedRecord.id} />
     </div>
   ),
   play: async ({ canvasElement }) => {

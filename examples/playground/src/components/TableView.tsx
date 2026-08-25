@@ -1,4 +1,4 @@
-import { useMemo, useState, useCallback, useRef, useEffect } from 'react'
+import { memo, useMemo, useState, useCallback, useRef, useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import {
   useReactTable,
@@ -9,10 +9,12 @@ import {
   createColumnHelper,
   type SortingState,
   type ColumnFiltersState,
+  type ColumnSizingState,
   type OnChangeFn,
   type VisibilityState,
 } from '@tanstack/react-table'
 import { useVirtualizer } from '@tanstack/react-virtual'
+import { useRecordField } from '@quantum-box/photon-react'
 import {
   type DatabaseRecord,
   type Status,
@@ -21,14 +23,17 @@ import {
   priorityConfig,
   mockUsers,
 } from '../data/mock'
+import { RECORDS_COLLECTION } from '../contexts/RecordsContext'
 import { Kbd, KbdGroup } from './Kbd'
 import type { RecordPropertyKey } from '../lib/databaseViews/types'
+
+type UpdateRecordFn = (recordId: string, field: keyof DatabaseRecord, value: string) => void
 
 interface TableViewProps {
   records: DatabaseRecord[]
   selectedRecordId: string | null
-  onSelectRecord: (record: DatabaseRecord) => void
-  onUpdateRecord: (recordId: string, field: keyof DatabaseRecord, value: string) => void
+  onSelectRecord: (recordId: string) => void
+  onUpdateRecord: UpdateRecordFn
   onCreateRecord: (data: { title: string }) => void
   sorting?: SortingState
   onSortingChange?: OnChangeFn<SortingState>
@@ -39,18 +44,48 @@ interface TableViewProps {
 
 const columnHelper = createColumnHelper<DatabaseRecord>()
 
+// One source of truth for column order and default widths: the tanstack
+// column defs (header, sorting, filtering, resizing) and the hand-rendered
+// body rows below both derive from it.
+const COLUMN_ORDER: RecordPropertyKey[] = [
+  'identifier',
+  'status',
+  'priority',
+  'title',
+  'assignee',
+  'labels',
+  'project',
+  'updatedAt',
+]
+
+const COLUMN_SIZES: Record<RecordPropertyKey, number> = {
+  identifier: 90,
+  status: 140,
+  priority: 110,
+  title: 400,
+  assignee: 140,
+  labels: 160,
+  project: 130,
+  updatedAt: 100,
+}
+
+// ---------------------------------------------------------------------------
+// Field cells — each one subscribes to its own field with useRecordField, so
+// a delta on one field re-renders exactly one cell ("one delta, one cell").
+// The surrounding rows only carry recordId and structural props.
+// ---------------------------------------------------------------------------
+
 // Inline editable cell (double-click to edit text fields)
-function EditableCell({
-  value,
+function EditableFieldCell({
   recordId,
   field,
   onUpdate,
 }: {
-  value: string
   recordId: string
-  field: keyof DatabaseRecord
-  onUpdate: (recordId: string, field: keyof DatabaseRecord, value: string) => void
+  field: 'title' | 'project'
+  onUpdate: UpdateRecordFn
 }) {
+  const value = useRecordField<string>(RECORDS_COLLECTION, recordId, field) ?? ''
   const [editing, setEditing] = useState(false)
   const [editValue, setEditValue] = useState(value)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -94,6 +129,7 @@ function EditableCell({
       className="text-sm truncate block cursor-text rounded px-1 py-0.5 -mx-1 transition-colors"
       onDoubleClick={(e) => {
         e.stopPropagation()
+        setEditValue(value)
         setEditing(true)
       }}
       style={{ minHeight: '24px' }}
@@ -189,16 +225,17 @@ function DropdownItem({
 
 // Status dropdown cell (single click, color badge)
 function StatusDropdownCell({
-  value,
   recordId,
   onUpdate,
 }: {
-  value: Status
   recordId: string
-  onUpdate: (recordId: string, field: keyof DatabaseRecord, value: string) => void
+  onUpdate: UpdateRecordFn
 }) {
+  const value = useRecordField<Status>(RECORDS_COLLECTION, recordId, 'status')
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
+
+  if (!value) return null
   const config = statusConfig[value]
 
   return (
@@ -248,16 +285,17 @@ function StatusDropdownCell({
 
 // Priority dropdown cell (single click)
 function PriorityDropdownCell({
-  value,
   recordId,
   onUpdate,
 }: {
-  value: Priority
   recordId: string
-  onUpdate: (recordId: string, field: keyof DatabaseRecord, value: string) => void
+  onUpdate: UpdateRecordFn
 }) {
+  const value = useRecordField<Priority>(RECORDS_COLLECTION, recordId, 'priority')
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
+
+  if (!value) return null
   const config = priorityConfig[value]
 
   return (
@@ -299,14 +337,13 @@ function PriorityDropdownCell({
 
 // Assignee dropdown cell (single click, avatar + name)
 function AssigneeDropdownCell({
-  value,
   recordId,
   onUpdate,
 }: {
-  value: string | null
   recordId: string
-  onUpdate: (recordId: string, field: keyof DatabaseRecord, value: string) => void
+  onUpdate: UpdateRecordFn
 }) {
+  const value = useRecordField<string | null>(RECORDS_COLLECTION, recordId, 'assignee') ?? null
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
 
@@ -366,6 +403,120 @@ function AssigneeDropdownCell({
   )
 }
 
+function IdentifierCell({ recordId }: { recordId: string }) {
+  const identifier = useRecordField<string>(RECORDS_COLLECTION, recordId, 'identifier')
+  return <span className="font-mono text-xs text-subtle">{identifier}</span>
+}
+
+function LabelsCell({ recordId }: { recordId: string }) {
+  const labels = useRecordField<string[]>(RECORDS_COLLECTION, recordId, 'labels') ?? []
+  return (
+    <div className="flex gap-1 flex-wrap">
+      {labels.map((label) => (
+        <span
+          key={label}
+          className="px-1.5 py-0.5 rounded text-xs bg-surface-hover text-muted"
+        >
+          {label}
+        </span>
+      ))}
+    </div>
+  )
+}
+
+function UpdatedAtCell({ recordId }: { recordId: string }) {
+  const updatedAt = useRecordField<string>(RECORDS_COLLECTION, recordId, 'updatedAt')
+  if (!updatedAt) return null
+  return (
+    <span className="text-xs text-subtle">
+      {new Date(updatedAt).toLocaleDateString('ja-JP', {
+        month: 'short',
+        day: 'numeric',
+      })}
+    </span>
+  )
+}
+
+function RecordFieldCell({
+  columnId,
+  recordId,
+  onUpdate,
+}: {
+  columnId: RecordPropertyKey
+  recordId: string
+  onUpdate: UpdateRecordFn
+}) {
+  switch (columnId) {
+    case 'identifier':
+      return <IdentifierCell recordId={recordId} />
+    case 'status':
+      return <StatusDropdownCell recordId={recordId} onUpdate={onUpdate} />
+    case 'priority':
+      return <PriorityDropdownCell recordId={recordId} onUpdate={onUpdate} />
+    case 'title':
+      return <EditableFieldCell recordId={recordId} field="title" onUpdate={onUpdate} />
+    case 'assignee':
+      return <AssigneeDropdownCell recordId={recordId} onUpdate={onUpdate} />
+    case 'labels':
+      return <LabelsCell recordId={recordId} />
+    case 'project':
+      return <EditableFieldCell recordId={recordId} field="project" onUpdate={onUpdate} />
+    case 'updatedAt':
+      return <UpdatedAtCell recordId={recordId} />
+  }
+}
+
+interface RowColumn {
+  id: RecordPropertyKey
+  width: number
+}
+
+// The row carries recordId and structure only — no record values — so the
+// memo holds across list invalidations and field deltas land on single cells.
+const TableRow = memo(function TableRow({
+  recordId,
+  isSelected,
+  columns,
+  virtualIndex,
+  measureElement,
+  onSelect,
+  onUpdate,
+}: {
+  recordId: string
+  isSelected: boolean
+  columns: RowColumn[]
+  virtualIndex: number
+  measureElement: (node: Element | null) => void
+  onSelect: (recordId: string) => void
+  onUpdate: UpdateRecordFn
+}) {
+  return (
+    <tr
+      data-index={virtualIndex}
+      ref={measureElement}
+      className={`cursor-pointer transition-colors border-b border-border ${
+        isSelected ? 'bg-surface-hover' : 'hover:bg-surface'
+      }`}
+      style={{ height: ROW_HEIGHT }}
+      onClick={() => onSelect(recordId)}
+    >
+      {columns.map((column) => (
+        <td
+          key={column.id}
+          className="px-3 py-1.5"
+          style={{ width: column.width }}
+        >
+          <RecordFieldCell
+            columnId={column.id}
+            recordId={recordId}
+            onUpdate={onUpdate}
+          />
+        </td>
+      ))}
+    </tr>
+  )
+})
+
 const ROW_HEIGHT = 40
 const MOBILE_VIEWPORT_QUERY = '(max-width: 767px)'
 
@@ -392,19 +543,25 @@ function useIsMobileViewport() {
   return isMobile
 }
 
-function MobileRecordCard({
-  record,
+const MobileRecordCard = memo(function MobileRecordCard({
+  recordId,
   isSelected,
-  onSelectRecord,
-  onUpdateRecord,
+  onSelect,
+  onUpdate,
   visibleProperties,
 }: {
-  record: DatabaseRecord
+  recordId: string
   isSelected: boolean
-  onSelectRecord: (record: DatabaseRecord) => void
-  onUpdateRecord: (recordId: string, field: keyof DatabaseRecord, value: string) => void
+  onSelect: (recordId: string) => void
+  onUpdate: UpdateRecordFn
   visibleProperties?: RecordPropertyKey[]
 }) {
+  const identifier = useRecordField<string>(RECORDS_COLLECTION, recordId, 'identifier')
+  const title = useRecordField<string>(RECORDS_COLLECTION, recordId, 'title')
+  const assignee = useRecordField<string | null>(RECORDS_COLLECTION, recordId, 'assignee') ?? null
+  const updatedAt = useRecordField<string>(RECORDS_COLLECTION, recordId, 'updatedAt')
+  const labels = useRecordField<string[]>(RECORDS_COLLECTION, recordId, 'labels') ?? []
+
   const isVisible = (property: RecordPropertyKey) =>
     !visibleProperties || visibleProperties.includes(property)
 
@@ -418,55 +575,47 @@ function MobileRecordCard({
           ? 'border-accent bg-surface-hover'
           : 'border-border bg-surface hover:bg-surface-hover'
       }`}
-      onClick={() => onSelectRecord(record)}
+      onClick={() => onSelect(recordId)}
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault()
-          onSelectRecord(record)
+          onSelect(recordId)
         }
       }}
     >
       <div className="mb-2 flex min-w-0 items-center justify-between gap-2">
         {isVisible('identifier') ? (
-          <span className="font-mono text-xs text-subtle">{record.identifier}</span>
+          <span className="font-mono text-xs text-subtle">{identifier}</span>
         ) : (
           <span />
         )}
         {isVisible('priority') && (
-          <PriorityDropdownCell
-            value={record.priority}
-            recordId={record.id}
-            onUpdate={onUpdateRecord}
-          />
+          <PriorityDropdownCell recordId={recordId} onUpdate={onUpdate} />
         )}
       </div>
       {isVisible('title') && (
         <div className="mb-3 line-clamp-2 text-sm font-medium leading-snug text-foreground">
-          {record.title}
+          {title}
         </div>
       )}
       <div className="flex min-w-0 items-center justify-between gap-2">
         {isVisible('status') ? (
-          <StatusDropdownCell
-            value={record.status}
-            recordId={record.id}
-            onUpdate={onUpdateRecord}
-          />
+          <StatusDropdownCell recordId={recordId} onUpdate={onUpdate} />
         ) : (
           <span />
         )}
         <div className="flex min-w-0 items-center gap-2">
-          {isVisible('assignee') && record.assignee && (
+          {isVisible('assignee') && assignee && (
             <span className="flex min-w-0 items-center gap-1.5 text-xs text-muted">
               <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent text-xs text-white">
-                {record.assignee[0]}
+                {assignee[0]}
               </span>
-              <span className="truncate">{record.assignee}</span>
+              <span className="truncate">{assignee}</span>
             </span>
           )}
-          {isVisible('updatedAt') && (
+          {isVisible('updatedAt') && updatedAt && (
             <span className="shrink-0 text-xs text-subtle">
-              {new Date(record.updatedAt).toLocaleDateString('ja-JP', {
+              {new Date(updatedAt).toLocaleDateString('ja-JP', {
                 month: 'short',
                 day: 'numeric',
               })}
@@ -474,9 +623,9 @@ function MobileRecordCard({
           )}
         </div>
       </div>
-      {isVisible('labels') && record.labels.length > 0 && (
+      {isVisible('labels') && labels.length > 0 && (
         <div className="mt-3 flex flex-wrap gap-1">
-          {record.labels.slice(0, 3).map((label) => (
+          {labels.slice(0, 3).map((label) => (
             <span
               key={label}
               className="rounded bg-canvas px-1.5 py-0.5 text-xs text-subtle"
@@ -488,7 +637,7 @@ function MobileRecordCard({
       )}
     </div>
   )
-}
+})
 
 export function TableView({
   records,
@@ -506,6 +655,7 @@ export function TableView({
   const sorting = controlledSorting ?? internalSorting
   const onSortingChange = controlledOnSortingChange ?? setInternalSorting
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([])
+  const [columnSizing, setColumnSizing] = useState<ColumnSizingState>({})
   const [internalGlobalFilter, setInternalGlobalFilter] = useState('')
   const globalFilter = controlledGlobalFilter ?? internalGlobalFilter
   const setGlobalFilter = controlledOnGlobalFilterChange ?? setInternalGlobalFilter
@@ -521,107 +671,48 @@ export function TableView({
     }
   }, [creatingDatabaseRecord])
 
+  // The table instance owns ordering concerns only — sorting, filtering,
+  // column sizing and visibility. Cell values render outside it, each cell
+  // subscribing to its own field.
   const columns = useMemo(
     () => [
       columnHelper.accessor('identifier', {
         header: 'ID',
-        size: 90,
-        cell: (info) => (
-          <span className="font-mono text-xs text-subtle">
-            {info.getValue()}
-          </span>
-        ),
+        size: COLUMN_SIZES.identifier,
       }),
       columnHelper.accessor('status', {
         header: 'Status',
-        size: 140,
-        cell: (info) => (
-          <StatusDropdownCell
-            value={info.getValue()}
-            recordId={info.row.original.id}
-            onUpdate={onUpdateRecord}
-          />
-        ),
+        size: COLUMN_SIZES.status,
         filterFn: (row, _id, filterValue: Status) =>
           row.original.status === filterValue,
       }),
       columnHelper.accessor('priority', {
         header: 'Priority',
-        size: 110,
-        cell: (info) => (
-          <PriorityDropdownCell
-            value={info.getValue()}
-            recordId={info.row.original.id}
-            onUpdate={onUpdateRecord}
-          />
-        ),
+        size: COLUMN_SIZES.priority,
       }),
       columnHelper.accessor('title', {
         header: 'Title',
-        size: 400,
-        cell: (info) => (
-          <EditableCell
-            value={info.getValue()}
-            recordId={info.row.original.id}
-            field="title"
-            onUpdate={onUpdateRecord}
-          />
-        ),
+        size: COLUMN_SIZES.title,
       }),
       columnHelper.accessor('assignee', {
         header: 'Assignee',
-        size: 140,
-        cell: (info) => (
-          <AssigneeDropdownCell
-            value={info.getValue()}
-            recordId={info.row.original.id}
-            onUpdate={onUpdateRecord}
-          />
-        ),
+        size: COLUMN_SIZES.assignee,
       }),
       columnHelper.accessor('labels', {
         header: 'Labels',
-        size: 160,
-        cell: (info) => (
-          <div className="flex gap-1 flex-wrap">
-            {info.getValue().map((label) => (
-              <span
-                key={label}
-                className="px-1.5 py-0.5 rounded text-xs bg-surface-hover text-muted"
-              >
-                {label}
-              </span>
-            ))}
-          </div>
-        ),
+        size: COLUMN_SIZES.labels,
         enableSorting: false,
       }),
       columnHelper.accessor('project', {
         header: 'Project',
-        size: 130,
-        cell: (info) => (
-          <EditableCell
-            value={info.getValue()}
-            recordId={info.row.original.id}
-            field="project"
-            onUpdate={onUpdateRecord}
-          />
-        ),
+        size: COLUMN_SIZES.project,
       }),
       columnHelper.accessor('updatedAt', {
         header: 'Updated',
-        size: 100,
-        cell: (info) => (
-          <span className="text-xs text-subtle">
-            {new Date(info.getValue()).toLocaleDateString('ja-JP', {
-              month: 'short',
-              day: 'numeric',
-            })}
-          </span>
-        ),
+        size: COLUMN_SIZES.updatedAt,
       }),
     ],
-    [onUpdateRecord]
+    []
   )
 
   const columnVisibility: VisibilityState | undefined = useMemo(() => {
@@ -638,13 +729,30 @@ export function TableView({
     }
   }, [visibleProperties])
 
+  // Stable while nothing structural changes, so memoized rows skip
+  // re-renders when only record values move underneath them.
+  const rowColumns: RowColumn[] = useMemo(
+    () =>
+      COLUMN_ORDER.filter(
+        (id) => !visibleProperties || visibleProperties.includes(id)
+      ).map((id) => ({ id, width: columnSizing[id] ?? COLUMN_SIZES[id] })),
+    [visibleProperties, columnSizing]
+  )
+
   const table = useReactTable({
     data: records,
     columns,
-    state: { sorting, columnFilters, globalFilter, ...(columnVisibility ? { columnVisibility } : {}) },
+    state: {
+      sorting,
+      columnFilters,
+      globalFilter,
+      columnSizing,
+      ...(columnVisibility ? { columnVisibility } : {}),
+    },
     onSortingChange,
     onColumnFiltersChange: setColumnFilters,
     onGlobalFilterChange: setGlobalFilter,
+    onColumnSizingChange: setColumnSizing,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
@@ -700,11 +808,11 @@ export function TableView({
           <div className="space-y-2">
             {rows.map((row) => (
               <MobileRecordCard
-                key={row.id}
-                record={row.original}
+                key={row.original.id}
+                recordId={row.original.id}
                 isSelected={row.original.id === selectedRecordId}
-                onSelectRecord={onSelectRecord}
-                onUpdateRecord={onUpdateRecord}
+                onSelect={onSelectRecord}
+                onUpdate={onUpdateRecord}
                 visibleProperties={visibleProperties}
               />
             ))}
@@ -804,31 +912,16 @@ export function TableView({
               {virtualizer.getVirtualItems().map((virtualRow) => {
                 const row = rows[virtualRow.index]
                 return (
-                  <tr
-                    key={row.id}
-                    data-index={virtualRow.index}
-                    ref={virtualizer.measureElement}
-                    className={`cursor-pointer transition-colors border-b border-border ${
-                      row.original.id === selectedRecordId
-                        ? 'bg-surface-hover'
-                        : 'hover:bg-surface'
-                    }`}
-                    style={{ height: ROW_HEIGHT }}
-                    onClick={() => onSelectRecord(row.original)}
-                  >
-                    {row.getVisibleCells().map((cell) => (
-                      <td
-                        key={cell.id}
-                        className="px-3 py-1.5"
-                        style={{ width: cell.column.getSize() }}
-                      >
-                        {flexRender(
-                          cell.column.columnDef.cell,
-                          cell.getContext()
-                        )}
-                      </td>
-                    ))}
-                  </tr>
+                  <TableRow
+                    key={row.original.id}
+                    recordId={row.original.id}
+                    isSelected={row.original.id === selectedRecordId}
+                    columns={rowColumns}
+                    virtualIndex={virtualRow.index}
+                    measureElement={virtualizer.measureElement}
+                    onSelect={onSelectRecord}
+                    onUpdate={onUpdateRecord}
+                  />
                 )
               })}
               {/* Virtual spacer bottom */}

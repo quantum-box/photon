@@ -20,7 +20,12 @@ vi.mock('../lib/recordsApi', () => ({
   deleteServerRecord: mocks.deleteServerRecord,
 }))
 
-import { RecordsProvider, useRecords, type CreateRecordData } from './RecordsContext'
+import {
+  RecordsProvider,
+  useLiveRecords,
+  useRecords,
+  type CreateRecordData,
+} from './RecordsContext'
 
 const engineDatabaseRecord: DatabaseRecord = {
   id: 'record-engine-1',
@@ -46,6 +51,16 @@ function Probe({ action }: { action: (context: ReturnType<typeof useRecords>) =>
   return null
 }
 
+function LiveRecordsProbe({ action }: { action: (records: DatabaseRecord[]) => void }) {
+  const records = useLiveRecords()
+
+  useEffect(() => {
+    action(records)
+  }, [action, records])
+
+  return null
+}
+
 describe('RecordsProvider engine projection', () => {
   beforeEach(() => {
     mocks.useLiveQuery
@@ -61,15 +76,15 @@ describe('RecordsProvider engine projection', () => {
     mocks.deleteServerRecord.mockReset().mockResolvedValue(undefined)
   })
 
-  it('renders records straight from the engine live query', () => {
+  it('serves records through useLiveRecords and counts through the context', () => {
     let observed: DatabaseRecord[] = []
     let counts: Record<string, number> = {}
 
     render(
       <RecordsProvider>
+        <LiveRecordsProbe action={(records) => { observed = records }} />
         <Probe
           action={(context) => {
-            observed = context.records
             counts = context.recordCountByStatus
           }}
         />

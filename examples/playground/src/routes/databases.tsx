@@ -9,7 +9,7 @@ import { DatabaseViewSettingsPanel } from '../components/DatabaseViewSettingsPan
 import { DetailPanel } from '../components/DetailPanel'
 import { CreateRecordModal } from '../components/CreateRecordModal'
 import { Kbd } from '../components/Kbd'
-import { useDatabaseRecords } from '../contexts/RecordsContext'
+import { useDatabaseRecords, useLiveRecords } from '../contexts/RecordsContext'
 import { type WorkspaceDatabase, useWorkspaceDatabases } from '../contexts/DatabasesContext'
 import { useDatabaseViews } from '../contexts/DatabaseViewsContext'
 import { statusConfig, type Status, type DatabaseRecord } from '../data/mock'
@@ -166,12 +166,12 @@ export const databasesRoute = createRoute({
 function DatabasesLayout() {
   const { database, view: viewId, status, sort, desc } = databasesRoute.useSearch()
   const {
-    records,
     handleMoveRecord,
     handleUpdateRecord,
     handleCreateRecord,
     handleDeleteRecord,
   } = useDatabaseRecords()
+  const records = useLiveRecords()
   const { databases } = useWorkspaceDatabases()
   const {
     getViewsForDatabase,
@@ -324,21 +324,23 @@ function DatabasesLayout() {
   )
 
   const handleSelectRecord = useCallback(
-    (record: DatabaseRecord) => {
-      if (selectedRecord?.id === record.id) {
+    (recordId: string) => {
+      if (selectedRecord?.id === recordId) {
         void navigate({
           to: '/databases',
           search: { database, view: savedSelectedView.id },
         })
-      } else {
-        void navigate({
-          to: '/databases/$recordId',
-          params: { recordId: record.identifier },
-          search: { database, view: savedSelectedView.id },
-        })
+        return
       }
+      const record = databaseRecords.find((candidate) => candidate.id === recordId)
+      if (!record) return
+      void navigate({
+        to: '/databases/$recordId',
+        params: { recordId: record.identifier },
+        search: { database, view: savedSelectedView.id },
+      })
     },
-    [database, navigate, savedSelectedView.id, selectedRecord]
+    [database, databaseRecords, navigate, savedSelectedView.id, selectedRecord]
   )
 
   const handleCreateRecordInDatabase = useCallback(
@@ -540,7 +542,8 @@ export const recordDetailRoute = createRoute({
 function RecordDetailPanel() {
   const { recordId } = recordDetailRoute.useParams()
   const { database, view } = databasesRoute.useSearch()
-  const { records, handleUpdateRecord, handleDeleteRecord } = useDatabaseRecords()
+  const { handleUpdateRecord, handleDeleteRecord } = useDatabaseRecords()
+  const records = useLiveRecords()
   const { databases } = useWorkspaceDatabases()
   const navigate = useNavigate()
   const databaseRecords = useMemo(

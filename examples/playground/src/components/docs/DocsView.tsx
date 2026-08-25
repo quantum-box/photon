@@ -5,7 +5,7 @@ import { BlockNoteView } from '@blocknote/shadcn'
 import '@blocknote/core/fonts/inter.css'
 import '@blocknote/shadcn/style.css'
 import { appKitConfig } from '../../app/kitConfig'
-import { useDatabaseRecords } from '../../contexts/RecordsContext'
+import { useLiveRecords } from '../../contexts/RecordsContext'
 import { createServerRecord } from '../../lib/recordsApi'
 import type { DocumentCollaboration } from '../../lib/docs/docYjs'
 import { useDocumentCollaboration } from '../../lib/docs/useDocumentCollaboration'
@@ -364,7 +364,7 @@ export function DocumentEditor({
 
 export function DocsView({ selectedDocId }: DocsViewProps) {
   const { docs, ready, createDocument, ensureDocument, renameDocument } = useDocs()
-  const { records } = useDatabaseRecords()
+  const records = useLiveRecords()
   const { createAttachment, attachmentsForSurface } = useWorkspaceAttachments()
   const navigate = useNavigate()
   const [linksByDocId, setLinksByDocId] = useState<Record<string, DocumentRecordLink[]>>({})
