@@ -21,7 +21,7 @@ import type { PhotonKernelModule } from './kernel.js'
 import { newId } from './id.js'
 import { Projection } from './projection.js'
 import { CollectionQuery, RecordQuery } from './query.js'
-import type { LiveQuery, QueryDescriptor, QueryState } from './query.js'
+import type { LiveQuery, QueryDescriptor, QueryState, QueryStatus } from './query.js'
 import { createRestTransport } from './rest/index.js'
 import type { RestResource } from './rest/index.js'
 import type { LocalStore, StoreWrite } from './store.js'
@@ -35,6 +35,7 @@ import type {
   Conflict,
   ConflictResolution,
   EngineRecord,
+  HybridTimestamp,
   Mutation,
   MutationHandle,
   Operation,
@@ -46,6 +47,27 @@ import type {
 } from './types.js'
 
 export type CollectionMode = 'engine-native' | 'rest-backed' | 'passthrough'
+
+/**
+ * When a collection's stored records enter the projection.
+ *
+ * - `eager` (default) — loaded during `bootstrap()`, before the client is
+ *   handed to the caller. Right for the structural collections a workspace
+ *   shell needs on first paint: databases, views, members.
+ * - `lazy` — skipped at bootstrap and loaded on the first `query()` /
+ *   `liveRecord()` touching the collection, or by an explicit
+ *   `hydrateCollection()`. Right for record-heavy collections, so startup
+ *   cost is proportional to workspace structure, not record count.
+ *
+ * Pending (unpushed) operations are always restored at bootstrap regardless
+ * of hydration mode — laziness must never lose an offline write.
+ *
+ * One caveat: patching an *existing* record in a lazy collection before it
+ * hydrates merges against an absent base. Reads trigger hydration, so any
+ * flow that shows a record before editing it is safe; a write-only flow
+ * should `await hydrateCollection()` first.
+ */
+export type CollectionHydration = 'eager' | 'lazy'
 
 /**
  * Per-collection sync behavior. The staged-adoption story is this one line:
@@ -62,9 +84,17 @@ export type CollectionMode = 'engine-native' | 'rest-backed' | 'passthrough'
  * Component code never changes across the three.
  */
 export type CollectionConfig =
-  | { readonly mode: 'engine-native' }
-  | { readonly mode: 'rest-backed'; readonly resource: RestResource<never> }
-  | { readonly mode: 'passthrough'; readonly resource: RestResource<never> }
+  | { readonly mode: 'engine-native'; readonly hydration?: CollectionHydration }
+  | {
+      readonly mode: 'rest-backed'
+      readonly resource: RestResource<never>
+      readonly hydration?: CollectionHydration
+    }
+  | {
+      readonly mode: 'passthrough'
+      readonly resource: RestResource<never>
+      readonly hydration?: CollectionHydration
+    }
 
 export interface PhotonClientOptions {
   /** Opaque to the engine; only ever compared for equality. */
@@ -95,6 +125,13 @@ export interface PhotonClient {
 
   query<T = unknown>(descriptor: QueryDescriptor<T>): LiveQuery<PhotonRecord<T>[]>
   liveRecord<T = unknown>(collection: Collection, recordId: RecordId): LiveQuery<PhotonRecord<T> | null>
+
+  /**
+   * Load a lazy collection's stored records into the projection. Idempotent
+   * and safe to call for eager collections, where it resolves immediately.
+   * Queries trigger this on their own; call it directly to prefetch.
+   */
+  hydrateCollection(collection: Collection): Promise<void>
 
   mutate<T = unknown>(mutation: Mutation): MutationHandle<T>
   /** One ChangeSet, one durable transaction, one push batch. */
@@ -177,6 +214,9 @@ class PhotonClientImpl implements PhotonClient {
   private closed = false
   private readonly registryKey: string
   private readonly collectionModes = new Map<Collection, CollectionMode>()
+  private readonly lazyCollections = new Set<Collection>()
+  private readonly hydratedLazyCollections = new Set<Collection>()
+  private readonly hydrationInFlight = new Map<Collection, Promise<void>>()
   /** Wraps the REST resources of rest-backed and passthrough collections. */
   private readonly restTransport: SyncTransport | null
 
@@ -204,6 +244,7 @@ class PhotonClientImpl implements PhotonClient {
     const restResources: Record<Collection, RestResource<never>> = {}
     for (const [collection, config] of Object.entries(options.collections ?? {})) {
       this.collectionModes.set(collection, config.mode)
+      if (config.hydration === 'lazy') this.lazyCollections.add(collection)
       if (config.mode === 'engine-native') continue
       // Runtime guard for plain-JS callers: the union type cannot save them.
       if (!('resource' in config) || !config.resource) {
@@ -258,8 +299,11 @@ class PhotonClientImpl implements PhotonClient {
   async bootstrap(): Promise<void> {
     await this.storage.migrate()
 
+    // Lazy collections are the record-heavy ones; skipping them here is what
+    // makes startup cost proportional to workspace structure, not data size.
+    const lazy = [...this.lazyCollections]
     const [records, pendingOps, operationIds, conflicts] = await Promise.all([
-      this.storage.loadRecords(this.scope),
+      this.storage.loadRecords(this.scope, lazy.length ? { excludeCollections: lazy } : undefined),
       this.storage.loadPendingOperations(this.scope),
       this.storage.loadOperationIds(this.scope),
       this.storage.loadConflicts(this.scope),
@@ -274,9 +318,12 @@ class PhotonClientImpl implements PhotonClient {
       if (change) changes.push(change)
     }
 
-    // Pending operations were durably stored but never acknowledged. Their
-    // effects are already in the projection; re-registering them is what keeps
-    // `pending` true across a reload and gets them re-pushed.
+    // Pending operations were durably stored but never acknowledged.
+    // Re-registering them — for lazy collections too — is what keeps `pending`
+    // true across a reload and gets them re-pushed; an unpushed write must
+    // never be lost to deferred hydration. For an eager collection its effects
+    // are already in the projection; for a lazy one they arrive with the
+    // stored record when the collection hydrates.
     for (const stored of pendingOps) {
       this.registerPending(stored.operation)
       const change = this.projection.addPending(
@@ -297,11 +344,14 @@ class PhotonClientImpl implements PhotonClient {
   // -------------------------------------------------------------------------
 
   query<T = unknown>(descriptor: QueryDescriptor<T>): LiveQuery<PhotonRecord<T>[]> {
+    // Subscribing is what pulls a lazy collection in; the query stays
+    // `loading` until its collection's stored records are in the projection.
+    const collectionReady = this.hydrateCollection(descriptor.collection)
     const query = new CollectionQuery<T>(
       descriptor,
       {
         recordsIn: (collection) => this.projection.recordsIn(collection) as Iterable<PhotonRecord<T>>,
-        hydrated: this.hydrated,
+        hydrated: collectionReady,
       },
       (target) => {
         this.collectionQueries.get(target.collection)?.delete(target as never)
@@ -315,8 +365,8 @@ class PhotonClientImpl implements PhotonClient {
     }
     bucket.add(query as never)
 
-    query.invalidate(this.isHydrated ? 'ready' : 'loading')
-    void this.hydrated.then(() => {
+    query.invalidate(this.collectionStatus(descriptor.collection))
+    void collectionReady.then(() => {
       if (query.invalidate('ready')) query.notify()
     })
 
@@ -327,11 +377,12 @@ class PhotonClientImpl implements PhotonClient {
     collection: Collection,
     recordId: RecordId,
   ): LiveQuery<PhotonRecord<T> | null> {
+    const collectionReady = this.hydrateCollection(collection)
     const query = new RecordQuery<T>(
       collection,
       recordId,
       (c, id) => this.projection.get(c, id) as PhotonRecord<T> | null,
-      this.hydrated,
+      collectionReady,
       (target) => {
         this.recordQueries.get(target.collection)?.delete(target as never)
       },
@@ -344,8 +395,8 @@ class PhotonClientImpl implements PhotonClient {
     }
     bucket.add(query as never)
 
-    query.invalidate(this.isHydrated ? 'ready' : 'loading')
-    void this.hydrated.then(() => {
+    query.invalidate(this.collectionStatus(collection))
+    void collectionReady.then(() => {
       if (query.invalidate('ready')) query.notify()
     })
 
@@ -353,6 +404,55 @@ class PhotonClientImpl implements PhotonClient {
   }
 
   private isHydrated = false
+
+  private collectionStatus(collection: Collection): QueryStatus {
+    if (this.lazyCollections.has(collection)) {
+      return this.hydratedLazyCollections.has(collection) ? 'ready' : 'loading'
+    }
+    return this.isHydrated ? 'ready' : 'loading'
+  }
+
+  hydrateCollection(collection: Collection): Promise<void> {
+    if (!this.lazyCollections.has(collection) || this.hydratedLazyCollections.has(collection)) {
+      return this.hydrated
+    }
+    const inFlight = this.hydrationInFlight.get(collection)
+    if (inFlight) return inFlight
+
+    const run = this.loadLazyCollection(collection).finally(() => {
+      this.hydrationInFlight.delete(collection)
+    })
+    this.hydrationInFlight.set(collection, run)
+    return run
+  }
+
+  private async loadLazyCollection(collection: Collection): Promise<void> {
+    const records = await this.storage.loadRecords(this.scope, { collection })
+    // A complete snapshot may have hydrated the collection while this load was
+    // in flight; its rows are then stale and must not resurrect anything.
+    if (this.closed || this.hydratedLazyCollections.has(collection)) return
+
+    const changes: RecordChange[] = []
+    for (const record of records) {
+      const existing = this.projection.get(collection, record.key.record_id)
+      // A mutation, ingest, or pull can outrun this load. What is in memory
+      // is then ahead of the stored row: optimistic or non-durable state
+      // always wins, and among durable states the newer version wins.
+      if (
+        existing &&
+        (existing.pending ||
+          !existing.durable ||
+          !isNewerVersion(record.version, existing.version))
+      ) {
+        continue
+      }
+      const change = this.projection.set(record, { durable: true })
+      if (change) changes.push(change)
+    }
+
+    this.hydratedLazyCollections.add(collection)
+    this.emit('hydrate', changes)
+  }
 
   // -------------------------------------------------------------------------
   // Writes
@@ -379,6 +479,13 @@ class PhotonClientImpl implements PhotonClient {
     let lastRecord: PhotonRecord<T> | null = null
 
     for (const mutation of mutations) {
+      // A write can target a lazy collection before it hydrates. Kick the
+      // hydration off so the stored base converges into the projection; the
+      // optimistic record itself is shielded from the load by the
+      // pending/durable guard in loadLazyCollection.
+      if (this.lazyCollections.has(mutation.collection)) {
+        void this.hydrateCollection(mutation.collection)
+      }
       const operation = this.kernel.buildOperation({
         key: {
           scope: this.scope,
@@ -728,6 +835,14 @@ class PhotonClientImpl implements PhotonClient {
     const changes: RecordChange[] = []
     const seen = new Set<RecordId>()
 
+    // A complete server snapshot plus the re-applied pending operations below
+    // is a superset of what stored-record hydration would load, so it counts
+    // as hydration — and marking it now stops a slower loadRecords() from
+    // resurrecting rows this snapshot deletes.
+    if (page.complete && this.lazyCollections.has(page.collection)) {
+      this.hydratedLazyCollections.add(page.collection)
+    }
+
     for (const remote of page.records) {
       seen.add(remote.recordId)
       const version = this.kernel.currentTimestamp()
@@ -766,8 +881,21 @@ class PhotonClientImpl implements PhotonClient {
     this.emit('remote', changes)
   }
 
-  private applyRemoteOperations(operations: readonly Operation[]): void {
+  private async applyRemoteOperations(operations: readonly Operation[]): Promise<void> {
     if (!operations.length) return
+
+    // Merging a remote operation needs the record's current state as its base.
+    // For a lazy collection that base may still be in storage only, so pull
+    // the collection in before applying — correctness outranks deferral.
+    const needHydration = [
+      ...new Set(operations.map((operation) => operation.key.collection)),
+    ].filter(
+      (collection) =>
+        this.lazyCollections.has(collection) && !this.hydratedLazyCollections.has(collection),
+    )
+    if (needHydration.length) {
+      await Promise.all(needHydration.map((collection) => this.hydrateCollection(collection)))
+    }
 
     const touched = new Map<string, EngineRecord>()
     for (const operation of operations) {
@@ -908,15 +1036,31 @@ class PhotonClientImpl implements PhotonClient {
       this.isHydrated = true
 
       for (const collection of collections) {
+        // A change can land in a lazy collection mid-hydration (an optimistic
+        // write, a pulled operation). Data updates, but the contract is that
+        // the status stays `loading` until hydration completes.
+        const status = this.collectionStatus(collection)
         for (const query of this.collectionQueries.get(collection) ?? []) {
-          if (query.invalidate('ready')) query.notify()
+          if (query.invalidate(status)) query.notify()
         }
         for (const query of this.recordQueries.get(collection) ?? []) {
-          if (query.invalidate('ready')) query.notify()
+          if (query.invalidate(status)) query.notify()
         }
       }
     })
   }
+}
+
+/**
+ * Strict HLC ordering for hydration merges. Ties are not "newer": applying a
+ * stored row over an identical in-memory record would be pure churn.
+ */
+function isNewerVersion(candidate: HybridTimestamp, current: HybridTimestamp): boolean {
+  if (candidate.wall_time_ms !== current.wall_time_ms) {
+    return candidate.wall_time_ms > current.wall_time_ms
+  }
+  if (candidate.counter !== current.counter) return candidate.counter > current.counter
+  return candidate.actor_id > current.actor_id
 }
 
 export type { QueryDescriptor, QueryState, LiveQuery }

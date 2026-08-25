@@ -10,6 +10,7 @@
 export { createPhotonClient } from './client.js'
 export type {
   CollectionConfig,
+  CollectionHydration,
   CollectionMode,
   PhotonClient,
   PhotonClientOptions,
@@ -35,6 +36,7 @@ export type {
 
 export type {
   CursorRow,
+  LoadRecordsOptions,
   LocalStore,
   OperationStatusUpdate,
   StoreWrite,

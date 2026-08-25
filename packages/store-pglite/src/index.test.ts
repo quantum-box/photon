@@ -118,3 +118,51 @@ describe('exclusiveLock', () => {
     await store.close()
   })
 })
+
+describe('loadRecords filters', () => {
+  function queryCapturingClient() {
+    const calls: { sql: string; params: unknown[] }[] = []
+    const client = {
+      calls,
+      async query(sql: string, params: unknown[]) {
+        calls.push({ sql, params })
+        return { rows: [] }
+      },
+      async close() {},
+    }
+    return client as unknown as PGlite & { calls: { sql: string; params: unknown[] }[] }
+  }
+
+  it('loads the whole scope when no filter is given', async () => {
+    const client = queryCapturingClient()
+    const store = await createPGliteStore({ client })
+
+    await store.loadRecords('workspace:a')
+    expect(client.calls[0]?.sql).toBe(
+      'SELECT record_json FROM photon_engine_records WHERE scope = $1',
+    )
+    expect(client.calls[0]?.params).toEqual(['workspace:a'])
+  })
+
+  it('narrows to one collection for lazy hydration', async () => {
+    const client = queryCapturingClient()
+    const store = await createPGliteStore({ client })
+
+    await store.loadRecords('workspace:a', { collection: 'records' })
+    expect(client.calls[0]?.sql).toBe(
+      'SELECT record_json FROM photon_engine_records WHERE scope = $1 AND collection = $2',
+    )
+    expect(client.calls[0]?.params).toEqual(['workspace:a', 'records'])
+  })
+
+  it('excludes lazy collections at bootstrap', async () => {
+    const client = queryCapturingClient()
+    const store = await createPGliteStore({ client })
+
+    await store.loadRecords('workspace:a', { excludeCollections: ['records', 'comments'] })
+    expect(client.calls[0]?.sql).toBe(
+      'SELECT record_json FROM photon_engine_records WHERE scope = $1 AND collection NOT IN ($2, $3)',
+    )
+    expect(client.calls[0]?.params).toEqual(['workspace:a', 'records', 'comments'])
+  })
+})
