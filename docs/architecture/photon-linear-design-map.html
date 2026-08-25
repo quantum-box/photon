@@ -1,0 +1,443 @@
+<title>Photon × Linear 設計マップ</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;900&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+  :root {
+    --bg: #FAF9F6;
+    --surface: #FFFFFF;
+    --surface-2: #F2F0EA;
+    --ink: #23282D;
+    --ink-2: #5C6670;
+    --line: #E3E0D8;
+    --accent: #C07A00;
+    --accent-soft: #FBF3E3;
+    --ok: #2E7D4F;
+    --ok-soft: #E7F3EC;
+    --gap: #B44A2E;
+    --gap-soft: #F9EAE4;
+    --plan: #3A6B9C;
+    --plan-soft: #E9F1F8;
+    --code-bg: #F2F0EA;
+    --shadow: 0 1px 3px rgba(35, 40, 45, .06);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #16191D;
+      --surface: #1E2227;
+      --surface-2: #262B31;
+      --ink: #E7E4DD;
+      --ink-2: #9BA3AB;
+      --line: #333A41;
+      --accent: #E8A93E;
+      --accent-soft: #33290F;
+      --ok: #5DBA87;
+      --ok-soft: #16301F;
+      --gap: #E07B5B;
+      --gap-soft: #3A1F14;
+      --plan: #7FAAD4;
+      --plan-soft: #182B3C;
+      --code-bg: #262B31;
+      --shadow: 0 1px 3px rgba(0, 0, 0, .3);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #16191D;
+    --surface: #1E2227;
+    --surface-2: #262B31;
+    --ink: #E7E4DD;
+    --ink-2: #9BA3AB;
+    --line: #333A41;
+    --accent: #E8A93E;
+    --accent-soft: #33290F;
+    --ok: #5DBA87;
+    --ok-soft: #16301F;
+    --gap: #E07B5B;
+    --gap-soft: #3A1F14;
+    --plan: #7FAAD4;
+    --plan-soft: #182B3C;
+    --code-bg: #262B31;
+    --shadow: 0 1px 3px rgba(0, 0, 0, .3);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "Noto Sans JP", "Hiragino Sans", sans-serif;
+    font-size: 15px;
+    line-height: 1.85;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 900px; margin: 0 auto; padding: 56px 24px 96px; }
+
+  .eyebrow {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 11px;
+    letter-spacing: .18em;
+    color: var(--accent);
+    font-weight: 600;
+  }
+  h1 {
+    font-size: 34px;
+    font-weight: 900;
+    line-height: 1.3;
+    margin: 8px 0 12px;
+    text-wrap: balance;
+  }
+  .lead { color: var(--ink-2); max-width: 42em; margin: 0; }
+  .lead strong { color: var(--ink); }
+
+  section { margin-top: 64px; }
+  h2 {
+    font-size: 21px;
+    font-weight: 700;
+    margin: 0 0 4px;
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+  }
+  h2 .no {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 13px;
+    color: var(--accent);
+    font-weight: 600;
+  }
+  .sub { color: var(--ink-2); margin: 0 0 24px; max-width: 44em; }
+
+  /* thesis quote */
+  .thesis {
+    margin: 28px 0 0;
+    padding: 20px 24px;
+    background: var(--accent-soft);
+    border-left: 3px solid var(--accent);
+    border-radius: 0 6px 6px 0;
+  }
+  .thesis p { margin: 0; font-weight: 700; font-size: 16px; }
+  .thesis span { font-weight: 400; color: var(--ink-2); font-size: 13px; }
+
+  /* pillar cards */
+  .pillars { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  @media (max-width: 720px) { .pillars { grid-template-columns: 1fr; } }
+  .pillar {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 20px;
+    box-shadow: var(--shadow);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .pillar h3 { margin: 0; font-size: 15px; font-weight: 700; line-height: 1.5; }
+  .pillar h3 small {
+    display: block;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 10.5px;
+    color: var(--ink-2);
+    font-weight: 500;
+    letter-spacing: .04em;
+  }
+  .pillar p { margin: 0; font-size: 13px; color: var(--ink-2); flex: 1; }
+
+  .badge {
+    align-self: flex-start;
+    font-size: 11.5px;
+    font-weight: 700;
+    padding: 3px 10px;
+    border-radius: 99px;
+    letter-spacing: .02em;
+  }
+  .badge.ok   { background: var(--ok-soft); color: var(--ok); }
+  .badge.gap  { background: var(--gap-soft); color: var(--gap); }
+  .badge.plan { background: var(--plan-soft); color: var(--plan); }
+
+  /* mapping table */
+  .tablewrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); box-shadow: var(--shadow); }
+  table { border-collapse: collapse; width: 100%; min-width: 640px; font-size: 13.5px; }
+  th, td { text-align: left; padding: 12px 16px; border-top: 1px solid var(--line); vertical-align: top; }
+  thead th {
+    border-top: none;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 11px;
+    letter-spacing: .1em;
+    color: var(--ink-2);
+    font-weight: 600;
+    background: var(--surface-2);
+  }
+  td:first-child { font-weight: 500; }
+  td .note { color: var(--ink-2); font-size: 12.5px; display: block; }
+
+  code, .mono {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: .92em;
+  }
+  code {
+    background: var(--code-bg);
+    padding: 1px 6px;
+    border-radius: 4px;
+  }
+
+  /* architecture diagram */
+  .diagram {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 28px;
+    box-shadow: var(--shadow);
+    overflow-x: auto;
+  }
+  .diagram-inner { display: flex; gap: 24px; min-width: 620px; }
+  .stack { flex: 1.6; display: flex; flex-direction: column; }
+  .layer {
+    border: 1.5px solid var(--line);
+    border-radius: 8px;
+    padding: 14px 18px;
+    background: var(--bg);
+  }
+  .layer.hot { border-color: var(--accent); background: var(--accent-soft); }
+  .layer h4 { margin: 0; font-size: 14px; font-weight: 700; display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+  .layer h4 .tag { font-family: "IBM Plex Mono", monospace; font-size: 10.5px; color: var(--ink-2); font-weight: 500; white-space: nowrap; }
+  .layer.hot h4 .tag { color: var(--accent); }
+  .layer p { margin: 4px 0 0; font-size: 12.5px; color: var(--ink-2); line-height: 1.7; }
+  .flow {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 18px;
+    color: var(--ink-2);
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 11px;
+  }
+  .flow::before { content: "↕"; color: var(--accent); font-size: 14px; }
+
+  .sidecar { flex: 1; display: flex; flex-direction: column; gap: 12px; }
+  .plugin {
+    border: 1.5px dashed var(--plan);
+    border-radius: 8px;
+    padding: 14px 18px;
+    background: var(--plan-soft);
+  }
+  .plugin h4 { margin: 0; font-size: 14px; font-weight: 700; color: var(--plan); }
+  .plugin p { margin: 4px 0 0; font-size: 12.5px; color: var(--ink-2); line-height: 1.7; }
+  .sidecar .hintline {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 11px;
+    color: var(--plan);
+    padding-left: 4px;
+  }
+
+  /* roadmap */
+  .steps { display: flex; flex-direction: column; gap: 12px; counter-reset: step; }
+  .step {
+    display: flex;
+    gap: 18px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 18px 20px;
+    box-shadow: var(--shadow);
+  }
+  .step::before {
+    counter-increment: step;
+    content: counter(step);
+    font-family: "IBM Plex Mono", monospace;
+    font-weight: 600;
+    font-size: 14px;
+    color: var(--accent);
+    border: 1.5px solid var(--accent);
+    border-radius: 99px;
+    width: 30px;
+    height: 30px;
+    flex: none;
+    display: grid;
+    place-items: center;
+    margin-top: 2px;
+  }
+  .step h3 { margin: 0 0 2px; font-size: 15px; font-weight: 700; }
+  .step p { margin: 0; font-size: 13.5px; color: var(--ink-2); }
+
+  .aside {
+    margin-top: 28px;
+    background: var(--surface-2);
+    border-radius: 8px;
+    padding: 18px 22px;
+  }
+  .aside h3 { margin: 0 0 8px; font-size: 13px; font-weight: 700; letter-spacing: .04em; color: var(--ink-2); }
+  .aside ul { margin: 0; padding-left: 1.3em; font-size: 13.5px; color: var(--ink-2); }
+  .aside li { margin: 4px 0; }
+  .aside li strong { color: var(--ink); font-weight: 600; }
+
+  footer {
+    margin-top: 72px;
+    padding-top: 20px;
+    border-top: 1px solid var(--line);
+    font-size: 12.5px;
+    color: var(--ink-2);
+  }
+  footer a { color: var(--plan); }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">ARCHITECTURE NOTE · 2026-08-25</div>
+    <h1>Photon × Linear 設計マップ</h1>
+    <p class="lead">Linearの速さの技術分解(<span class="mono">performance.dev</span>)をPhotonの現在地に重ねた整理。結論: <strong>Engine/Liveの分離と楽観書き込みはLinearの実構成と同型で実装済み</strong>。残るギャップは読み取り粒度(field単位)・lazy hydration・pull通知の3点。</p>
+  </header>
+
+  <section>
+    <h2><span class="no">01</span>Linearの設計思想と3本柱</h2>
+    <p class="sub">速さは単一の技術ではなく設計思想の積み重ね。UIの応答性をネットワークレイテンシから切り離すことがすべての出発点。</p>
+
+    <div class="pillars">
+      <div class="pillar">
+        <h3>Database in the Browser<small>UIが読むDBはブラウザ内にある</small></h3>
+        <p>IndexedDBからメモリ上のobject poolへhydrateし、UIのクエリはすべてpoolに向く。サーバーはsync target。</p>
+        <span class="badge ok">Photon: projection pool + PGliteで実装済み ✓</span>
+      </div>
+      <div class="pillar">
+        <h3>Mutations Don't Wait<small>書き込みはネットワークを待たない</small></h3>
+        <p>observable更新(即UI反映)・ローカルDB書き込み・serverキュー投入を同時に実行。rejectされた時だけrevert。</p>
+        <span class="badge ok">Photon: 楽観apply + pending op + rollbackで実装済み ✓</span>
+      </div>
+      <div class="pillar">
+        <h3>One Delta, One Cell<small>1フィールドの更新は1セルだけ再描画</small></h3>
+        <p>プロパティ単位のobservableで、50件の更新は「50セルの再描画」で済む。リスト全体は動かない。</p>
+        <span class="badge plan">Photon: record粒度まで実装済み、field粒度が残り</span>
+      </div>
+    </div>
+
+    <div class="thesis">
+      <p>"UI responsiveness should not depend on network latency"<br>
+      <span>サーバーはsource of truthではなくsync target。この前提がスピナーの排除・楽観UI・オフライン対応をすべて同じ仕組みで説明する。</span></p>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="no">02</span>Linear ⇄ Photon コンポーネント対応</h2>
+    <p class="sub">Linear自身も「独自sync engineがcore、Yjs(y-prosemirror)はリッチテキスト共同編集専用」という構成。PhotonのEngine/Live分離はこれと一致する。</p>
+
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr><th>役割</th><th>Linear</th><th>Photon</th><th>状態</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>耐久同期の core</td>
+            <td>独自sync engine<span class="note">IndexedDB + delta protocol</span></td>
+            <td>Photon Engine<span class="note">Rust crate + PGlite + push/pull</span></td>
+            <td><span class="badge ok">同型・実装済み</span></td>
+          </tr>
+          <tr>
+            <td>構造化データの読み取り層</td>
+            <td>MobX object pool<span class="note">プロパティ単位のobservable</span></td>
+            <td>projection + LiveQuery<span class="note">photon-react が useSyncExternalStore で購読。record単位でidentity安定</span></td>
+            <td><span class="badge plan">field粒度が未実装</span></td>
+          </tr>
+          <tr>
+            <td>共同編集 plugin</td>
+            <td>y-prosemirror<span class="note">issue descriptionのみCRDT</span></td>
+            <td>Photon Live<span class="note">Yjs + presence / awareness</span></td>
+            <td><span class="badge ok">分離方針が一致</span></td>
+          </tr>
+          <tr>
+            <td>delta到達の通知</td>
+            <td>WebSocket push配信</td>
+            <td>pull型 + sync loopトリガー<span class="note">Liveをpullヒントに使う案</span></td>
+            <td><span class="badge plan">計画に追加余地</span></td>
+          </tr>
+          <tr>
+            <td>起動時hydration</td>
+            <td>構造のみ即時、issueはlazy<span class="note">起動コスト ∝ 構造(データ量に非依存)</span></td>
+            <td>bootstrapがscope内全recordをload<span class="note">client.bootstrap() → storage.loadRecords(scope)</span></td>
+            <td><span class="badge gap">lazy化が必要</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="no">03</span>core読み取り層の現在地</h2>
+    <p class="sub">UIはPGliteに直接クエリせず、メモリ上のprojection poolを読む — この構造は実装済み。PGliteはhydration元 + 耐久化先。Liveはcoreの正しさに関与しないpluginとして横に置く。残りはUI最上段の購読粒度。</p>
+
+    <div class="diagram">
+      <div class="diagram-inner">
+        <div class="stack">
+          <div class="layer hot">
+            <h4>UI <span class="tag">1 delta = 1 cell re-render / ここが残り</span></h4>
+            <p><code>useLiveQuery</code> / <code>useRecord</code> は実装済み。field単位の <code>useRecordField</code> 系selectorを足し、全records配列のContext配布をセル購読に置き換える。</p>
+          </div>
+          <div class="flow">subscribe / mutate</div>
+          <div class="layer">
+            <h4>in-memory projection pool <span class="tag">core / 実装済み</span></h4>
+            <p>LinearのMobX pool相当。書き込みは operation生成 → projection即時更新 → PGlite書き込み → push queue と一気に流れ、record objectは変更時のみ再割り当て。</p>
+          </div>
+          <div class="flow">hydrate / persist</div>
+          <div class="layer">
+            <h4>PGlite <span class="tag">projections + pending op log</span></h4>
+            <p>構造は即時hydrate、recordはビュー表示時にオンデマンド。cursorもここに永続化。</p>
+          </div>
+          <div class="flow">push / pull</div>
+          <div class="layer">
+            <h4>Engine server <span class="tag">edge → cloud authority</span></h4>
+            <p>business logic検証 → accepted op + <code>remote_sequence</code>。ここは実装済みの領域。</p>
+          </div>
+        </div>
+        <div class="sidecar">
+          <div class="plugin">
+            <h4>Photon Live(plugin)</h4>
+            <p>presence / awareness / リッチテキスト共同編集(将来のview editor・docs)。Yjsはここに閉じる。</p>
+          </div>
+          <div class="hintline">→ core接点は「pullすべき変更がある」という通知のみ</div>
+          <div class="plugin">
+            <h4>畳む対象</h4>
+            <p>RecordsContextの「全records配列をContextで配布」するパス。field購読への移行後、Contextは書き込みハンドラだけに痩せる。</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="no">04</span>優先順位</h2>
+    <p class="sub">上から順に効果が大きい。いずれもEngine client APIの上のレイヤーなので、PLT-3072〜3074と独立に着手できる。</p>
+
+    <div class="steps">
+      <div class="step">
+        <div>
+          <h3>field粒度の購読(useRecordField)</h3>
+          <p>coreにfield selector付きLiveQueryを追加し、photon-reactに <code>useRecordField</code> を生やす。テーブルセル・Boardカードをfield購読に移行し、「1 delta = 1 cell」を完成させる。</p>
+        </div>
+      </div>
+      <div class="step">
+        <div>
+          <h3>lazy hydration(起動コスト ∝ 構造)</h3>
+          <p>bootstrapでdatabases / viewsの構造だけhydrateし、recordはビュー表示時にPGliteから引く。1万record時代でも100 record時と同じ起動速度を目標値にする。</p>
+        </div>
+      </div>
+      <div class="step">
+        <div>
+          <h3>Liveをpullヒントに</h3>
+          <p>sync loopの既存トリガー(boot / online / visibility / reconnect)に加え、Liveチャネル経由の「変更あり」通知でpullを起こす。ポーリングなしでdelta到達が速くなり、Live障害はcoreに波及しない。</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="aside">
+      <h3>独立して進められる小粒トラック</h3>
+      <ul>
+        <li><strong>Render-first auth</strong> — localStorageのtoken + PGliteがあればhappy pathを仮定して即shell表示、検証は裏で。401時のみredirect</li>
+        <li><strong>Viteビルド最適化</strong> — <code>target: esnext</code> / <code>lightningcss</code> / package単位<code>manualChunks</code> / <code>modulepreload</code>。Web版はService Worker precacheでオフライン起動</li>
+        <li><strong>⌘K コマンドパレット</strong> — ローカルpool / PGliteだけで検索。「サーバーを待たない検索」はlocal-firstのショーケース</li>
+        <li><strong>アニメーションtoken</strong> — <code>transform</code> / <code>opacity</code> + paint-only propertyに限定。duration 0.1〜0.35s、enterは即時・exitのみfade</li>
+      </ul>
+    </div>
+  </section>
+
+  <footer>
+    出典: <a href="https://performance.dev/how-is-linear-so-fast-a-technical-breakdown">How is Linear so fast? — performance.dev</a> / Photon側の参照: <span class="mono">packages/core/src/query.ts</span>, <span class="mono">packages/react/src/index.tsx</span>, <span class="mono">examples/playground/src/contexts/RecordsContext.tsx</span>
+  </footer>
+</div>
