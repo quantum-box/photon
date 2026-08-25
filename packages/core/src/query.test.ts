@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { buildComparator, matchesWhere } from './query.js'
+import { buildComparator, matchesWhere, readField } from './query.js'
 import type { PhotonRecord } from './types.js'
 
 function record(id: string, value: unknown): PhotonRecord {
@@ -49,6 +49,19 @@ describe('matchesWhere', () => {
   it('matches contains against both strings and arrays', () => {
     expect(matchesWhere({ labels: ['bug', 'ui'] }, { labels: { contains: 'ui' } })).toBe(true)
     expect(matchesWhere({ title: 'fix the bug' }, { title: { contains: 'bug' } })).toBe(true)
+  })
+})
+
+describe('readField', () => {
+  it('reads flat and dotted paths', () => {
+    expect(readField({ title: 'a' }, 'title')).toBe('a')
+    expect(readField({ meta: { owner: 'ada' } }, 'meta.owner')).toBe('ada')
+  })
+
+  it('returns undefined for missing paths and non-object values', () => {
+    expect(readField({ meta: null }, 'meta.owner')).toBeUndefined()
+    expect(readField('scalar', 'title')).toBeUndefined()
+    expect(readField(null, 'title')).toBeUndefined()
   })
 })
 

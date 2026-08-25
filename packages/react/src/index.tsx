@@ -20,6 +20,7 @@ import {
   type ReactNode,
 } from 'react'
 
+import { readField } from '@quantum-box/photon-core'
 import type {
   AckResult,
   ChangeSet,
@@ -163,6 +164,105 @@ export function useRecord<T = unknown>(
   return useOwnedQuery(client, `record:${collection}:${recordId}`, () =>
     client.liveRecord<T>(collection, recordId),
   )
+}
+
+/**
+ * Scalars compare by `Object.is`; arrays and plain objects compare one level
+ * deep. The engine rebuilds `record.value` wholesale on any change, so a
+ * nested container can be a fresh allocation with identical content — without
+ * the shallow pass, a title edit would re-render every labels cell.
+ */
+function sameFieldValue(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true
+  if (Array.isArray(a) && Array.isArray(b)) {
+    if (a.length !== b.length) return false
+    for (let i = 0; i < a.length; i += 1) if (!Object.is(a[i], b[i])) return false
+    return true
+  }
+  if (
+    typeof a === 'object' && a !== null && !Array.isArray(a) &&
+    typeof b === 'object' && b !== null && !Array.isArray(b)
+  ) {
+    const aKeys = Object.keys(a)
+    const bKeys = Object.keys(b)
+    if (aKeys.length !== bKeys.length) return false
+    for (const key of aKeys) {
+      if (!Object.is((a as Record<string, unknown>)[key], (b as Record<string, unknown>)[key])) {
+        return false
+      }
+    }
+    return true
+  }
+  return false
+}
+
+/**
+ * Subscribe to one field of one record: the "one delta, one cell" read path.
+ *
+ * The record query still notifies on every change to the record, but this hook
+ * hands React a snapshot that only changes identity when the selected field's
+ * value changes — `useSyncExternalStore` bails out of the re-render otherwise.
+ * A table cell or board card chip built on this stays still while its
+ * neighbours update.
+ *
+ * `field` takes the same dotted paths as the query DSL (`'meta.owner'`).
+ * Returns `undefined` while loading and when the record or field is absent.
+ */
+export function useRecordField<V = unknown>(
+  collection: Collection,
+  recordId: RecordId,
+  field: string,
+): V | undefined {
+  const client = usePhotonClient()
+  const key = `field:${collection}:${recordId}:${field}`
+
+  const holder = useRef<OwnedQuery<PhotonRecord | null> | null>(null)
+  // The selector cache lives outside getSnapshot so equal-by-content values
+  // keep their previous identity across engine notifications. Written during
+  // getSnapshot, which React may call on discarded renders — safe because the
+  // write is idempotent for a given (state, field).
+  const cache = useRef<{ key: string; state: QueryState<PhotonRecord | null>; selected: V | undefined } | null>(null)
+
+  const acquire = useCallback(() => {
+    const current = holder.current
+    if (!current || current.client !== client || current.key !== key) {
+      current?.query.destroy()
+      holder.current = { client, key, query: client.liveRecord(collection, recordId) }
+    }
+    return holder.current!.query
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [client, key])
+
+  const subscribe = useCallback(
+    (listener: () => void) => {
+      const query = acquire()
+      const unsubscribe = query.subscribe(listener)
+      return () => {
+        unsubscribe()
+        query.destroy()
+        if (holder.current?.query === query) holder.current = null
+      }
+    },
+    [acquire],
+  )
+
+  const getSnapshot = useCallback((): V | undefined => {
+    const state = acquire().getSnapshot()
+    const cached = cache.current
+    if (cached && cached.key === key && cached.state === state) return cached.selected
+
+    const record = state.data
+    const selected = record === null ? undefined : (readField(record.value, field) as V)
+
+    if (cached && cached.key === key && sameFieldValue(cached.selected, selected)) {
+      cache.current = { key, state, selected: cached.selected }
+      return cached.selected
+    }
+    cache.current = { key, state, selected }
+    return selected
+  }, [acquire, key, field])
+
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
 }
 
 export interface UseMutationOptions<TResult> {
