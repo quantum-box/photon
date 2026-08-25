@@ -16,6 +16,8 @@ import {
 import type { DatabaseRecord, Status, Priority } from '../data/mock'
 import { appKitConfig } from '../app/kitConfig'
 
+export const RECORDS_COLLECTION = 'records'
+
 export interface CreateRecordData {
   title: string
   status?: Status
@@ -27,7 +29,6 @@ export interface CreateRecordData {
 }
 
 interface RecordsContextValue {
-  records: DatabaseRecord[]
   handleMoveRecord: (recordId: string, newStatus: Status) => void
   handleUpdateRecord: (recordId: string, field: keyof DatabaseRecord, value: string) => void
   handleCreateRecord: (data: CreateRecordData) => Promise<void>
@@ -77,32 +78,48 @@ function serverUpdateForField(
 }
 
 // ---------------------------------------------------------------------------
+// Live records
+//
+// The engine is the only read path. Components that need the full record list
+// (row ordering, filtering, search) subscribe here on their own; cells that
+// need a single value subscribe with useRecordField instead. The
+// PhotonProvider this hook needs is mounted above the app in main.tsx, before
+// the first paint.
+// ---------------------------------------------------------------------------
+
+export function useLiveRecords(): DatabaseRecord[] {
+  const query = useLiveQuery<DatabaseRecord>({
+    collection: RECORDS_COLLECTION,
+    orderBy: [{ field: 'createdAt', direction: 'asc' }],
+  })
+  return useMemo(() => query.data.map((record) => record.value), [query.data])
+}
+
+// ---------------------------------------------------------------------------
 // Provider
 //
-// The engine is the only read path. Writes go through the record API, which
-// applies them to the engine optimistically; the live query below observes the
-// same store, so every mutation is visible to React before it is durable, let
-// alone acknowledged. The PhotonProvider this hook needs is mounted above the
-// app in main.tsx, before the first paint.
+// The context carries only the write handlers and the status counts. Writes go
+// through the record API, which applies them to the engine optimistically; the
+// live queries observe the same store, so every mutation is visible to React
+// before it is durable, let alone acknowledged.
 // ---------------------------------------------------------------------------
 
 export function RecordsProvider({ children }: { children: ReactNode }) {
-  const query = useLiveQuery<DatabaseRecord>({
-    collection: 'records',
-    orderBy: [{ field: 'createdAt', direction: 'asc' }],
-  })
-  const records = useMemo(() => query.data.map((record) => record.value), [query.data])
+  const records = useLiveRecords()
 
+  // Serialize the counts into a key so the map keeps its identity across
+  // deltas that don't move a record between statuses — otherwise every cell
+  // edit would ripple through all context consumers.
+  const recordCountKey = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const record of records) {
+      counts.set(record.status, (counts.get(record.status) ?? 0) + 1)
+    }
+    return JSON.stringify([...counts.entries()].sort(([a], [b]) => a.localeCompare(b)))
+  }, [records])
   const recordCountByStatus = useMemo(
-    () =>
-      records.reduce(
-        (acc, record) => {
-          acc[record.status] = (acc[record.status] || 0) + 1
-          return acc
-        },
-        {} as Record<string, number>
-      ),
-    [records]
+    () => Object.fromEntries(JSON.parse(recordCountKey) as [string, number][]),
+    [recordCountKey]
   )
 
   const handleMoveRecord = useCallback((recordId: string, newStatus: Status) => {
@@ -138,20 +155,24 @@ export function RecordsProvider({ children }: { children: ReactNode }) {
     })
   }, [])
 
-  return (
-    <RecordsContext.Provider
-      value={{
-        records,
-        handleMoveRecord,
-        handleUpdateRecord,
-        handleCreateRecord,
-        handleDeleteRecord,
-        recordCountByStatus,
-      }}
-    >
-      {children}
-    </RecordsContext.Provider>
+  const value = useMemo(
+    () => ({
+      handleMoveRecord,
+      handleUpdateRecord,
+      handleCreateRecord,
+      handleDeleteRecord,
+      recordCountByStatus,
+    }),
+    [
+      handleCreateRecord,
+      handleDeleteRecord,
+      handleMoveRecord,
+      handleUpdateRecord,
+      recordCountByStatus,
+    ]
   )
+
+  return <RecordsContext.Provider value={value}>{children}</RecordsContext.Provider>
 }
 
 export function useRecords() {

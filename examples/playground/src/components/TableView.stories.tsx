@@ -1,9 +1,15 @@
 import type { Meta, StoryObj } from '@storybook/react-vite'
 import { expect, fn, userEvent, within } from 'storybook/test'
+import { PhotonProvider } from '@quantum-box/photon-react'
 import { mockDatabaseRecords } from '../data/mock'
+import { createStaticRecordClient } from '../lib/photonEngine/staticClient'
 import { TableView } from './TableView'
 
 const tableRecords = mockDatabaseRecords.slice(0, 24)
+
+// Cells subscribe per field with useRecordField, so stories serve the same
+// mock records through a static client behind the provider.
+const storyClient = createStaticRecordClient(mockDatabaseRecords)
 
 const meta = {
   title: 'Databases/TableView',
@@ -21,9 +27,11 @@ const meta = {
   },
   decorators: [
     (Story) => (
-      <div className="h-[640px]">
-        <Story />
-      </div>
+      <PhotonProvider client={storyClient}>
+        <div className="h-[640px]">
+          <Story />
+        </div>
+      </PhotonProvider>
     ),
   ],
 } satisfies Meta<typeof TableView>

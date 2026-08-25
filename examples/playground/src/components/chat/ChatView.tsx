@@ -7,7 +7,7 @@ import { FilePreviewModal } from '../files/FilePreviewModal'
 import { type FileAttachment, detectFileType } from '../files/types'
 import type { ToolCall } from './tools/types'
 import { appKitConfig } from '../../app/kitConfig'
-import { useDatabaseRecords } from '../../contexts/RecordsContext'
+import { useLiveRecords } from '../../contexts/RecordsContext'
 import { toFileAttachment } from '../../lib/attachments/presentation'
 import { useWorkspaceAttachments } from '../../lib/attachments/useWorkspaceAttachments'
 import type { AttachmentSurfaceRef } from '../../lib/attachments/types'
@@ -43,7 +43,7 @@ function createFileAttachment(file: File): FileAttachment {
 }
 
 export function ChatView() {
-  const { records } = useDatabaseRecords()
+  const records = useLiveRecords()
   const { createAttachment, attachmentsForSurface } = useWorkspaceAttachments()
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')

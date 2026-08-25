@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { ChangeEvent, FormEvent, MouseEvent as ReactMouseEvent } from 'react'
 import type { Status } from '../data/mock'
-import { useDatabaseRecords } from '../contexts/RecordsContext'
+import { useLiveRecords } from '../contexts/RecordsContext'
 import { useWorkspaceDatabases } from '../contexts/DatabasesContext'
 import { useTheme } from '../contexts/ThemeContext'
 import { useAuth } from '../contexts/AuthContext'
@@ -143,7 +143,7 @@ function TenantWorkspaceSwitcher() {
 }
 
 export function Sidebar() {
-  const { records } = useDatabaseRecords()
+  const records = useLiveRecords()
   const { databases, addDatabase, removeDatabase, canRemoveDatabase } = useWorkspaceDatabases()
   const navigate = useNavigate()
   const connStatus = useConnectionStatus()

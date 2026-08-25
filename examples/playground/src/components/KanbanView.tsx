@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { memo, useMemo, useState } from 'react'
 import {
   DndContext,
   DragOverlay,
@@ -18,18 +18,21 @@ import {
   useSortable,
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
+import { useRecordField } from '@quantum-box/photon-react'
 import {
   type DatabaseRecord,
   type Status,
+  type Priority,
   statusConfig,
   priorityConfig,
 } from '../data/mock'
+import { RECORDS_COLLECTION } from '../contexts/RecordsContext'
 import type { RecordPropertyKey } from '../lib/databaseViews/types'
 
 interface KanbanViewProps {
   records: DatabaseRecord[]
   selectedRecordId: string | null
-  onSelectRecord: (record: DatabaseRecord) => void
+  onSelectRecord: (recordId: string) => void
   onMoveRecord: (recordId: string, newStatus: Status) => void
   compact?: boolean
   onCompactChange?: (compact: boolean) => void
@@ -44,20 +47,33 @@ const kanbanStatuses: Status[] = [
   'done',
 ]
 
-// Compact card for kanban
-export function KanbanCard({
-  record,
+// Module-level so the sensor descriptor keeps its identity: an inline options
+// literal would rebuild the sensors array every render, which cascades into a
+// fresh DndContext internal context and re-renders every card.
+const pointerSensorOptions = { activationConstraint: { distance: 5 } }
+
+// Compact card for kanban. The card carries recordId only and subscribes to
+// its own fields, so a delta on one record re-renders exactly one card.
+export const KanbanCard = memo(function KanbanCard({
+  recordId,
   isSelected,
-  onClick,
+  onSelect,
   compact,
   visibleProperties,
 }: {
-  record: DatabaseRecord
+  recordId: string
   isSelected: boolean
-  onClick: () => void
+  onSelect: (recordId: string) => void
   compact?: boolean
   visibleProperties?: RecordPropertyKey[]
 }) {
+  const status = useRecordField<Status>(RECORDS_COLLECTION, recordId, 'status')
+  const identifier = useRecordField<string>(RECORDS_COLLECTION, recordId, 'identifier')
+  const title = useRecordField<string>(RECORDS_COLLECTION, recordId, 'title')
+  const priorityKey = useRecordField<Priority>(RECORDS_COLLECTION, recordId, 'priority')
+  const assignee = useRecordField<string | null>(RECORDS_COLLECTION, recordId, 'assignee') ?? null
+  const labels = useRecordField<string[]>(RECORDS_COLLECTION, recordId, 'labels') ?? []
+
   const {
     attributes,
     listeners,
@@ -65,7 +81,7 @@ export function KanbanCard({
     transform,
     transition,
     isDragging,
-  } = useSortable({ id: record.id, data: { status: record.status } })
+  } = useSortable({ id: recordId, data: { status } })
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -73,7 +89,7 @@ export function KanbanCard({
     opacity: isDragging ? 0.4 : 1,
   }
 
-  const priority = priorityConfig[record.priority]
+  const priority = priorityKey ? priorityConfig[priorityKey] : null
   const isVisible = (property: RecordPropertyKey) =>
     !visibleProperties || visibleProperties.includes(property)
 
@@ -89,23 +105,23 @@ export function KanbanCard({
             ? 'bg-surface-hover border-accent'
             : 'bg-surface border-border'
         }`}
-        onClick={onClick}
+        onClick={() => onSelect(recordId)}
       >
         <div className="flex items-center gap-1.5">
-          {isVisible('priority') && (
+          {isVisible('priority') && priority && (
             <span style={{ color: priority.color }} className="text-xs shrink-0">
               {priority.icon}
             </span>
           )}
           {isVisible('title') && (
-            <span className="text-xs truncate flex-1">{record.title}</span>
+            <span className="text-xs truncate flex-1">{title}</span>
           )}
-          {isVisible('assignee') && record.assignee && (
+          {isVisible('assignee') && assignee && (
             <span
               className="w-4 h-4 rounded-full flex items-center justify-center shrink-0 bg-accent text-white"
               style={{ fontSize: '9px' }}
             >
-              {record.assignee[0]}
+              {assignee[0]}
             </span>
           )}
         </div>
@@ -124,26 +140,26 @@ export function KanbanCard({
           ? 'bg-surface-hover border-accent'
           : 'bg-surface border-border'
       }`}
-      onClick={onClick}
+      onClick={() => onSelect(recordId)}
     >
       <div className="flex items-center justify-between mb-1">
         {isVisible('identifier') ? (
           <span className="font-mono text-subtle" style={{ fontSize: '10px' }}>
-            {record.identifier}
+            {identifier}
           </span>
         ) : (
           <span />
         )}
-        {isVisible('priority') && (
+        {isVisible('priority') && priority && (
           <span style={{ color: priority.color }} className="text-xs">
             {priority.icon}
           </span>
         )}
       </div>
-      {isVisible('title') && <p className="text-sm mb-2 leading-snug">{record.title}</p>}
+      {isVisible('title') && <p className="text-sm mb-2 leading-snug">{title}</p>}
       <div className="flex items-center justify-between">
         <div className="flex gap-1">
-          {isVisible('labels') && record.labels.slice(0, 2).map((label) => (
+          {isVisible('labels') && labels.slice(0, 2).map((label) => (
             <span
               key={label}
               className="px-1 py-0.5 rounded bg-canvas text-subtle"
@@ -153,18 +169,21 @@ export function KanbanCard({
             </span>
           ))}
         </div>
-        {isVisible('assignee') && record.assignee && (
+        {isVisible('assignee') && assignee && (
           <span className="w-5 h-5 rounded-full flex items-center justify-center text-xs shrink-0 bg-accent text-white">
-            {record.assignee[0]}
+            {assignee[0]}
           </span>
         )}
       </div>
     </div>
   )
-}
+})
 
-export function OverlayCard({ record }: { record: DatabaseRecord }) {
-  const priority = priorityConfig[record.priority]
+export function OverlayCard({ recordId }: { recordId: string }) {
+  const identifier = useRecordField<string>(RECORDS_COLLECTION, recordId, 'identifier')
+  const title = useRecordField<string>(RECORDS_COLLECTION, recordId, 'title')
+  const priorityKey = useRecordField<Priority>(RECORDS_COLLECTION, recordId, 'priority')
+  const priority = priorityKey ? priorityConfig[priorityKey] : null
   return (
     <div
       className="rounded-md p-3 cursor-grabbing bg-surface border border-accent"
@@ -175,29 +194,31 @@ export function OverlayCard({ record }: { record: DatabaseRecord }) {
     >
       <div className="flex items-center justify-between mb-1">
         <span className="font-mono text-subtle" style={{ fontSize: '10px' }}>
-          {record.identifier}
+          {identifier}
         </span>
-        <span style={{ color: priority.color }} className="text-xs">
-          {priority.icon}
-        </span>
+        {priority && (
+          <span style={{ color: priority.color }} className="text-xs">
+            {priority.icon}
+          </span>
+        )}
       </div>
-      <p className="text-sm leading-snug">{record.title}</p>
+      <p className="text-sm leading-snug">{title}</p>
     </div>
   )
 }
 
 export function KanbanColumn({
   status,
-  records,
+  recordIds,
   selectedRecordId,
   onSelectRecord,
   compact,
   visibleProperties,
 }: {
   status: Status
-  records: DatabaseRecord[]
+  recordIds: string[]
   selectedRecordId: string | null
-  onSelectRecord: (record: DatabaseRecord) => void
+  onSelectRecord: (recordId: string) => void
   compact: boolean
   visibleProperties?: RecordPropertyKey[]
 }) {
@@ -213,7 +234,7 @@ export function KanbanColumn({
         <span style={{ color: config.color }}>{config.icon}</span>
         <span className="text-xs font-medium">{config.label}</span>
         <span className="text-xs px-1.5 rounded-full bg-surface-hover text-subtle">
-          {records.length}
+          {recordIds.length}
         </span>
       </div>
 
@@ -227,21 +248,21 @@ export function KanbanColumn({
         }}
       >
         <SortableContext
-          items={records.map((i) => i.id)}
+          items={recordIds}
           strategy={verticalListSortingStrategy}
         >
-          {records.map((record) => (
+          {recordIds.map((recordId) => (
             <KanbanCard
-              key={record.id}
-              record={record}
-              isSelected={record.id === selectedRecordId}
-              onClick={() => onSelectRecord(record)}
+              key={recordId}
+              recordId={recordId}
+              isSelected={recordId === selectedRecordId}
+              onSelect={onSelectRecord}
               compact={compact}
               visibleProperties={visibleProperties}
             />
           ))}
         </SortableContext>
-        {records.length === 0 && (
+        {recordIds.length === 0 && (
           <div className="text-center py-8 text-xs text-subtle">
             No records
           </div>
@@ -266,21 +287,33 @@ export function KanbanView({
   const setCompact = onCompactChange ?? setInternalCompact
 
   const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(PointerSensor, pointerSensorOptions),
     useSensor(KeyboardSensor)
   )
 
-  const recordsByStatus = kanbanStatuses.reduce(
-    (acc, status) => {
-      acc[status] = records.filter((i) => i.status === status)
-      return acc
-    },
-    {} as Record<Status, DatabaseRecord[]>
+  // Serialize the grouping into a key so the id arrays keep their identity
+  // across deltas that don't move a record — SortableContext derives its
+  // context value from `items`, so a fresh array per render would re-render
+  // every card through useSortable and defeat the per-field subscriptions.
+  const recordIdsKey = useMemo(
+    () =>
+      JSON.stringify(
+        kanbanStatuses.map((status) => [
+          status,
+          records
+            .filter((record) => record.status === status)
+            .map((record) => record.id),
+        ])
+      ),
+    [records]
   )
-
-  const activeDatabaseRecord = activeId
-    ? records.find((i) => i.id === activeId)
-    : null
+  const recordIdsByStatus = useMemo(
+    () =>
+      Object.fromEntries(
+        JSON.parse(recordIdsKey) as [Status, string[]][]
+      ) as Record<Status, string[]>,
+    [recordIdsKey]
+  )
 
   function handleDragStart(event: DragStartEvent) {
     setActiveId(event.active.id as string)
@@ -366,7 +399,7 @@ export function KanbanView({
             <KanbanColumn
               key={status}
               status={status}
-              records={recordsByStatus[status]}
+              recordIds={recordIdsByStatus[status]}
               selectedRecordId={selectedRecordId}
               onSelectRecord={onSelectRecord}
               compact={compact}
@@ -374,7 +407,7 @@ export function KanbanView({
             />
           ))}
           <DragOverlay>
-            {activeDatabaseRecord ? <OverlayCard record={activeDatabaseRecord} /> : null}
+            {activeId ? <OverlayCard recordId={activeId} /> : null}
           </DragOverlay>
         </DndContext>
       </div>
