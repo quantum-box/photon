@@ -22,6 +22,7 @@ import {
   fetchServerDocuments,
   toDocMetadata,
   type ServerDocumentMetadata,
+  updateServerDocument,
 } from './docsApi'
 
 describe('docsApi', () => {
@@ -64,14 +65,12 @@ describe('docsApi', () => {
     })
   })
 
-  it('syncs before reading the document list from a fresh local store', async () => {
+  it('reads the document list without delaying local callers on a remote sync', async () => {
     engineMocks.listRecords.mockResolvedValue([])
 
     await expect(fetchServerDocuments()).resolves.toEqual([])
 
-    expect(engineMocks.sync).toHaveBeenCalledOnce()
-    expect(engineMocks.sync.mock.invocationCallOrder[0])
-      .toBeLessThan(engineMocks.listRecords.mock.invocationCallOrder[0])
+    expect(engineMocks.sync).not.toHaveBeenCalled()
   })
 
   it('syncs before deciding that direct-link metadata is missing', async () => {
@@ -85,5 +84,27 @@ describe('docsApi', () => {
     expect(engineMocks.sync).toHaveBeenCalledOnce()
     expect(engineMocks.sync.mock.invocationCallOrder[0])
       .toBeLessThan(engineMocks.getRecord.mock.invocationCallOrder[0])
+  })
+
+  it('patches a locally known title without waiting for a remote sync', async () => {
+    const existing = {
+      id: 'local-doc',
+      title: 'Untitled doc',
+      workspaceId: appKitConfig.workspace.id,
+      createdAt: '2026-08-25T00:00:00Z',
+      updatedAt: '2026-08-25T00:00:00Z',
+    }
+    engineMocks.getRecord.mockResolvedValue({ value: existing })
+    engineMocks.patchRecord.mockImplementation(async (_collection, _id, value) => ({ value }))
+
+    await expect(updateServerDocument('local-doc', { title: 'Renamed locally' }))
+      .resolves.toMatchObject({ title: 'Renamed locally' })
+
+    expect(engineMocks.sync).not.toHaveBeenCalled()
+    expect(engineMocks.patchRecord).toHaveBeenCalledWith(
+      'documents',
+      'local-doc',
+      expect.objectContaining({ title: 'Renamed locally' }),
+    )
   })
 })
