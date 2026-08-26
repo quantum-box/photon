@@ -1,20 +1,47 @@
 {
   "name": "@quantum-box/photon",
-  "private": true,
   "version": "0.2.0",
   "type": "module",
   "description": "Local-first sync engine: durable offline writes, instant UI, convergent reconciliation",
+  "license": "MIT",
+  "author": "Quantum Box",
+  "homepage": "https://github.com/quantum-box/photon#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/quantum-box/photon.git"
+  },
+  "bugs": {
+    "url": "https://github.com/quantum-box/photon/issues"
+  },
+  "keywords": [
+    "local-first",
+    "sync",
+    "offline",
+    "crdt",
+    "optimistic-ui",
+    "pglite",
+    "react"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "workspaces": [
     "packages/*",
     "examples/playground"
   ],
   "files": [
     "packages/core/dist",
+    "packages/core/src",
     "packages/react/dist",
+    "packages/react/src",
     "packages/store-pglite/dist",
+    "packages/store-pglite/src",
     "packages/wasm/dist",
+    "packages/wasm/src",
     "packages/edge-worker/dist",
+    "packages/edge-worker/src",
     "crates/photon-engine/pkg",
+    "!packages/*/src/**/*.test.ts",
     "README.md",
     "docs"
   ],

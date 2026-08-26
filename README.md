@@ -86,15 +86,19 @@ collections: { issues: { mode: 'engine-native' } }
 
 ## 入れる
 
-npm レジストリは使わない。Git タグが配布単位。
+```bash
+npm install @quantum-box/photon
+```
+
+tarball には WASM カーネルがビルド済みで入っているので、**入れる側に Rust toolchain は要らない**。
+
+`react` は optional peer dependency で、`@quantum-box/photon/react` を使うアプリが自分で持つ。PGlite は依存として同梱される。
+
+レジストリを経由したくない場合は Git タグからも入る。こちらは install 時に `prepare` が WASM をビルドするので、**入れる側の環境に Rust toolchain（`wasm32-unknown-unknown` target）と wasm-pack が要る**：
 
 ```bash
 npm install git+ssh://git@github.com/quantum-box/photon.git#v0.2.0
 ```
-
-インストール時に `prepare` が WASM カーネルをビルドするので、**入れる側の環境に Rust toolchain（`wasm32-unknown-unknown` target）と wasm-pack が要る**。CI でも同じ。
-
-`react` は optional peer dependency で、`@quantum-box/photon/react` を使うアプリが自分で持つ。PGlite は依存として同梱される。
 
 詳細は [docs/release-following.md](docs/release-following.md)。
 

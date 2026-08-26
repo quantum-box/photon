@@ -7,6 +7,11 @@ dependency to the next tag. App-facing changes are separated from internals.
 
 ### App-facing
 
+- **Photon is published to the npm registry as `@quantum-box/photon`.**
+  `npm install @quantum-box/photon` is now the recommended route, and the
+  published tarball ships a prebuilt WASM kernel — installing it needs no Rust
+  toolchain. Git tag installs keep working unchanged, and still build the
+  kernel on install. MIT license declared, `LICENSE` added.
 - **Fixed: the public entrypoints resolve from an installed copy.**
   `@quantum-box/photon/react` and `@quantum-box/photon/wasm` failed with
   `Cannot find package '@quantum-box/photon-core'` in any consuming app, and
@@ -25,13 +30,15 @@ dependency to the next tag. App-facing changes are separated from internals.
 No code changes are required in consuming apps. No `kitConfig`, environment
 variable, Worker binding, or server migration changes.
 
-Installing still requires a Rust toolchain with the `wasm32-unknown-unknown`
-target and wasm-pack on every machine that runs `npm install` or `npm ci`,
-because `prepare` builds the WASM kernel. See
-[docs/release-following.md](docs/release-following.md).
+Installing from a Git tag still requires a Rust toolchain with the
+`wasm32-unknown-unknown` target and wasm-pack on every machine that runs
+`npm install` or `npm ci`, because `prepare` builds the WASM kernel. Registry
+installs do not. See [docs/release-following.md](docs/release-following.md).
 
 ### Internal
 
+- `release.yml` publishes to npm from the release tag, guarded so a re-run
+  cannot try to republish an existing version. It needs the `NPM_TOKEN` secret.
 - `scripts/rewrite-internal-imports.mjs` rewrites workspace specifiers in
   `dist` to relative paths after the build. Deliberately not a bundle: a copy
   of the core per entrypoint would mean two `KernelUnavailableError` classes
