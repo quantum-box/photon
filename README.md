@@ -89,7 +89,7 @@ collections: { issues: { mode: 'engine-native' } }
 npm レジストリは使わない。Git タグが配布単位。
 
 ```bash
-npm install git+ssh://git@github.com/quantum-box/photon.git#v0.1.0
+npm install git+ssh://git@github.com/quantum-box/photon.git#v0.2.0
 ```
 
 インストール時に `prepare` が WASM カーネルをビルドするので、**入れる側の環境に Rust toolchain（`wasm32-unknown-unknown` target）と wasm-pack が要る**。CI でも同じ。
