@@ -1,16 +1,35 @@
-# Release Following Without npm Registry
+# Following Photon Releases
 
-Photon apps should be able to follow Photon releases without trusting the npm
-registry. Use Git tags as the release source of truth.
+Photon publishes to the npm registry as `@quantum-box/photon`, and every
+release is also a Git tag. Both routes install the same tarball contents; pick
+by what the consuming app's build environment can do.
 
-## Recommended Shape
+## From the Registry
 
-Keep Photon installable from the repository root:
+```bash
+npm install @quantum-box/photon
+```
+
+The published tarball carries a prebuilt WASM kernel, so nothing in the
+consuming app's toolchain needs Rust. Pin the way the app pins any dependency:
 
 ```json
 {
   "dependencies": {
-    "@quantum-box/photon": "git+ssh://git@github.com/quantum-box/photon.git#v0.4.0"
+    "@quantum-box/photon": "^0.2.0"
+  }
+}
+```
+
+## From a Git Tag
+
+Use this when the app must not depend on the registry, or needs a commit that
+is not released yet:
+
+```json
+{
+  "dependencies": {
+    "@quantum-box/photon": "git+ssh://git@github.com/quantum-box/photon.git#v0.2.0"
   }
 }
 ```
@@ -21,23 +40,16 @@ key or machine user already configured for the app build.
 Useful forms:
 
 ```bash
-npm install git+ssh://git@github.com/quantum-box/photon.git#v0.4.0
-npm install github:quantum-box/photon#v0.4.0
+npm install git+ssh://git@github.com/quantum-box/photon.git#v0.2.0
+npm install github:quantum-box/photon#v0.2.0
 npm install git+ssh://git@github.com/quantum-box/photon.git#7f4a2c1
-```
-
-Prefer immutable release tags for app dependencies:
-
-```json
-{
-  "dependencies": {
-    "@quantum-box/photon": "git+ssh://git@github.com/quantum-box/photon.git#v0.4.0"
-  }
-}
 ```
 
 Use commit SHAs only for temporary verification branches. Do not leave app
 production builds pinned to a moving branch such as `main`.
+
+A Git install builds Photon from source, which is the one meaningful
+difference between the two routes — see the toolchain requirement below.
 
 ## What Photon Exposes
 
@@ -72,6 +84,31 @@ const photon = await createPhotonClient({
 The `worker` entrypoint is for Cloudflare Workers or `workerd` compatible
 runtimes. Do not import it from a plain Node.js process.
 
+## What the Consuming App Must Provide
+
+A registry install needs nothing beyond npm: the tarball ships the kernel
+already built.
+
+A Git dependency instead runs Photon's `prepare` script on install, and that
+script builds the WASM kernel. The machine doing the install — a developer
+laptop and every CI runner that runs `npm ci` — then needs a Rust toolchain
+with the `wasm32-unknown-unknown` target and wasm-pack. There is no prebuilt
+fallback for that route: the kernel is required, and a silent JavaScript
+substitute would change merge semantics.
+
+Dependencies split by who owns them:
+
+- `@electric-sql/pglite` ships as a Photon dependency, so
+  `@quantum-box/photon/store-pglite` works without app-side setup.
+- `react` is an optional peer dependency. Apps using
+  `@quantum-box/photon/react` already have it; core-only and server-side
+  consumers are not forced to install it.
+
+Photon verifies this contract from outside the workspace with
+`npm run smoke:exports`, which packs the tarball, installs it into a throwaway
+app, and imports and type-checks every entrypoint. The playground imports the
+internal workspace names, so it cannot catch a broken public entrypoint.
+
 Each app keeps only its app profile and local extensions:
 
 ```text
@@ -105,7 +142,7 @@ publication.
 Update the app dependency to the target Photon release:
 
 ```bash
-npm install git+ssh://git@github.com/quantum-box/photon.git#v0.4.0
+npm install @quantum-box/photon@0.2.0
 ```
 
 Then run the app's verification gates:
@@ -123,7 +160,9 @@ browser before cutting the app release.
 
 Every Photon release should include:
 
-- A Git tag such as `v0.4.0`.
+- A Git tag such as `v0.2.0`, which `release.yml` cuts from the version in
+  `package.json` once CI is green on `main`, and which triggers the npm
+  publish.
 - A changelog that separates app-facing breaking changes from internals.
 - Migration notes for `kitConfig`, environment variables, Worker bindings, and
   server migrations.
@@ -131,6 +170,6 @@ Every Photon release should include:
 
 Every consuming app should record:
 
-- The Photon Git tag in `package.json` and `package-lock.json`.
+- The Photon version or Git tag in `package.json` and `package-lock.json`.
 - Any local app-profile changes needed for that tag.
 - Verification commands run against the app.

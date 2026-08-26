@@ -228,7 +228,7 @@ jobs:
     runs-on: ubuntu-latest
     # `prepare` + workspaces + subpath exports interact in ways that are easy to
     # get wrong and invisible until a consumer installs. Install the real
-    # tarball into a scratch app and import every entry point.
+    # tarball into a scratch app, then import, run, and type-check it.
     steps:
       - uses: actions/checkout@v6
 
@@ -248,37 +248,5 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Pack
-        run: npm pack --pack-destination "$RUNNER_TEMP"
-
-      - name: Import every subpath from the tarball
-        working-directory: ${{ runner.temp }}
-        run: |
-          mkdir -p app && cd app
-          cat > package.json <<'JSON'
-          { "name": "pack-smoke", "private": true, "type": "module", "version": "1.0.0" }
-          JSON
-          cat > smoke.ts <<'TS'
-          import { createPhotonClient, createEngineTransport, newId, buildWorkspaceScope } from '@quantum-box/photon'
-          import { createRestTransport } from '@quantum-box/photon/rest'
-          import { useLiveQuery, useMutation, PhotonProvider } from '@quantum-box/photon/react'
-          import { createPGliteStore } from '@quantum-box/photon/store-pglite'
-          import { loadPhotonKernel } from '@quantum-box/photon/wasm'
-          export const surface = {
-            createPhotonClient, createEngineTransport, newId, buildWorkspaceScope,
-            createRestTransport, useLiveQuery, useMutation, PhotonProvider,
-            createPGliteStore, loadPhotonKernel,
-          }
-          TS
-          cat > tsconfig.json <<'JSON'
-          {
-            "compilerOptions": {
-              "target": "ES2022", "lib": ["ES2022", "DOM"], "module": "ESNext",
-              "moduleResolution": "bundler", "jsx": "react-jsx",
-              "strict": true, "noEmit": true, "skipLibCheck": true
-            },
-            "include": ["smoke.ts"]
-          }
-          JSON
-          npm install ../quantum-box-photon-*.tgz react @types/react typescript
-          npx tsc -p tsconfig.json
+      - name: Import, run, and type-check every subpath from the tarball
+        run: npm run smoke:exports
