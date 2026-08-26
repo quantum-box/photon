@@ -1,8 +1,31 @@
-import { describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { appKitConfig } from '../app/kitConfig'
-import { toRecord, type ServerRecord } from './recordsApi'
+
+const engineMocks = vi.hoisted(() => ({
+  deleteRecord: vi.fn(),
+  getRecord: vi.fn(),
+  listRecords: vi.fn(),
+  patchRecord: vi.fn(),
+  sync: vi.fn(),
+  upsertRecord: vi.fn(),
+}))
+
+vi.mock('./photonEngine/client', () => ({
+  deleteClientEngineRecord: engineMocks.deleteRecord,
+  getClientEngineRecord: engineMocks.getRecord,
+  listClientEngineRecords: engineMocks.listRecords,
+  patchClientEngineRecord: engineMocks.patchRecord,
+  syncClientEngineOperations: engineMocks.sync,
+  upsertClientEngineRecord: engineMocks.upsertRecord,
+}))
+
+import { seedPlaygroundData, toRecord, type ServerRecord } from './recordsApi'
 
 describe('recordsApi', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
   it('normalizes server record projections for the engine read path', () => {
     const serverRecord: ServerRecord = {
       id: 'f3cc94d8-cc78-4fd3-a407-4793ea2f537c',
@@ -48,5 +71,25 @@ describe('recordsApi', () => {
       labels: ['legacy'],
       project: appKitConfig.records.defaultProject,
     })
+  })
+
+  it('pulls the shared seed marker before seeding a fresh local store', async () => {
+    engineMocks.sync.mockResolvedValue({ pushed: 0, pulled: 1 })
+    engineMocks.getRecord.mockResolvedValue({
+      recordId: 'default-records-v1',
+      value: { seededAt: '2026-08-25T00:00:00Z', count: 205 },
+    })
+
+    await seedPlaygroundData()
+
+    expect(engineMocks.sync).toHaveBeenCalledOnce()
+    expect(engineMocks.getRecord).toHaveBeenCalledWith(
+      'engine_seed',
+      'default-records-v1',
+      { includeDeleted: true },
+    )
+    expect(engineMocks.sync.mock.invocationCallOrder[0])
+      .toBeLessThan(engineMocks.getRecord.mock.invocationCallOrder[0])
+    expect(engineMocks.upsertRecord).not.toHaveBeenCalled()
   })
 })
