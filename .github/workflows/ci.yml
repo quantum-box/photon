@@ -58,6 +58,9 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Public entrypoints smoke
+        run: npm run smoke:exports
+
   e2e:
     name: Browser E2E
     runs-on: ubuntu-latest

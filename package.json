@@ -45,11 +45,13 @@
     }
   },
   "scripts": {
-    "build": "npm run build --workspaces --if-present",
+    "build": "npm run build:packages && npm run build --workspace @quantum-box/photon-playground",
+    "build:packages": "npm run build --workspace @quantum-box/photon-core --workspace @quantum-box/photon-wasm --workspace @quantum-box/photon-store-pglite --workspace @quantum-box/photon-react --workspace @quantum-box/photon-edge-worker && node scripts/rewrite-internal-imports.mjs",
     "type-check": "npm run type-check --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
     "lint": "eslint .",
-    "prepare": "npm run engine:wasm && npm run build",
+    "prepare": "npm run engine:wasm && npm run build:packages",
+    "smoke:exports": "node scripts/smoke-public-exports.mjs",
     "engine:wasm": "npx wasm-pack build crates/photon-engine --target web --out-dir pkg --no-default-features --features wasm",
     "server": "cargo run --bin photon-server",
     "server:engine": "cargo run --bin photon-engine-server",
@@ -81,6 +83,17 @@
     "tauri:ios:build:sim": "npm run tauri:ios:build:sim --workspace @quantum-box/photon-playground",
     "pages:build": "npm run build --workspace @quantum-box/photon-playground",
     "pages:deploy": "npm run pages:deploy --workspace @quantum-box/photon-playground"
+  },
+  "dependencies": {
+    "@electric-sql/pglite": "^0.4.5"
+  },
+  "peerDependencies": {
+    "react": "^18.0.0 || ^19.0.0"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@eslint/js": "^9.39.4",

@@ -72,6 +72,28 @@ const photon = await createPhotonClient({
 The `worker` entrypoint is for Cloudflare Workers or `workerd` compatible
 runtimes. Do not import it from a plain Node.js process.
 
+## What the Consuming App Must Provide
+
+A Git dependency runs Photon's `prepare` script on install, and that script
+builds the WASM kernel. The machine doing the install — a developer laptop and
+every CI runner that runs `npm ci` — needs a Rust toolchain with the
+`wasm32-unknown-unknown` target and wasm-pack. There is no prebuilt fallback:
+the kernel is required, and a silent JavaScript substitute would change merge
+semantics.
+
+Dependencies split by who owns them:
+
+- `@electric-sql/pglite` ships as a Photon dependency, so
+  `@quantum-box/photon/store-pglite` works without app-side setup.
+- `react` is an optional peer dependency. Apps using
+  `@quantum-box/photon/react` already have it; core-only and server-side
+  consumers are not forced to install it.
+
+Photon verifies this contract from outside the workspace with
+`npm run smoke:exports`, which packs the tarball, installs it into a throwaway
+app, and imports and type-checks every entrypoint. The playground imports the
+internal workspace names, so it cannot catch a broken public entrypoint.
+
 Each app keeps only its app profile and local extensions:
 
 ```text
