@@ -14,7 +14,7 @@
  */
 
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -85,6 +85,22 @@ export async function wire(): Promise<PhotonClient> {
 }
 `
 
+/** Nothing published may point at a package that only exists in this workspace. */
+function assertNoWorkspaceSpecifiers(root) {
+  const offenders = []
+  for (const entry of readdirSync(root, { recursive: true, withFileTypes: true })) {
+    if (!entry.isFile()) continue
+    if (!entry.name.endsWith('.js') && !entry.name.endsWith('.d.ts')) continue
+
+    const filePath = join(entry.parentPath ?? entry.path, entry.name)
+    if (/from '@quantum-box\/photon-/.test(readFileSync(filePath, 'utf8'))) offenders.push(filePath)
+  }
+
+  if (offenders.length > 0) {
+    throw new Error(`shipped files import private workspace packages:\n  ${offenders.join('\n  ')}`)
+  }
+}
+
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const workDir = mkdtempSync(join(tmpdir(), 'photon-exports-smoke-'))
 const keep = process.env.PHOTON_SMOKE_KEEP === 'true'
@@ -109,8 +125,11 @@ try {
   run('npm', ['install', tarball, ...peers, '--no-audit', '--no-fund', '--ignore-scripts'], workDir)
   process.stdout.write(run('node', ['check.mjs'], workDir))
 
-  // The emitted .d.ts carried the same unresolvable specifier as the .js, so
-  // type-check the entrypoints from outside the workspace too.
+  // The emitted .d.ts carried the same unresolvable specifier as the .js.
+  // `--skipLibCheck` (needed: third-party declarations are not our contract)
+  // suppresses errors inside declaration files, so assert on the shipped text
+  // instead — that is the hole the previous package-contract gate fell into.
+  assertNoWorkspaceSpecifiers(join(workDir, 'node_modules', '@quantum-box', 'photon', 'packages'))
   run(
     'node',
     [

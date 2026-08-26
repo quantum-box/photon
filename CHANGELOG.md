@@ -37,8 +37,11 @@ because `prepare` builds the WASM kernel. See
   of the core per entrypoint would mean two `KernelUnavailableError` classes
   and two module-level caches.
 - `npm run smoke:exports` packs the tarball, installs it into a throwaway app,
-  and imports and type-checks every entrypoint. Wired into CI. The playground
-  imports the workspace names, so it cannot catch a broken public entrypoint.
+  and imports, runs, and type-checks every entrypoint. It replaces the inline
+  script in CI's package-contract job, which only type-checked with
+  `skipLibCheck` — that skips declaration files, so it saw neither the broken
+  `.d.ts` specifier nor the runtime failure. The playground imports the
+  workspace names, so it cannot catch a broken public entrypoint either.
 
 ## 0.1.0
 
