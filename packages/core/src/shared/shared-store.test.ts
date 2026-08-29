@@ -419,6 +419,62 @@ describe('shared local store', () => {
     await orphan.close()
   })
 
+  it('never lets two contexts hold the database at once, even mid-open', async () => {
+    const bus = createBus()
+    const election = createElectionQueue()
+    const base = memoryStore()
+
+    let live = 0
+    let mostLiveAtOnce = 0
+    // Acquiring and releasing a database connection both take real time. The
+    // hazard is a window where two contexts hold one directory, so count the
+    // overlap rather than the call order.
+    const open = async (): Promise<LocalStore> => {
+      await new Promise((resolve) => setTimeout(resolve, 60))
+      live += 1
+      mostLiveAtOnce = Math.max(mostLiveAtOnce, live)
+      return {
+        ...base,
+        close: async () => {
+          await new Promise((resolve) => setTimeout(resolve, 40))
+          live -= 1
+        },
+      }
+    }
+
+    const first = await createSharedLocalStore({
+      key: 'mid-open',
+      channel: bus.channel(),
+      elect: election.elect,
+      ownershipGraceMs: 5,
+      open,
+    })
+    const second = await createSharedLocalStore({
+      key: 'mid-open',
+      channel: bus.channel(),
+      elect: election.elect,
+      ownershipGraceMs: 5,
+      retryIntervalMs: 10,
+      requestTimeoutMs: 2_000,
+      open,
+    })
+
+    // Close the owner while it is still acquiring its connection.
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    await first.close()
+
+    const promoted = new Promise<void>((resolve) => {
+      if (second.isOwner) resolve()
+      else second.onOwnershipChange(() => resolve())
+    })
+    await promoted
+    await new Promise((resolve) => setTimeout(resolve, 60))
+
+    expect(mostLiveAtOnce).toBe(1)
+
+    await second.close()
+  })
+
   it('gives a follower no raw handle, rather than a fake one', async () => {
     const { contexts } = await makeContexts(2)
     const [owner, follower] = contexts as [SharedLocalStore, SharedLocalStore]

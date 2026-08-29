@@ -114,6 +114,8 @@ class SharedStore implements SharedLocalStore {
 
   private local: LocalStore | null = null
   private promoting = false
+  /** In flight while this context is opening the store, so `close()` can wait. */
+  private promotion: Promise<void> | null = null
   private failure: Error | null = null
   private closed = false
   private onOwnerReady: (() => void) | null = null
@@ -140,7 +142,9 @@ class SharedStore implements SharedLocalStore {
     this.unsubscribeChannel = this.channel.subscribe((message) => this.handleMessage(message))
     const elect = options.elect ?? electOwner
     this.election = elect(`photon-shared-store:${options.key}`, () => {
-      void this.promote()
+      this.promotion = this.promote().finally(() => {
+        this.promotion = null
+      })
     })
   }
 
@@ -411,6 +415,12 @@ class SharedStore implements SharedLocalStore {
     // opens the database immediately. Doing that before this one has closed
     // its connection would put two connections on the same data directory —
     // exactly the corruption this whole file exists to prevent.
+    //
+    // A promotion still in flight counts as holding the connection. It has
+    // already seen `closed`, so it will close whatever it opened, but it has
+    // to get there first: releasing the lock mid-open hands the directory to
+    // the next context while this one is still acquiring it.
+    if (this.promotion) await this.promotion
     const local = this.local
     this.local = null
     if (local) await local.close()
