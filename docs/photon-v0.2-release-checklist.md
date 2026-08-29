@@ -85,6 +85,16 @@ npm run tauri:build
   contexts' writes reach each client's projection through
   `LocalStore.subscribe`, so tabs agree without a server round trip.
   `createPGliteStore({ exclusiveLock: true })` remains for hosts that would
-  rather refuse a second tab than coordinate one. Still future work: every
-  context runs its own sync loop, so N tabs poll N times — harmless, because
-  the durable cursor is monotonic and every write is idempotent, but wasteful.
+  rather refuse a second tab than coordinate one. Two things are still future
+  work:
+  - Every context runs its own sync loop, so N tabs poll N times — harmless,
+    because the durable cursor is monotonic and every write is idempotent,
+    but wasteful.
+  - A shared store hands other contexts the resulting *record*, not the
+    operation, so a receiving client does not re-merge through the kernel.
+    Two tabs editing different fields of one record at the same moment
+    therefore leave the local record showing only the later write. Both
+    operations are stored and pushed, so the server merges them and the pull
+    corrects it — but offline, the local record stays wrong until reconnect.
+    Broadcasting operations instead would need the two tabs to stop sharing
+    one `actorId`, or their hybrid timestamps can collide.
