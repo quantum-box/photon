@@ -130,6 +130,33 @@ let app = Router::new()
     .route("/api/my-own-thing", get(my_handler));
 ```
 
+## マルチタブ
+
+PGlite は data directory ごとに単一接続で、同一 origin のタブは同じ IndexedDB を見る。
+各タブが自分で開くと壊れるので、**1 つのタブだけが実体を開き、残りはそこへ転送する**。
+オーナーのタブが閉じたら、次のタブが昇格して自分で開き直す。
+
+```ts
+import { createSharedLocalStore } from '@quantum-box/photon'
+import { createPGliteStore } from '@quantum-box/photon/store-pglite'
+
+const storage = await createSharedLocalStore({
+  key: 'idb://photon-acme',
+  open: () => createPGliteStore({ dataDir: 'idb://photon-acme' }),
+})
+```
+
+`LocalStore` が約 10 個の冪等なメソッドしか持たないので、「別コンテキストへ転送する」実装は小さく、
+下の transport は差し替えられる。いまは BroadcastChannel + Web Locks（Android WebView を含む
+全ターゲットで動く）で、SharedWorker や Tauri の Rust 側は `channel` / `elect` を差し替えるだけで載る。
+
+他タブの書き込みは `LocalStore.subscribe` 経由でこのタブの projection に取り込まれるので、
+サーバへの往復を待たずに画面が揃う。
+
+単一タブしか無いことが分かっているホストは、これを使わず `createPGliteStore` を直接渡してよい。
+2 タブ目を黙って壊すよりはっきり落としたいだけなら、`createPGliteStore({ exclusiveLock: true })` で
+2 タブ目が `PGliteStoreLockedError` になる。
+
 ## 設計上の約束
 
 - **カーネルは同期的で、ストレージを持たない。** operation 構築・CRDT 投影・時計の因果関係だけを担い、I/O をしない。だから async の世界が 1 つで済み、`!Send` なストレージ trait をネイティブエンジンに伝播させずに済む。

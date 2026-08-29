@@ -15,6 +15,9 @@
 import {
   createEngineTransport,
   createPhotonClient,
+  createSharedLocalStore,
+  sharedStoreSupported,
+  type LocalStore,
   type PhotonClient,
   type PhotonRecord,
 } from '@quantum-box/photon-core'
@@ -79,15 +82,33 @@ export function peekPhotonClient(): Promise<PhotonClient> | null {
   return clientPromise
 }
 
+/**
+ * One PGlite database, however many tabs.
+ *
+ * PGlite holds a single connection per data directory, and every tab of this
+ * origin resolves `pgliteDataDir` to the same IndexedDB. Opening it in each
+ * tab corrupts it, so exactly one tab opens it and the rest talk to that one;
+ * when it closes, the next tab is promoted and opens the database itself.
+ *
+ * The in-memory case skips all of this: an unnamed database is private to the
+ * context that created it, so there is nothing to share and nobody to share
+ * it with.
+ */
+async function openStorage(durable: boolean): Promise<LocalStore> {
+  const open = (): Promise<LocalStore> =>
+    createPGliteStore(durable ? { dataDir: appKitConfig.engine.pgliteDataDir } : {})
+
+  if (!durable || !sharedStoreSupported()) return open()
+
+  return createSharedLocalStore({ key: appKitConfig.engine.pgliteDataDir, open })
+}
+
 async function build(): Promise<PhotonClient> {
   // PGlite's idb:// backend needs IndexedDB. jsdom has none, so unit tests run
   // against an in-memory database: durable within a test, not across a reload.
   const durable = typeof globalThis.indexedDB !== 'undefined'
 
-  const [storage, kernel] = await Promise.all([
-    createPGliteStore(durable ? { dataDir: appKitConfig.engine.pgliteDataDir } : {}),
-    loadPhotonKernel(),
-  ])
+  const [storage, kernel] = await Promise.all([openStorage(durable), loadPhotonKernel()])
 
   return createPhotonClient({
     scope: engineScope,

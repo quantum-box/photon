@@ -79,7 +79,12 @@ npm run tauri:build
   covered deterministically at the Rust integration level
   (`crates/photon-engine/tests/sync_integration.rs`), not yet through browser
   UI automation.
-- PGlite multi-tab remains a known limitation: `createPGliteStore` now offers
-  an opt-in `exclusiveLock` (Web Locks) that makes a second tab fail loudly
-  instead of corrupting silently, but graceful multi-tab (leader election or a
-  SharedWorker) is still future work.
+- PGlite multi-tab is handled by `createSharedLocalStore`: one context opens
+  the database, the rest forward to it over BroadcastChannel, and the next
+  context in the Web Locks queue is promoted when the owner closes. Other
+  contexts' writes reach each client's projection through
+  `LocalStore.subscribe`, so tabs agree without a server round trip.
+  `createPGliteStore({ exclusiveLock: true })` remains for hosts that would
+  rather refuse a second tab than coordinate one. Still future work: every
+  context runs its own sync loop, so N tabs poll N times — harmless, because
+  the durable cursor is monotonic and every write is idempotent, but wasteful.

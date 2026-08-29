@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { PGlite } from '@electric-sql/pglite'
 
 import { createPGliteStore, PGliteStoreLockedError } from './index.js'
@@ -270,5 +270,69 @@ describe('commit journal', () => {
     )
     expect(write?.params?.[0]).toBe('op_journal_1')
     await store.close()
+  })
+})
+
+/**
+ * Booting a real PGlite is slow, so these share one in-memory database and
+ * keep to their own scope. The behaviour under test is the upsert's SQL, and
+ * a fake that returned whatever it was told would not test it at all.
+ */
+describe('cursor', () => {
+  let store: Awaited<ReturnType<typeof createPGliteStore>>
+
+  beforeAll(async () => {
+    store = await createPGliteStore({})
+    await store.migrate()
+  }, 60_000)
+
+  afterAll(async () => {
+    await store?.close()
+  })
+
+  it('advances to the position the caller committed', async () => {
+    await store.commit({
+      cursor: { scope: 'workspace:forward', remote: 'engine', position: 20, updatedAtMs: 200 },
+    })
+    await store.commit({
+      cursor: { scope: 'workspace:forward', remote: 'engine', position: 30, updatedAtMs: 300 },
+    })
+
+    expect(await store.getCursor('workspace:forward', 'engine')).toEqual({
+      scope: 'workspace:forward',
+      remote: 'engine',
+      position: 30,
+      updatedAtMs: 300,
+    })
+  })
+
+  it('ignores a lower position, so a slow sync loop cannot rewind a faster one', async () => {
+    // Two loops share this store. The one that started first finishes last and
+    // carries the older position.
+    await store.commit({
+      cursor: { scope: 'workspace:rewind', remote: 'engine', position: 30, updatedAtMs: 300 },
+    })
+    await store.commit({
+      cursor: { scope: 'workspace:rewind', remote: 'engine', position: 20, updatedAtMs: 200 },
+    })
+
+    expect(await store.getCursor('workspace:rewind', 'engine')).toEqual({
+      scope: 'workspace:rewind',
+      remote: 'engine',
+      position: 30,
+      updatedAtMs: 300,
+    })
+  })
+
+  it('keeps cursors for different remotes apart', async () => {
+    await store.commit({
+      cursor: { scope: 'workspace:remotes', remote: 'engine', position: 30, updatedAtMs: 300 },
+    })
+    await store.commit({
+      cursor: { scope: 'workspace:remotes', remote: 'other', position: 5, updatedAtMs: 50 },
+    })
+
+    expect((await store.getCursor('workspace:remotes', 'other'))?.position).toBe(5)
+    expect((await store.getCursor('workspace:remotes', 'engine'))?.position).toBe(30)
   })
 })

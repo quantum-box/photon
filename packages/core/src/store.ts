@@ -102,4 +102,18 @@ export interface LocalStore {
   raw(): unknown
 
   close(): Promise<void>
+
+  /**
+   * Writes that reached this store from somewhere other than this client.
+   *
+   * Optional, and absent on a store with a single writer — a PGlite database
+   * opened by one tab has nothing to report. A store shared across contexts
+   * implements it so each client can fold the others' writes into its
+   * projection, which is the difference between "two tabs both work" and "two
+   * tabs both work and agree".
+   *
+   * The store never delivers a client its own writes: that client already
+   * projected them when it made the mutation.
+   */
+  subscribe?(listener: (write: StoreWrite) => void): () => void
 }

@@ -667,3 +667,106 @@ async function tick(): Promise<void> {
   await Promise.resolve()
   await Promise.resolve()
 }
+
+describe('writes from another context', () => {
+  const scope = 'workspace:test'
+
+  function engineRecord(collection: string, recordId: string, value: unknown): EngineRecord {
+    return {
+      key: { scope, collection, record_id: recordId },
+      value,
+      version: { wall_time_ms: 1, counter: 0, actor_id: 'other-tab' },
+      field_versions: {},
+      deleted_at: null,
+      updated_by: 'other-tab',
+    }
+  }
+
+  /** A store that reports other contexts' writes, the way a shared store does. */
+  function sharedStore(): ReturnType<typeof memoryStore> & {
+    fromAnotherContext(write: StoreWrite): Promise<void>
+  } {
+    const base = memoryStore()
+    const listeners = new Set<(write: StoreWrite) => void>()
+    return Object.assign(base, {
+      subscribe(listener: (write: StoreWrite) => void) {
+        listeners.add(listener)
+        return () => listeners.delete(listener)
+      },
+      async fromAnotherContext(write: StoreWrite) {
+        await base.commit(write)
+        for (const listener of [...listeners]) listener(write)
+      },
+    })
+  }
+
+  it("projects another context's record without waiting for the server", async () => {
+    const store = sharedStore()
+    const client = await makeClient({ storage: store })
+    const query = client.query({ collection: 'records' })
+    await query.ready()
+    expect(query.getSnapshot().data).toHaveLength(0)
+
+    await store.fromAnotherContext({ records: [engineRecord('records', 'r1', { n: 1 })] })
+    await tick()
+
+    expect(query.getSnapshot().data).toHaveLength(1)
+    expect(query.getSnapshot().data[0]?.value).toEqual({ n: 1 })
+    query.destroy()
+    await client.close()
+  })
+
+  it('reports the change as remote, not as a local edit', async () => {
+    const store = sharedStore()
+    const client = await makeClient({ storage: store })
+    const seen: string[] = []
+    client.subscribeChanges((changes) => seen.push(changes.origin))
+
+    await store.fromAnotherContext({ records: [engineRecord('records', 'r1', { n: 1 })] })
+    await tick()
+
+    expect(seen).toEqual(['remote'])
+    await client.close()
+  })
+
+  it("carries another context's unpushed write as pending, then releases it", async () => {
+    const store = sharedStore()
+    const client = await makeClient({ storage: store })
+    const query = client.query({ collection: 'records' })
+    await query.ready()
+
+    const operation: Operation = {
+      id: 'op-from-another-tab',
+      key: { scope, collection: 'records', record_id: 'r1' },
+      actor_id: 'other-tab',
+      timestamp: { wall_time_ms: 1, counter: 0, actor_id: 'other-tab' },
+      kind: { upsert: { value: { n: 1 } } },
+    } as unknown as Operation
+
+    await store.fromAnotherContext({
+      operations: [operation],
+      records: [engineRecord('records', 'r1', { n: 1 })],
+    })
+    await tick()
+    expect(query.getSnapshot().data[0]?.pending).toBe(true)
+
+    await store.fromAnotherContext({
+      statusUpdates: [{ operationId: operation.id, status: 'accepted', remoteSequence: 7 }],
+    })
+    await tick()
+    expect(query.getSnapshot().data[0]?.pending).toBe(false)
+
+    query.destroy()
+    await client.close()
+  })
+
+  it('stops listening once the client is closed', async () => {
+    const store = sharedStore()
+    const client = await makeClient({ storage: store })
+    await client.close()
+
+    await expect(
+      store.fromAnotherContext({ records: [engineRecord('records', 'r1', { n: 1 })] }),
+    ).resolves.toBeUndefined()
+  })
+})
