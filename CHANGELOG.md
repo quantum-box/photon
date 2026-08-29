@@ -3,6 +3,40 @@
 Photon ships as a Git tag, so a release is what an app gets when it moves its
 dependency to the next tag. App-facing changes are separated from internals.
 
+## Unreleased
+
+### App-facing
+
+- **More than one Engine instance can now serve one database.** The authority
+  assigned each accepted operation's remote sequence from a counter in the
+  server process, so two replicas over one database handed out the same
+  sequence — or committed out of sequence order, which makes a concurrent pull
+  advance its cursor past an uncommitted sequence and never see that operation
+  again. Assignment, the operation write and the record projection now commit
+  in one database transaction, serialized by a single-row lock. Running the
+  Engine as several replicas, pods, or serverless invocations is safe.
+- **Retrying a push no longer double-applies it.** An already-accepted
+  operation replayed at the authority returns its original sequence and the
+  committed projection instead of re-projecting. `Increment` is not idempotent,
+  so a retried push previously risked counting twice.
+- **Reusing an operation id with a different payload is rejected.** The id is
+  the idempotency key, so it may not be repointed at other content.
+- **Engine schema migration v2** adds `photon_engine_sync_state`. It applies on
+  startup and seeds past the sequences the op-log already used, so an existing
+  database keeps its numbering. No app change required.
+
+### Internal
+
+- `StorageAdapter` gains `append_authoritative_operation` and
+  `next_remote_sequence`. Custom adapters must implement both.
+- `PhotonEngine::accept_authoritative_operation` is the authority-side
+  counterpart to `apply_remote_operation`, which still takes a caller-supplied
+  sequence and stays the right call when replaying a pull.
+- `AppState::engine_next_seq` and `AppState::engine_push_lock` are gone.
+- The storage contract test covers acceptance for every adapter, and a new
+  SQLite test drives six independent adapters over one database file to assert
+  the sequences come out as 1..6 with every increment landing exactly once.
+
 ## 0.2.0
 
 ### App-facing

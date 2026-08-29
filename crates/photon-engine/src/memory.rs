@@ -9,6 +9,7 @@ use std::{
 use async_trait::async_trait;
 
 use crate::{
+    projection::apply_operation,
     storage::StorageAdapter,
     types::{
         unix_time_ms, CollectionName, Conflict, Operation, OperationFilter, OperationId,
@@ -22,6 +23,9 @@ use crate::{
 pub struct MemoryAdapter {
     state: Arc<RwLock<MemoryState>>,
     sequence: Arc<AtomicI64>,
+    /// Authority-side remote sequence. Kept apart from `sequence` so a local
+    /// append never consumes a number the op-log hands out to every client.
+    remote_sequence: Arc<AtomicI64>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -80,6 +84,74 @@ impl StorageAdapter for MemoryAdapter {
             .insert(stored.operation.id.clone(), stored.clone());
 
         Ok(stored)
+    }
+
+    async fn append_authoritative_operation(
+        &self,
+        operation: Operation,
+    ) -> Result<(StoredOperation, Record)> {
+        // One write lock spans the id check, the sequence allocation, the
+        // status flip and the projection, so a concurrent acceptance cannot
+        // interleave. A shared database needs a database-side lock for the
+        // same reason; see `StorageAdapter::append_authoritative_operation`.
+        let mut state = self.write_state()?;
+
+        if let Some(existing) = state.operations.get(&operation.id) {
+            if existing.operation != operation {
+                return Err(EngineError::Storage(format!(
+                    "operation id {} was reused with a different payload",
+                    operation.id
+                )));
+            }
+            if existing.remote_sequence.is_some() {
+                // Already accepted. Replaying the projection here would apply
+                // a non-idempotent kind a second time.
+                let stored = existing.clone();
+                let record = match state.records.get(&stored.operation.key) {
+                    Some(record) => record.clone(),
+                    None => {
+                        let record = apply_operation(None, &stored.operation)?;
+                        state.records.insert(record.key.clone(), record.clone());
+                        record
+                    }
+                };
+                return Ok((stored, record));
+            }
+        }
+
+        let remote_sequence = self.remote_sequence.fetch_add(1, Ordering::SeqCst) + 1;
+        let projected = apply_operation(state.records.get(&operation.key).cloned(), &operation)?;
+
+        let stored = match state.operations.get_mut(&operation.id) {
+            Some(existing) => {
+                existing.status = OperationStatus::Accepted;
+                existing.remote_sequence = Some(remote_sequence);
+                existing.clone()
+            }
+            None => {
+                let stored = StoredOperation {
+                    operation,
+                    status: OperationStatus::Accepted,
+                    local_sequence: self.sequence.fetch_add(1, Ordering::SeqCst) + 1,
+                    remote_sequence: Some(remote_sequence),
+                    received_at_ms: unix_time_ms(),
+                };
+                state.operation_order.push(stored.operation.id.clone());
+                state
+                    .operations
+                    .insert(stored.operation.id.clone(), stored.clone());
+                stored
+            }
+        };
+
+        state
+            .records
+            .insert(projected.key.clone(), projected.clone());
+        Ok((stored, projected))
+    }
+
+    async fn next_remote_sequence(&self) -> Result<i64> {
+        Ok(self.remote_sequence.load(Ordering::SeqCst) + 1)
     }
 
     async fn get_operation(&self, operation_id: &OperationId) -> Result<Option<StoredOperation>> {

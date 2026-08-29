@@ -17,6 +17,35 @@ pub trait StorageAdapter: Send + Sync {
         status: OperationStatus,
     ) -> Result<StoredOperation>;
 
+    /// Accept one operation as the authority, atomically.
+    ///
+    /// In one serialized step this validates that the operation id has not
+    /// been reused with a different payload, assigns the next remote sequence,
+    /// persists the operation as `Accepted`, and updates its materialized
+    /// record projection.
+    ///
+    /// The atomicity is the point. Allocating a sequence in the server process
+    /// only holds while exactly one process is the authority; the moment a
+    /// second replica, a second pod, or a second serverless invocation serves
+    /// the same database, two acceptances hand out the same sequence — or
+    /// commit out of sequence order, which makes a concurrent pull skip the
+    /// not-yet-committed sequence forever. Implementations backed by a shared
+    /// database must therefore serialize the whole acceptance in the database,
+    /// not in the process.
+    ///
+    /// Replaying an already-accepted operation returns the stored operation
+    /// and the current record unchanged. Re-projecting would be wrong, not
+    /// merely wasteful: `OperationKind::Increment` is not idempotent, so a
+    /// retried push must not reach the projection twice.
+    async fn append_authoritative_operation(
+        &self,
+        operation: Operation,
+    ) -> Result<(StoredOperation, Record)>;
+
+    /// The remote sequence the next [`Self::append_authoritative_operation`]
+    /// will assign. For reporting only — never allocate a sequence from it.
+    async fn next_remote_sequence(&self) -> Result<i64>;
+
     async fn get_operation(&self, operation_id: &OperationId) -> Result<Option<StoredOperation>>;
 
     async fn mark_operation_status(

@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use sqlx::{sqlite::SqlitePoolOptions, QueryBuilder, Row, Sqlite, SqlitePool};
 
 use crate::{
+    projection::apply_operation,
     storage::StorageAdapter,
     types::{
         unix_time_ms, CollectionName, Conflict, Operation, OperationFilter, OperationId,
@@ -82,6 +83,7 @@ impl SqliteAdapter {
     async fn apply_migration(&self, version: i64) -> Result<()> {
         match version {
             1 => self.migrate_v1_initial_schema().await,
+            2 => self.migrate_v2_authority_sequence().await,
             unknown => Err(EngineError::Storage(format!(
                 "unknown photon-engine schema migration version {unknown}"
             ))),
@@ -206,11 +208,46 @@ impl SqliteAdapter {
 
         Ok(())
     }
+
+    /// The authority's remote-sequence allocator.
+    ///
+    /// A single row, so that taking it is a database-wide lock: whichever
+    /// connection holds it is the only one allocating a sequence, whether the
+    /// others are pool connections, processes, or hosts.
+    async fn migrate_v2_authority_sequence(&self) -> Result<()> {
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS photon_engine_sync_state (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                next_sequence INTEGER NOT NULL
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        // Seed past whatever an in-process allocator already handed out, so an
+        // existing op-log does not get its sequences reissued.
+        sqlx::query(
+            r#"
+            INSERT OR IGNORE INTO photon_engine_sync_state (id, next_sequence)
+            SELECT 1, COALESCE(MAX(remote_sequence), 0) + 1
+            FROM photon_engine_operations
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
 }
 
 /// Every schema version this build knows how to reach, in order. Append-only:
 /// a released migration is never edited, schema changes get a new entry.
-const SCHEMA_MIGRATIONS: &[(i64, &str)] = &[(1, "initial engine schema")];
+const SCHEMA_MIGRATIONS: &[(i64, &str)] = &[
+    (1, "initial engine schema"),
+    (2, "authority remote-sequence state"),
+];
 
 #[async_trait]
 impl StorageAdapter for SqliteAdapter {
@@ -252,6 +289,149 @@ impl StorageAdapter for SqliteAdapter {
         self.get_operation(&operation.id)
             .await?
             .ok_or_else(|| EngineError::Storage("operation insert was not readable".to_owned()))
+    }
+
+    async fn append_authoritative_operation(
+        &self,
+        operation: Operation,
+    ) -> Result<(StoredOperation, Record)> {
+        let mut transaction = self.pool.begin().await?;
+
+        // SQLite opens a transaction deferred, so a plain SELECT would let a
+        // second connection read the same `next_sequence`. Writing the
+        // singleton row — even to its own value — promotes this transaction to
+        // the database writer before it reads, and holds that until commit.
+        let next_sequence = sqlx::query_scalar::<_, i64>(
+            r#"
+            UPDATE photon_engine_sync_state
+            SET next_sequence = next_sequence
+            WHERE id = 1
+            RETURNING next_sequence
+            "#,
+        )
+        .fetch_one(&mut *transaction)
+        .await?;
+
+        let existing = sqlx::query(
+            r#"
+            SELECT local_sequence, operation_json, status, remote_sequence, received_at_ms
+            FROM photon_engine_operations
+            WHERE operation_id = ?1
+            "#,
+        )
+        .bind(operation.id.as_str())
+        .fetch_optional(&mut *transaction)
+        .await?
+        .map(stored_operation_from_row)
+        .transpose()?;
+
+        if let Some(existing) = &existing {
+            if existing.operation != operation {
+                return Err(EngineError::Storage(format!(
+                    "operation id {} was reused with a different payload",
+                    operation.id
+                )));
+            }
+            if let Some(remote_sequence) = existing.remote_sequence {
+                // Already accepted at `remote_sequence`. Return the committed
+                // projection rather than replaying a non-idempotent kind.
+                let record = read_record(&mut transaction, &existing.operation.key).await?;
+                let record = match record {
+                    Some(record) => record,
+                    None => {
+                        let record = apply_operation(None, &existing.operation)?;
+                        write_record(&mut transaction, &record).await?;
+                        record
+                    }
+                };
+                debug_assert!(remote_sequence > 0);
+                let stored = existing.clone();
+                transaction.commit().await?;
+                return Ok((stored, record));
+            }
+        }
+
+        sqlx::query(
+            r#"
+            UPDATE photon_engine_sync_state
+            SET next_sequence = ?1
+            WHERE id = 1
+            "#,
+        )
+        .bind(next_sequence + 1)
+        .execute(&mut *transaction)
+        .await?;
+
+        if existing.is_some() {
+            sqlx::query(
+                r#"
+                UPDATE photon_engine_operations
+                SET status = 'accepted',
+                    remote_sequence = ?1
+                WHERE operation_id = ?2
+                "#,
+            )
+            .bind(next_sequence)
+            .bind(operation.id.as_str())
+            .execute(&mut *transaction)
+            .await?;
+        } else {
+            sqlx::query(
+                r#"
+                INSERT INTO photon_engine_operations (
+                    operation_id,
+                    scope,
+                    collection,
+                    record_id,
+                    actor_id,
+                    status,
+                    remote_sequence,
+                    received_at_ms,
+                    operation_json
+                )
+                VALUES (?1, ?2, ?3, ?4, ?5, 'accepted', ?6, ?7, ?8)
+                "#,
+            )
+            .bind(operation.id.as_str())
+            .bind(operation.key.scope.as_str())
+            .bind(operation.key.collection.as_str())
+            .bind(operation.key.record_id.as_str())
+            .bind(operation.actor_id.as_str())
+            .bind(next_sequence)
+            .bind(unix_time_ms())
+            .bind(serde_json::to_string(&operation)?)
+            .execute(&mut *transaction)
+            .await?;
+        }
+
+        let stored = sqlx::query(
+            r#"
+            SELECT local_sequence, operation_json, status, remote_sequence, received_at_ms
+            FROM photon_engine_operations
+            WHERE operation_id = ?1
+            "#,
+        )
+        .bind(operation.id.as_str())
+        .fetch_one(&mut *transaction)
+        .await
+        .map_err(EngineError::from)
+        .and_then(stored_operation_from_row)?;
+
+        let current = read_record(&mut transaction, &stored.operation.key).await?;
+        let projected = apply_operation(current, &stored.operation)?;
+        write_record(&mut transaction, &projected).await?;
+
+        transaction.commit().await?;
+        Ok((stored, projected))
+    }
+
+    async fn next_remote_sequence(&self) -> Result<i64> {
+        let next_sequence = sqlx::query_scalar::<_, i64>(
+            "SELECT next_sequence FROM photon_engine_sync_state WHERE id = 1",
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(next_sequence)
     }
 
     async fn get_operation(&self, operation_id: &OperationId) -> Result<Option<StoredOperation>> {
@@ -663,6 +843,54 @@ impl StorageAdapter for SqliteAdapter {
             })
             .collect()
     }
+}
+
+/// Read a record projection inside an open transaction, so the read and the
+/// write that follows it stay under the same lock.
+async fn read_record(
+    transaction: &mut sqlx::Transaction<'_, Sqlite>,
+    key: &RecordKey,
+) -> Result<Option<Record>> {
+    let row = sqlx::query(
+        r#"
+        SELECT record_json
+        FROM photon_engine_records
+        WHERE scope = ?1 AND collection = ?2 AND record_id = ?3
+        "#,
+    )
+    .bind(key.scope.as_str())
+    .bind(key.collection.as_str())
+    .bind(key.record_id.as_str())
+    .fetch_optional(&mut **transaction)
+    .await?;
+
+    row.map(|row| {
+        let record_json: String = row.try_get("record_json")?;
+        Ok(serde_json::from_str(&record_json)?)
+    })
+    .transpose()
+}
+
+async fn write_record(
+    transaction: &mut sqlx::Transaction<'_, Sqlite>,
+    record: &Record,
+) -> Result<()> {
+    sqlx::query(
+        r#"
+        INSERT INTO photon_engine_records (scope, collection, record_id, record_json)
+        VALUES (?1, ?2, ?3, ?4)
+        ON CONFLICT(scope, collection, record_id)
+        DO UPDATE SET record_json = excluded.record_json
+        "#,
+    )
+    .bind(record.key.scope.as_str())
+    .bind(record.key.collection.as_str())
+    .bind(record.key.record_id.as_str())
+    .bind(serde_json::to_string(record)?)
+    .execute(&mut **transaction)
+    .await?;
+
+    Ok(())
 }
 
 fn push_where(builder: &mut QueryBuilder<'_, Sqlite>, has_where: &mut bool) {
