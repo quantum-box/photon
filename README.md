@@ -157,6 +157,9 @@ const storage = await createSharedLocalStore({
 2 タブ目を黙って壊すよりはっきり落としたいだけなら、`createPGliteStore({ exclusiveLock: true })` で
 2 タブ目が `PGliteStoreLockedError` になる。
 
+何がどう壊れていて、なぜこの形にしたのかは
+[docs/architecture/multi-tab-local-store.html](docs/architecture/multi-tab-local-store.html) に図で置いてある。
+
 ## 設計上の約束
 
 - **カーネルは同期的で、ストレージを持たない。** operation 構築・CRDT 投影・時計の因果関係だけを担い、I/O をしない。だから async の世界が 1 つで済み、`!Send` なストレージ trait をネイティブエンジンに伝播させずに済む。

@@ -91,6 +91,8 @@ Rust を `crates/` に統一し、単一 `Cargo.lock` にする。`photon-axum`�
 
 - `crates/photon-engine/src/wasm.rs` — カーネル面
 - `crates/photon-engine/src/types.rs` — 時刻引数化
+- `packages/core/src/shared/` — マルチタブ共有ストア（選出・転送・昇格）
+- `docs/architecture/multi-tab-local-store.html` — マルチタブの破損と解決の図解
 - `packages/core/src/client.ts` — ミューテーションパスと投影
 - `packages/core/src/sync/controller.ts` — 同期ループ
 - `packages/core/src/rest/index.ts` — REST 共存モード
