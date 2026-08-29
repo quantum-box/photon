@@ -173,18 +173,27 @@ export class RemoteLocalStore implements LocalStore {
       }
       this.options.channel.post(entry.message)
     }
-    // Prod for an owner as well: one may have been elected after this
-    // follower's last attempt, and an owner that is mid-open answers this even
-    // though it cannot answer the request yet.
+    this.stopTimerIfIdle()
+  }
+
+  /**
+   * One retry tick: re-send, then ask whether an owner is out there.
+   *
+   * The probe belongs here and *only* here. Asking from `repost()` would build
+   * a loop — an owner answers `who` with `hello`, and `hello` triggers a
+   * repost — so the two tabs would trade messages as fast as the bus allows
+   * and starve the main thread that is supposed to be opening the database.
+   */
+  private tick(): void {
+    this.repost()
     if (this.inFlight.size) {
       this.options.channel.post({ t: 'who', from: this.options.clientId })
     }
-    this.stopTimerIfIdle()
   }
 
   private startTimer(): void {
     if (this.timer !== null) return
-    this.timer = setInterval(() => this.repost(), this.retryIntervalMs)
+    this.timer = setInterval(() => this.tick(), this.retryIntervalMs)
     // Node keeps the process alive for a pending interval; a retry timer is
     // not a reason for a CLI or a test runner to hang.
     ;(this.timer as { unref?: () => void }).unref?.()

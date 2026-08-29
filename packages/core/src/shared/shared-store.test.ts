@@ -18,7 +18,9 @@ import type { Collection, EngineRecord, OperationStatus } from '../types.js'
 
 function createBus() {
   const peers = new Set<(message: StoreMessage) => void>()
+  const sent: StoreMessage[] = []
   return {
+    sent,
     channel(): StoreChannel {
       const listeners = new Set<(message: StoreMessage) => void>()
       const deliver = (message: StoreMessage): void => {
@@ -27,6 +29,7 @@ function createBus() {
       peers.add(deliver)
       return {
         post(message) {
+          sent.push(message)
           for (const peer of [...peers]) {
             if (peer !== deliver) peer(message)
           }
@@ -346,6 +349,46 @@ describe('shared local store', () => {
 
     await expect(follower.loadRecords('workspace:test')).resolves.toEqual([])
     expect(owner.isOwner).toBe(true)
+
+    await follower.close()
+    await owner.close()
+  })
+
+  it('probes on its own schedule instead of ping-ponging with the owner', async () => {
+    const bus = createBus()
+    const election = createElectionQueue()
+    const store = memoryStore()
+
+    // An owner answers every probe. If a probe's answer triggered another
+    // probe, the two contexts would trade messages as fast as the bus allows
+    // and starve the thread that is trying to open the database.
+    const owner = await createSharedLocalStore({
+      key: 'chatty',
+      channel: bus.channel(),
+      elect: election.elect,
+      ownershipGraceMs: 5,
+      open: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 200))
+        return store
+      },
+    })
+
+    const follower = await createSharedLocalStore({
+      key: 'chatty',
+      channel: bus.channel(),
+      elect: election.elect,
+      ownershipGraceMs: 5,
+      retryIntervalMs: 20,
+      requestTimeoutMs: 2_000,
+      open: async () => store,
+    })
+
+    await follower.loadRecords('workspace:test')
+
+    // ~200ms of waiting at a 20ms retry interval is on the order of ten
+    // probes. A feedback loop would put this in the thousands.
+    const probes = bus.sent.filter((message) => message.t === 'who').length
+    expect(probes).toBeLessThan(40)
 
     await follower.close()
     await owner.close()
