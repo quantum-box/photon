@@ -42,6 +42,16 @@ export type {
   StoreWrite,
 } from './store.js'
 
+export { createSharedLocalStore, sharedStoreSupported } from './shared/index.js'
+export type {
+  Election,
+  RemoteMethod,
+  SharedLocalStore,
+  SharedLocalStoreOptions,
+  StoreChannel,
+  StoreMessage,
+} from './shared/index.js'
+
 export { createRestTransport, decisionForError } from './rest/index.js'
 export type { RestListResult, RestResource, RestTransportOptions } from './rest/index.js'
 

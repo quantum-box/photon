@@ -1,0 +1,673 @@
+<title>PGlite マルチタブ問題</title>
+<!--
+  packages/core/src/shared/ と packages/store-pglite/ の解説。
+  自己完結（Google Fonts 以外に外部依存なし）なのでブラウザで直接開ける。
+
+  ホスト版: https://claude.ai/code/artifact/b1ef2951-d09e-4154-a343-6e369578f398
+  ただし Artifact は既定で非公開。共有メニューから共有しない限り作成者以外は開けないので、
+  このリポジトリ内の HTML が正本。
+-->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chivo:wght@600;700&family=JetBrains+Mono:wght@400;500&family=Zen+Kaku+Gothic+New:wght@400;500;700&display=swap">
+
+<style>
+  :root {
+    --sans: 'Chivo', 'Zen Kaku Gothic New', system-ui, sans-serif;
+    --mono: 'JetBrains Mono', ui-monospace, monospace;
+
+    --ground: #f2f5f7;
+    --surface: #ffffff;
+    --surface-2: #e7edf1;
+    --ink: #0f171e;
+    --muted: #566571;
+    --line: #d2dbe2;
+    --line-strong: #b3c0ca;
+    --accent: #1c6b8c;
+    --accent-soft: #dcecf3;
+    --hazard: #a53f27;
+    --hazard-soft: #f7e5df;
+    --ok: #2c6a4d;
+    --ok-soft: #dfefe6;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #0d1216;
+      --surface: #151b21;
+      --surface-2: #1c242b;
+      --ink: #e3eaef;
+      --muted: #94a3af;
+      --line: #29333c;
+      --line-strong: #3b4854;
+      --accent: #74b8d8;
+      --accent-soft: #14313e;
+      --hazard: #e58d74;
+      --hazard-soft: #3a2019;
+      --ok: #80c09c;
+      --ok-soft: #162c22;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ground: #0d1216;
+    --surface: #151b21;
+    --surface-2: #1c242b;
+    --ink: #e3eaef;
+    --muted: #94a3af;
+    --line: #29333c;
+    --line-strong: #3b4854;
+    --accent: #74b8d8;
+    --accent-soft: #14313e;
+    --hazard: #e58d74;
+    --hazard-soft: #3a2019;
+    --ok: #80c09c;
+    --ok-soft: #162c22;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-weight: 400;
+    line-height: 1.75;
+    font-size: 15px;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: 880px;
+    margin: 0 auto;
+    padding: 56px 24px 96px;
+    display: flex;
+    flex-direction: column;
+    gap: 64px;
+  }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0;
+  }
+
+  h1 {
+    font-size: clamp(30px, 5vw, 42px);
+    line-height: 1.28;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    text-wrap: balance;
+    margin: 12px 0 0;
+  }
+
+  h2 {
+    font-size: 21px;
+    font-weight: 700;
+    line-height: 1.5;
+    text-wrap: balance;
+    margin: 0;
+    padding-bottom: 12px;
+    border-bottom: 2px solid var(--ink);
+  }
+
+  h3 {
+    font-size: 15px;
+    font-weight: 700;
+    margin: 0;
+    line-height: 1.6;
+  }
+
+  p { margin: 0; }
+
+  section {
+    display: flex;
+    flex-direction: column;
+    gap: 22px;
+  }
+
+  .lede { color: var(--muted); max-width: 62ch; }
+
+  code {
+    font-family: var(--mono);
+    font-size: 0.87em;
+    background: var(--surface-2);
+    border-radius: 3px;
+    padding: 0.12em 0.36em;
+    word-break: break-all;
+  }
+
+  /* ---- verdict ---- */
+  .verdict {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-left: 4px solid var(--hazard);
+    padding: 22px 26px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .verdict .headline { font-size: 19px; font-weight: 700; line-height: 1.55; }
+  .verdict .sub { color: var(--muted); font-size: 14px; }
+
+  /* ---- table ---- */
+  .table-scroll { overflow-x: auto; border: 1px solid var(--line); background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; min-width: 560px; font-size: 13.5px; }
+  th, td { text-align: left; padding: 11px 16px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  thead th {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    font-weight: 500;
+    background: var(--surface-2);
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  td.key { font-family: var(--mono); font-size: 11.5px; color: var(--muted); }
+  .tag {
+    display: inline-block;
+    font-size: 11.5px;
+    font-weight: 500;
+    padding: 2px 9px;
+    border-radius: 999px;
+    white-space: nowrap;
+  }
+  .tag-hz { background: var(--hazard-soft); color: var(--hazard); }
+  .tag-ok { background: var(--ok-soft); color: var(--ok); }
+
+  /* ---- cards ---- */
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .card .num {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--accent);
+    letter-spacing: 0.08em;
+  }
+  .card p { font-size: 13.5px; color: var(--muted); }
+  .card.hz { border-top: 3px solid var(--hazard); }
+  .card.ok { border-top: 3px solid var(--ok); }
+
+  /* ---- figure ---- */
+  figure { margin: 0; display: flex; flex-direction: column; gap: 12px; }
+  .fig-frame {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    padding: 20px 18px;
+    overflow-x: auto;
+  }
+  figcaption { font-size: 12.5px; color: var(--muted); line-height: 1.65; }
+  figcaption b { color: var(--ink); font-weight: 500; }
+
+  svg { display: block; width: 100%; height: auto; min-width: 520px; }
+  .box { fill: var(--surface); stroke: var(--line-strong); stroke-width: 1.5; }
+  .box-2 { fill: var(--surface-2); stroke: var(--line-strong); stroke-width: 1.5; }
+  .box-ac { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.5; }
+  .box-hz { fill: var(--hazard-soft); stroke: var(--hazard); stroke-width: 1.5; }
+  .panel { fill: none; stroke: var(--line-strong); stroke-width: 1.5; stroke-dasharray: 5 4; }
+  .zone { fill: var(--hazard-soft); stroke: var(--hazard); stroke-width: 1.5; opacity: 0.55; }
+  .lbl { fill: var(--ink); font: 500 12px var(--sans); }
+  .lbl-b { fill: var(--ink); font: 700 12.5px var(--sans); }
+  .lbl-sm { fill: var(--muted); font: 400 10.5px var(--sans); }
+  .lbl-hz { fill: var(--hazard); font: 500 11px var(--sans); }
+  .lbl-ac { fill: var(--accent); font: 500 11px var(--sans); }
+  .mono { fill: var(--ink); font: 400 11px var(--mono); }
+  .mono-sm { fill: var(--muted); font: 400 10px var(--mono); }
+  .eb { fill: var(--muted); font: 500 10px var(--mono); letter-spacing: 0.1em; }
+  .edge { stroke: var(--line-strong); stroke-width: 1.5; fill: none; }
+  .edge-hz { stroke: var(--hazard); stroke-width: 2; fill: none; }
+  .edge-ac { stroke: var(--accent); stroke-width: 1.75; fill: none; }
+  .edge-dash { stroke: var(--muted); stroke-width: 1.5; fill: none; stroke-dasharray: 5 4; }
+  .mk { fill: var(--line-strong); }
+  .mk-hz { fill: var(--hazard); }
+  .mk-ac { fill: var(--accent); }
+  .rule { stroke: var(--line); stroke-width: 1; stroke-dasharray: 3 3; }
+
+  /* ---- refs ---- */
+  .refs { display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; }
+  .refs div { display: flex; gap: 12px; flex-wrap: wrap; }
+  .refs .path { font-family: var(--mono); font-size: 11.5px; color: var(--accent); }
+  .refs .what { color: var(--muted); }
+
+  footer { border-top: 1px solid var(--line); padding-top: 20px; color: var(--muted); font-size: 12px; }
+</style>
+
+<div class="wrap">
+
+  <header>
+    <p class="eyebrow">Photon / packages/store-pglite</p>
+    <h1>タブ間でローカルストアは<br>共有されるのか</h1>
+    <div class="verdict" style="margin-top:24px">
+      <div class="headline">共有していなかった。いまは1つのコンテキストだけが開き、他はそこへ転送する。</div>
+      <div class="sub">以前は「タブ間で共有されない」のに「IndexedDB は物理的に共有されている」が同時に成り立っていた。それが問題の正体で、下の図1〜図2 がその状態。<code>createSharedLocalStore</code> がその差を埋めた。</div>
+    </div>
+  </header>
+
+  <!-- ===== 1 ===== -->
+  <section>
+    <h2>問題 ── ストレージは4層あり、共有されるのは下2層だけ</h2>
+    <p class="lede">読み取りはメモリ上の projection から返る。PGlite は読み取りパスではなく、オフライン書き込みを永続化するための durable store。その永続化の実体が2つとも IndexedDB なので、同一 origin のタブからは同じものが見えている。</p>
+
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr><th>層</th><th>実体 / キー</th><th>タブ間</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>in-memory projection</td>
+            <td class="key">JS ヒープ</td>
+            <td><span class="tag tag-ok">独立</span></td>
+          </tr>
+          <tr>
+            <td><code>liveClients</code> ガード</td>
+            <td class="key">module scope の Set（client.ts:236）</td>
+            <td><span class="tag tag-hz">タブ内でしか効かない</span></td>
+          </tr>
+          <tr>
+            <td>PGlite の data dir</td>
+            <td class="key">idb://photon-engine-&lt;scope&gt;</td>
+            <td><span class="tag tag-hz">物理的に共有</span></td>
+          </tr>
+          <tr>
+            <td>commit journal</td>
+            <td class="key">photon-commit-journal:&lt;dataDir&gt;</td>
+            <td><span class="tag tag-hz">物理的に共有</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <figure>
+      <div class="fig-frame">
+        <svg viewBox="0 0 760 470" role="img" aria-label="2つのタブがそれぞれ独立した projection と PGlite の WASM 状態を持ちながら、同一 origin の同じ IndexedDB 2ストアに書き込む図">
+          <defs>
+            <marker id="a1" viewBox="0 0 8 8" refX="7.5" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0 0 L8 4 L0 8 Z" class="mk"></path>
+            </marker>
+            <marker id="a1h" viewBox="0 0 8 8" refX="7.5" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0 0 L8 4 L0 8 Z" class="mk-hz"></path>
+            </marker>
+          </defs>
+
+          <!-- Tab A -->
+          <text x="24" y="30" class="eb">TAB A</text>
+          <rect x="24" y="44" width="316" height="228" rx="4" class="panel"></rect>
+          <rect x="44" y="68" width="276" height="44" rx="3" class="box"></rect>
+          <text x="60" y="88" class="lbl">in-memory projection</text>
+          <text x="60" y="103" class="lbl-sm">読み取りはここから返る</text>
+          <line x1="182" y1="112" x2="182" y2="130" class="edge" marker-end="url(#a1)"></line>
+          <text x="192" y="126" class="lbl-sm">commit</text>
+          <rect x="44" y="132" width="276" height="44" rx="3" class="box"></rect>
+          <text x="60" y="152" class="lbl">PGlite (WASM)</text>
+          <text x="60" y="167" class="lbl-sm">タブごとに独立した Postgres 状態</text>
+          <rect x="44" y="188" width="276" height="36" rx="3" class="box-2"></rect>
+          <text x="60" y="211" class="mono">journalSeq = 5</text>
+          <line x1="44" y1="240" x2="320" y2="240" class="rule"></line>
+          <text x="182" y="259" class="lbl-sm" text-anchor="middle">liveClients ガードが効くのはこの内側だけ</text>
+
+          <!-- Tab B -->
+          <text x="420" y="30" class="eb">TAB B</text>
+          <rect x="420" y="44" width="316" height="228" rx="4" class="panel"></rect>
+          <rect x="440" y="68" width="276" height="44" rx="3" class="box"></rect>
+          <text x="456" y="88" class="lbl">in-memory projection</text>
+          <text x="456" y="103" class="lbl-sm">A の状態は見えない</text>
+          <line x1="578" y1="112" x2="578" y2="130" class="edge" marker-end="url(#a1)"></line>
+          <text x="588" y="126" class="lbl-sm">commit</text>
+          <rect x="440" y="132" width="276" height="44" rx="3" class="box"></rect>
+          <text x="456" y="152" class="lbl">PGlite (WASM)</text>
+          <text x="456" y="167" class="lbl-sm">A の存在を知らない</text>
+          <rect x="440" y="188" width="276" height="36" rx="3" class="box-2"></rect>
+          <text x="456" y="211" class="mono">journalSeq = 5</text>
+          <line x1="440" y1="240" x2="716" y2="240" class="rule"></line>
+          <text x="578" y="259" class="lbl-sm" text-anchor="middle">こちらにも別のガードが1つ</text>
+
+          <!-- bus -->
+          <line x1="150" y1="272" x2="150" y2="300" class="edge-hz"></line>
+          <line x1="610" y1="272" x2="610" y2="300" class="edge-hz"></line>
+          <line x1="150" y1="300" x2="610" y2="300" class="edge-hz"></line>
+          <text x="380" y="292" class="lbl-hz" text-anchor="middle">同一 origin ＝ 同じ IndexedDB に書き戻す</text>
+          <line x1="204" y1="300" x2="204" y2="342" class="edge-hz" marker-end="url(#a1h)"></line>
+          <line x1="556" y1="300" x2="556" y2="342" class="edge-hz" marker-end="url(#a1h)"></line>
+
+          <!-- shared zone -->
+          <text x="24" y="332" class="eb">SHARED · INDEXEDDB</text>
+          <rect x="44" y="344" width="320" height="76" rx="3" class="box-hz"></rect>
+          <text x="62" y="372" class="mono">idb://photon-engine-&lt;scope&gt;</text>
+          <text x="62" y="393" class="lbl-sm">PGlite の data dir</text>
+          <rect x="396" y="344" width="320" height="76" rx="3" class="box-hz"></rect>
+          <text x="414" y="372" class="mono">photon-commit-journal:…</text>
+          <text x="414" y="393" class="lbl-sm">durability: 'strict' の WAL</text>
+
+          <text x="380" y="446" class="lbl-sm" text-anchor="middle">共有前提でない2つの writer が、共有されたストアを叩いている</text>
+        </svg>
+      </div>
+      <figcaption><b>図1 — 現状のトポロジ。</b>タブごとに独立しているのは projection と PGlite の WASM 状態まで。その下の IndexedDB 2ストアは同一 origin である以上どのタブからも同じものが見え、調停する仕組みが誰もいない。</figcaption>
+    </figure>
+  </section>
+
+  <!-- ===== 2 ===== -->
+  <section>
+    <h2>壊れ方は2つある</h2>
+
+    <div class="cards">
+      <div class="card hz">
+        <span class="num">FAILURE 1</span>
+        <h3>PGlite は data dir あたり単一接続前提</h3>
+        <p>2タブ目が同じ dir を開くと、それぞれが自分の WASM メモリ上に独立した Postgres 状態を持ったまま、同じ IndexedDB ファイル群に書き戻す。互いのページを踏み潰す。</p>
+      </div>
+      <div class="card hz">
+        <span class="num">FAILURE 2</span>
+        <h3>journal の seq が衝突する</h3>
+        <p><code>journalSeq</code> はインスタンスごとの in-memory カウンタで、boot 時に checkpoint 行から初期化されるだけ。2タブが同時に開けば両方が同じ番号を採番する。</p>
+      </div>
+    </div>
+
+    <figure>
+      <div class="fig-frame">
+        <svg viewBox="0 0 720 280" role="img" aria-label="2つのタブが同じ checkpoint 値から採番し、journal の同じキーに書いて片方が失われる図">
+          <defs>
+            <marker id="a2" viewBox="0 0 8 8" refX="7.5" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0 0 L8 4 L0 8 Z" class="mk-hz"></path>
+            </marker>
+          </defs>
+
+          <line x1="150" y1="44" x2="150" y2="214" class="edge-dash"></line>
+          <text x="150" y="32" class="lbl-sm" text-anchor="middle">boot：checkpoint seq = 4 を両タブが読む</text>
+
+          <text x="24" y="99" class="eb">TAB A</text>
+          <text x="24" y="179" class="eb">TAB B</text>
+
+          <line x1="150" y1="94" x2="190" y2="94" class="edge"></line>
+          <line x1="150" y1="174" x2="250" y2="174" class="edge"></line>
+
+          <rect x="190" y="72" width="160" height="44" rx="3" class="box"></rect>
+          <text x="206" y="99" class="mono">++journalSeq → 5</text>
+
+          <rect x="250" y="152" width="160" height="44" rx="3" class="box"></rect>
+          <text x="266" y="179" class="mono">++journalSeq → 5</text>
+
+          <path d="M350 94 L488 108" class="edge-hz" marker-end="url(#a2)"></path>
+          <path d="M410 174 L488 146" class="edge-hz" marker-end="url(#a2)"></path>
+          <text x="424" y="88" class="lbl-hz" text-anchor="middle">put(payload, 5)</text>
+
+          <rect x="500" y="86" width="196" height="82" rx="3" class="box-hz"></rect>
+          <text x="518" y="118" class="mono">journal[5]</text>
+          <text x="518" y="140" class="lbl-sm">キー上書き。後勝ちで</text>
+          <text x="518" y="156" class="lbl-sm">片方の commit が消える</text>
+
+          <text x="360" y="248" class="lbl-sm" text-anchor="middle">journal は「書き込みが確実に残る唯一の場所」なので、ここが壊れると offline write の保証そのものが失われる</text>
+        </svg>
+      </div>
+      <figcaption><b>図2 — seq 衝突。</b>journal は IndexedDB のキー・バリューで、キーは seq。両タブが同じ checkpoint から採番するので、同じキーに 2 回書いて片方が黙って消える。</figcaption>
+    </figure>
+  </section>
+
+  <!-- ===== 3 ===== -->
+  <section>
+    <h2>それまでの逃げ道は <code>exclusiveLock</code> ひとつだった</h2>
+    <p class="lede">Web Locks で <code>photon-pglite:&lt;dataDir&gt;</code> を掴む opt-in オプション。<code>ifAvailable: true</code> なので待たずに即失敗する ── ロック待ちでハングするのは「壊れた」と見分けがつかないため。いまも残っているが、これは「2タブ目を調停するくらいなら断る」ホスト向けの選択肢になった。</p>
+
+    <div class="cards">
+      <div class="card hz">
+        <span class="num">OFF ／ デフォルト</span>
+        <h3>静かに壊れる</h3>
+        <p>2タブ目もそのまま開く。図1・図2 の状態に入り、エラーは出ない。壊れたことに気づくのはリロード後。</p>
+      </div>
+      <div class="card ok">
+        <span class="num">ON ／ opt-in</span>
+        <h3>はっきり落ちる</h3>
+        <p>2タブ目は <code>PGliteStoreLockedError</code> で開けない。takeover のストーリー（leader election / SharedWorker）がない以上、選べるのはこの2択しかない、という設計判断。</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== 4 ===== -->
+  <section>
+    <h2>では、タブ間の整合はどう取れているのか</h2>
+    <p class="lede">サーバ経由。「一方のタブでの編集が他方に見える」という動作は成立しているが、それはローカルストアを共有しているからではなく、push → サーバ → pull で一周しているから。</p>
+
+    <figure>
+      <div class="fig-frame">
+        <svg viewBox="0 0 720 250" role="img" aria-label="タブAの書き込みがサーバへ push され、タブBが pull して受け取る図。タブ間の直接共有経路はない">
+          <defs>
+            <marker id="a3" viewBox="0 0 8 8" refX="7.5" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0 0 L8 4 L0 8 Z" class="mk-ac"></path>
+            </marker>
+          </defs>
+
+          <rect x="24" y="66" width="176" height="72" rx="3" class="box"></rect>
+          <text x="44" y="98" class="lbl-b">Tab A</text>
+          <text x="44" y="118" class="lbl-sm">ローカルに書く</text>
+
+          <rect x="272" y="52" width="176" height="100" rx="3" class="box-ac"></rect>
+          <text x="292" y="88" class="lbl-b">Photon Engine</text>
+          <text x="292" y="108" class="lbl-sm">サーバ側の権威</text>
+          <text x="292" y="126" class="lbl-sm">op-log ＋ 収束</text>
+
+          <rect x="520" y="66" width="176" height="72" rx="3" class="box"></rect>
+          <text x="540" y="98" class="lbl-b">Tab B</text>
+          <text x="540" y="118" class="lbl-sm">pull して初めて知る</text>
+
+          <line x1="200" y1="102" x2="264" y2="102" class="edge-ac" marker-end="url(#a3)"></line>
+          <text x="232" y="90" class="lbl-ac" text-anchor="middle">push</text>
+
+          <line x1="448" y1="102" x2="512" y2="102" class="edge-ac" marker-end="url(#a3)"></line>
+          <text x="480" y="90" class="lbl-ac" text-anchor="middle">pull</text>
+          <text x="480" y="126" class="lbl-sm" text-anchor="middle">poll ＋ Live WS</text>
+
+          <path d="M112 150 C 112 204, 608 204, 608 150" class="edge-dash"></path>
+          <line x1="348" y1="192" x2="372" y2="216" class="edge-hz"></line>
+          <line x1="372" y1="192" x2="348" y2="216" class="edge-hz"></line>
+          <text x="360" y="240" class="lbl-hz" text-anchor="middle">ローカルストアを直接共有する経路は存在しない</text>
+        </svg>
+      </div>
+      <figcaption><b>図3 — かつては整合をサーバだけが取っていた。</b>タブ A の編集がタブ B に出るまで push と pull の一周が必要で、オフライン中は永久に届かなかった。共有ストアが入った now は、下の図5 のとおりストア経由で直接届く。</figcaption>
+    </figure>
+  </section>
+
+  <!-- ===== 5 ===== -->
+  <section>
+    <h2>Tauri でも、いまはまったく同じ話</h2>
+    <p class="lede">Tauri のフロントエンドは WebView なので、複数ウィンドウは同一 origin の別コンテキストになり、同じ IndexedDB を見る。Tauri 固有の緩和は入っていない（<code>packages/</code> の store adapter は <code>store-pglite</code> のみ）。</p>
+    <div class="card ok">
+      <span class="num">ただし本来は Tauri のほうが解きやすい</span>
+      <h3>Rust 側に単一 writer を置ける</h3>
+      <p>Rust に SQLite を置いて <code>LocalStore</code> を実装すれば、全ウィンドウが1プロセスの writer を IPC 越しに共有でき、ロックも直列化も OS 側で成立する。<code>LocalStore</code> が意図的に約10メソッドに絞られているのはこの差し替えのためだが、<b style="color:var(--ink)">その adapter はまだ書かれていない</b>。</p>
+    </div>
+  </section>
+
+  <!-- ===== 5.5 ===== -->
+  <section>
+    <h2>実装した形</h2>
+    <p class="lede"><code>createSharedLocalStore</code>。1つのコンテキストだけが実体を開き、残りは転送する。オーナーのタブが閉じたら、Web Locks の待ち行列で次が昇格して自分で開き直す。</p>
+
+    <figure>
+      <div class="fig-frame">
+        <svg viewBox="0 0 760 430" role="img" aria-label="1つのオーナーコンテキストだけが PGlite と IndexedDB を開き、フォロワーは LocalStore 呼び出しを転送し、書き込み通知を受け取る図">
+          <defs>
+            <marker id="a5" viewBox="0 0 8 8" refX="7.5" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0 0 L8 4 L0 8 Z" class="mk-ac"></path>
+            </marker>
+          </defs>
+
+          <text x="24" y="44" class="eb">OWNER · TAB A</text>
+          <rect x="24" y="56" width="290" height="180" rx="4" class="panel"></rect>
+          <rect x="42" y="78" width="254" height="40" rx="3" class="box"></rect>
+          <text x="58" y="103" class="lbl">in-memory projection</text>
+          <rect x="42" y="130" width="254" height="40" rx="3" class="box-ac"></rect>
+          <text x="58" y="155" class="lbl">PGlite (WASM) ── 唯一の接続</text>
+          <rect x="42" y="184" width="254" height="34" rx="3" class="box-2"></rect>
+          <text x="58" y="206" class="mono">Web Lock を保持</text>
+
+          <text x="446" y="44" class="eb">FOLLOWERS</text>
+          <rect x="446" y="56" width="290" height="76" rx="4" class="box"></rect>
+          <text x="464" y="82" class="lbl-b">Tab B</text>
+          <text x="464" y="102" class="lbl-sm">projection ＋ 転送だけの LocalStore</text>
+          <text x="464" y="120" class="mono-sm">DB は開かない</text>
+
+          <rect x="446" y="148" width="290" height="76" rx="4" class="box"></rect>
+          <text x="464" y="174" class="lbl-b">Tab C</text>
+          <text x="464" y="194" class="lbl-sm">projection ＋ 転送だけの LocalStore</text>
+          <text x="464" y="212" class="mono-sm">Web Lock 待ち行列に並ぶ</text>
+
+          <line x1="446" y1="94" x2="410" y2="94" class="edge-ac"></line>
+          <line x1="446" y1="186" x2="410" y2="186" class="edge-ac"></line>
+          <line x1="406" y1="94" x2="406" y2="186" class="edge-ac"></line>
+
+          <line x1="406" y1="126" x2="322" y2="126" class="edge-ac" marker-end="url(#a5)"></line>
+          <text x="364" y="118" class="lbl-ac" text-anchor="middle">commit / load を転送</text>
+          <line x1="322" y1="158" x2="406" y2="158" class="edge-ac" marker-end="url(#a5)"></line>
+          <text x="364" y="176" class="lbl-ac" text-anchor="middle">write 通知（subscribe）</text>
+
+          <line x1="169" y1="236" x2="169" y2="306" class="edge-ac" marker-end="url(#a5)"></line>
+          <text x="181" y="276" class="lbl-sm">1本だけ</text>
+
+          <text x="24" y="298" class="eb">INDEXEDDB</text>
+          <rect x="24" y="310" width="290" height="76" rx="3" class="box-2"></rect>
+          <text x="42" y="340" class="mono">idb://photon-engine-&lt;scope&gt;</text>
+          <text x="42" y="362" class="lbl-sm">開いているコンテキストは常に1つ</text>
+
+          <rect x="446" y="290" width="290" height="96" rx="3" class="box-ac"></rect>
+          <text x="464" y="316" class="lbl">オーナーが閉じたら</text>
+          <text x="464" y="338" class="lbl-sm">次のタブが昇格して自分で開く</text>
+          <text x="464" y="357" class="lbl-sm">接続を閉じてからロックを解放する</text>
+          <text x="464" y="376" class="lbl-sm">— 逆順だと一瞬だけ二重接続になる</text>
+        </svg>
+      </div>
+      <figcaption><b>図5 — 出荷した形。</b>フォロワーは DB を開かない。<code>LocalStore</code> の呼び出しを転送し、他コンテキストの書き込みを <code>subscribe</code> で受け取って自分の projection に畳み込む。だからサーバへの往復を待たずにタブ同士が揃う。</figcaption>
+    </figure>
+
+    <div class="cards">
+      <div class="card ok">
+        <span class="num">なぜ小さく済むのか</span>
+        <h3><code>LocalStore</code> が約10個の冪等メソッドしかない</h3>
+        <p>だから「別コンテキストへ転送する」実装が小さなオブジェクトで済み、失った応答を再送しても安全になる。継ぎ目を最初から狭く切っておいた効果がここで出た。</p>
+      </div>
+      <div class="card ok">
+        <span class="num">transport は差し替え可能</span>
+        <h3>BroadcastChannel ＋ Web Locks</h3>
+        <p>Android の WebView を含む全ターゲットで動く唯一の組み合わせ。SharedWorker や Tauri の Rust 側に載せ替えるときは <code>channel</code> と <code>elect</code> を差し替えるだけで、この上のコードは変わらない。</p>
+      </div>
+      <div class="card hz">
+        <span class="num">残っている無駄</span>
+        <h3>同期ループは全タブで走ったまま</h3>
+        <p>N タブなら N 回 pull する。壊れはしない ── 永続 cursor を単調にしたので巻き戻らず、書き込みは全て冪等。オーナーだけが同期する形にするのは別の変更。</p>
+      </div>
+      <div class="card hz">
+        <span class="num">残っている限界</span>
+        <h3>配るのはレコードで、オペレーションではない</h3>
+        <p>受け側はカーネルで再マージしない。2タブが同一レコードの別フィールドを同時に編集すると、ローカルでは後勝ちで片方が消える。オペレーションは両方保存・push されるのでサーバが正しくマージして pull で直るが、<b style="color:var(--ink)">オフライン中は直らない</b>。オペレーションを配る形にするには、2タブが同一 <code>actorId</code> を共有するのをやめる必要がある ── でないと HLC が衝突しうる。</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== 6 ===== -->
+  <section>
+    <h2>取れる選択肢は3つ</h2>
+
+    <figure>
+      <div class="fig-frame">
+        <svg viewBox="0 0 760 320" role="img" aria-label="3つの解決案のトポロジ比較。タブごとに別ストア、リーダー選出、単一writer">
+          <defs>
+            <marker id="a4" viewBox="0 0 8 8" refX="7.5" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0 0 L8 4 L0 8 Z" class="mk"></path>
+            </marker>
+            <marker id="a4a" viewBox="0 0 8 8" refX="7.5" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0 0 L8 4 L0 8 Z" class="mk-ac"></path>
+            </marker>
+          </defs>
+
+          <!-- column A -->
+          <text x="20" y="24" class="eb">A · 別 DATADIR</text>
+          <text x="20" y="44" class="lbl">タブごとにストアを分ける</text>
+          <rect x="20" y="64" width="94" height="34" rx="3" class="box"></rect>
+          <text x="67" y="86" class="lbl" text-anchor="middle">Tab A</text>
+          <rect x="136" y="64" width="94" height="34" rx="3" class="box"></rect>
+          <text x="183" y="86" class="lbl" text-anchor="middle">Tab B</text>
+          <line x1="67" y1="98" x2="67" y2="184" class="edge" marker-end="url(#a4)"></line>
+          <line x1="183" y1="98" x2="183" y2="184" class="edge" marker-end="url(#a4)"></line>
+          <rect x="20" y="186" width="94" height="42" rx="3" class="box-2"></rect>
+          <text x="67" y="212" class="mono-sm" text-anchor="middle">dataDir A</text>
+          <rect x="136" y="186" width="94" height="42" rx="3" class="box-2"></rect>
+          <text x="183" y="212" class="mono-sm" text-anchor="middle">dataDir B</text>
+          <text x="20" y="256" class="lbl-sm">＋ 今すぐできる。衝突しない</text>
+          <text x="20" y="274" class="lbl-sm">− hydration がタブ数分</text>
+          <text x="20" y="292" class="lbl-sm">− オフライン中はタブ間が発散</text>
+
+          <!-- column B -->
+          <line x1="262" y1="10" x2="262" y2="300" class="rule"></line>
+          <text x="288" y="24" class="eb">B · LEADER 選出</text>
+          <text x="288" y="44" class="lbl">1タブだけが store を開く</text>
+          <rect x="288" y="64" width="94" height="34" rx="3" class="box-ac"></rect>
+          <text x="335" y="86" class="lbl" text-anchor="middle">Leader</text>
+          <rect x="404" y="64" width="94" height="34" rx="3" class="box"></rect>
+          <text x="451" y="86" class="lbl" text-anchor="middle">Tab B</text>
+          <line x1="404" y1="81" x2="386" y2="81" class="edge-ac" marker-end="url(#a4a)"></line>
+          <text x="393" y="120" class="lbl-sm" text-anchor="middle">BroadcastChannel で委譲</text>
+          <line x1="335" y1="98" x2="335" y2="184" class="edge-ac" marker-end="url(#a4a)"></line>
+          <text x="345" y="152" class="lbl-sm">Web Locks で選出</text>
+          <rect x="288" y="186" width="210" height="42" rx="3" class="box-2"></rect>
+          <text x="393" y="212" class="mono-sm" text-anchor="middle">1つの dataDir</text>
+          <text x="288" y="256" class="lbl-sm">＋ 全ブラウザで動く</text>
+          <text x="288" y="274" class="lbl-sm">− リーダー交代の実装が要る</text>
+          <text x="288" y="292" class="lbl-sm">− 差分の配信経路を作る必要</text>
+
+          <!-- column C -->
+          <line x1="530" y1="10" x2="530" y2="300" class="rule"></line>
+          <text x="556" y="24" class="eb">C · 単一 WRITER</text>
+          <text x="556" y="44" class="lbl">store を外に出す</text>
+          <rect x="556" y="64" width="84" height="34" rx="3" class="box"></rect>
+          <text x="598" y="86" class="lbl" text-anchor="middle">Tab A</text>
+          <rect x="656" y="64" width="84" height="34" rx="3" class="box"></rect>
+          <text x="698" y="86" class="lbl" text-anchor="middle">Tab B</text>
+          <line x1="598" y1="98" x2="628" y2="126" class="edge-ac" marker-end="url(#a4a)"></line>
+          <line x1="698" y1="98" x2="668" y2="126" class="edge-ac" marker-end="url(#a4a)"></line>
+          <rect x="556" y="128" width="184" height="40" rx="3" class="box-ac"></rect>
+          <text x="648" y="147" class="lbl" text-anchor="middle">SharedWorker</text>
+          <text x="648" y="162" class="lbl-sm" text-anchor="middle">／ Tauri なら Rust プロセス</text>
+          <line x1="648" y1="168" x2="648" y2="184" class="edge-ac" marker-end="url(#a4a)"></line>
+          <rect x="556" y="186" width="184" height="42" rx="3" class="box-2"></rect>
+          <text x="648" y="212" class="mono-sm" text-anchor="middle">1つの store</text>
+          <text x="556" y="256" class="lbl-sm">＋ 一番素直。直列化が自明</text>
+          <text x="556" y="274" class="lbl-sm">− SharedWorker は Safari が弱い</text>
+          <text x="556" y="292" class="lbl-sm">＋ Tauri なら IPC で自然に解ける</text>
+        </svg>
+      </div>
+      <figcaption><b>図4 — 3案の違いは「store が何個あって、誰が開くか」だけ。</b>採ったのは B。C の SharedWorker は Android の WebView に存在しないので、全ターゲットで動く唯一の選択肢が B だった。A は IndexedDB が溜まり続けるうえ、タブごとにコールドスタートになる。</figcaption>
+    </figure>
+  </section>
+
+  <!-- ===== refs ===== -->
+  <section>
+    <h2>参照</h2>
+    <div class="refs">
+      <div><span class="path">packages/store-pglite/src/index.ts</span><span class="what">PGlite アダプタ・commit journal・exclusiveLock</span></div>
+      <div><span class="path">packages/core/src/store.ts</span><span class="what">LocalStore（差し替えの継ぎ目、約10メソッド）＋ 任意の subscribe</span></div>
+      <div><span class="path">packages/core/src/shared/shared-store.ts</span><span class="what">createSharedLocalStore（オーナー選出・転送・昇格）</span></div>
+      <div><span class="path">packages/core/src/shared/remote-store.ts</span><span class="what">転送だけの LocalStore と再送ポリシー</span></div>
+      <div><span class="path">packages/core/src/shared/election.ts</span><span class="what">Web Locks によるオーナー選出</span></div>
+      <div><span class="path">packages/core/src/client.ts:236</span><span class="what">liveClients ガード</span></div>
+      <div><span class="path">examples/playground/src/app/kitConfig.ts</span><span class="what">dataDir の名前空間化</span></div>
+      <div><span class="path">docs/photon-v0.2-release-checklist.md:82</span><span class="what">既知の制約としての記述</span></div>
+      <div><span class="path">docs/architecture/decisions/ADR-0002…md:87</span><span class="what">単一接続という前提の明文化</span></div>
+    </div>
+  </section>
+
+  <footer>Photon local-first sync engine ／ store-pglite のマルチタブ挙動</footer>
+
+</div>

@@ -212,6 +212,7 @@ class PhotonClientImpl implements PhotonClient {
   private notifyScheduled = false
   private dirtyCollections = new Set<Collection>()
   private closed = false
+  private unsubscribeStorage: (() => void) | null = null
   private readonly registryKey: string
   private readonly collectionModes = new Map<Collection, CollectionMode>()
   private readonly lazyCollections = new Set<Collection>()
@@ -336,7 +337,89 @@ class PhotonClientImpl implements PhotonClient {
     this.hydrateResolve()
     this.emit('hydrate', changes)
 
+    // A store shared across tabs reports what the other tabs wrote. Folding
+    // those in is the difference between two tabs that both work and two tabs
+    // that agree: without it, a sibling's edit stays invisible until it has
+    // been pushed to the server and pulled back.
+    this.unsubscribeStorage =
+      this.storage.subscribe?.((write) => this.applyExternalWrite(write)) ?? null
+
     if (this.options.sync?.autoStart !== false) this.sync.start()
+  }
+
+  /**
+   * Project a write another context made against the same store.
+   *
+   * The records are taken as-is rather than re-derived from the operations:
+   * the context that wrote them already ran them through the kernel, and
+   * re-merging here would apply the same operation twice.
+   */
+  private applyExternalWrite(write: StoreWrite): void {
+    if (this.closed) return
+
+    const changes: RecordChange[] = []
+
+    for (const record of write.records ?? []) {
+      // A lazy collection that has not hydrated has no base to merge against,
+      // and it will read this record from storage when it does hydrate.
+      // Projecting it now would put a lone record into an empty collection and
+      // make it look complete.
+      if (
+        this.lazyCollections.has(record.key.collection) &&
+        !this.hydratedLazyCollections.has(record.key.collection)
+      ) {
+        continue
+      }
+      const change = this.projection.set(record, { durable: true })
+      if (change) changes.push(change)
+    }
+
+    for (const target of write.deleteRecords ?? []) {
+      const change = this.projection.remove(target.collection, target.recordId)
+      if (change) changes.push(change)
+    }
+
+    // Their effect is already in the records above, so a later pull echoing
+    // them back must not re-apply it.
+    for (const operation of write.operations ?? []) {
+      this.appliedOperationIds.add(operation.id)
+      // Another context's unpushed write is pending for this client too — the
+      // operations were loaded from the same store at bootstrap.
+      if (!this.pending.has(operation.id)) {
+        this.registerPending(operation)
+        const change = this.projection.addPending(
+          operation.key.collection,
+          operation.key.record_id,
+        )
+        if (change) changes.push(change)
+      }
+    }
+
+    for (const update of write.statusUpdates ?? []) {
+      if (update.status === 'pending') continue
+      const entry = this.pending.get(update.operationId)
+      if (!entry) continue
+      this.pending.delete(update.operationId)
+      const change = this.projection.releasePending(
+        entry.operation.key.collection,
+        entry.operation.key.record_id,
+      )
+      if (change) changes.push(change)
+    }
+
+    if (write.conflicts?.length) {
+      const known = new Set(this.conflictRows.map((conflict) => conflict.id))
+      this.conflictRows = [
+        ...this.conflictRows,
+        ...write.conflicts.filter((conflict) => !known.has(conflict.id)),
+      ]
+    }
+    if (write.resolveConflictIds?.length) {
+      const resolved = new Set(write.resolveConflictIds)
+      this.conflictRows = this.conflictRows.filter((conflict) => !resolved.has(conflict.id))
+    }
+
+    this.emit('remote', changes)
   }
 
   // -------------------------------------------------------------------------
@@ -970,6 +1053,8 @@ class PhotonClientImpl implements PhotonClient {
     if (this.closed) return
     this.closed = true
     this.sync.stop()
+    this.unsubscribeStorage?.()
+    this.unsubscribeStorage = null
     liveClients.delete(this.registryKey)
     await this.storage.close()
   }

@@ -533,10 +533,21 @@ class PGliteStore implements LocalStore {
       // permanently.
       if (write.cursor) {
         await tx.query(
+          // Monotonic, because more than one sync loop can share this store.
+          // Each reads the cursor at the start of its cycle, so a slow cycle
+          // can finish after a faster one and carry a lower position. Letting
+          // it win rewinds the cursor and re-pulls a page that was already
+          // applied — idempotent, but an endless amount of pointless work.
           `INSERT INTO photon_engine_cursors (scope, remote, position, updated_at_ms)
            VALUES ($1, $2, $3, $4)
            ON CONFLICT (scope, remote)
-           DO UPDATE SET position = EXCLUDED.position, updated_at_ms = EXCLUDED.updated_at_ms`,
+           DO UPDATE SET
+             position = GREATEST(photon_engine_cursors.position, EXCLUDED.position),
+             updated_at_ms = CASE
+               WHEN EXCLUDED.position >= photon_engine_cursors.position
+                 THEN EXCLUDED.updated_at_ms
+               ELSE photon_engine_cursors.updated_at_ms
+             END`,
           [write.cursor.scope, write.cursor.remote, write.cursor.position, write.cursor.updatedAtMs],
         )
       }
