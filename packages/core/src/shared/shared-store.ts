@@ -188,6 +188,10 @@ class SharedStore implements SharedLocalStore {
   private async promote(): Promise<void> {
     if (this.closed || this.local || this.promoting) return
     this.promoting = true
+    // Announced before the database is open, not after. Opening PGlite on a
+    // cold cache runs for seconds, and a follower that hears nothing in that
+    // window cannot tell a slow owner from an absent one.
+    this.channel.post({ t: 'hello', from: this.clientId, serving: false })
     try {
       const local = await this.options.open()
       if (this.closed) {
@@ -200,7 +204,7 @@ class SharedStore implements SharedLocalStore {
       this.remote.settleWith((method, args) => this.executeLocal(method, args))
       // Only once `local` is set, or a follower re-posting on this would be
       // answered by a context that still cannot serve.
-      this.channel.post({ t: 'hello', from: this.clientId })
+      this.channel.post({ t: 'hello', from: this.clientId, serving: true })
       for (const listener of [...this.ownershipListeners]) listener(true)
       this.onOwnerReady?.()
     } catch (error) {
@@ -226,8 +230,12 @@ class SharedStore implements SharedLocalStore {
 
     switch (message.t) {
       case 'who':
-        // Only an owner answers, which is what makes the bus self-addressing.
-        if (this.local) this.channel.post({ t: 'hello', from: this.clientId })
+        // Only the owner answers, which is what makes the bus self-addressing.
+        // An owner that is still opening answers as well, so that a follower
+        // that missed the election announcement still learns one is coming.
+        if (this.local || this.promoting) {
+          this.channel.post({ t: 'hello', from: this.clientId, serving: this.local !== null })
+        }
         return
 
       case 'hello':

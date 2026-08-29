@@ -32,14 +32,19 @@ interface InFlight {
   readonly message: RequestMessage
   readonly resolve: (value: unknown) => void
   readonly reject: (error: Error) => void
-  readonly deadline: number
+  readonly startedAt: number
 }
 
 export interface RemoteStoreOptions {
   readonly channel: StoreChannel
   /** This context's id, so it can recognize its own echoes. */
   readonly clientId: string
-  /** How long a single call may go unanswered before it fails. */
+  /**
+   * How long the bus may stay *silent* before a call fails.
+   *
+   * Silence, not elapsed time: an owner that has announced itself resets this,
+   * so a slow cold start does not fail requests that were going to be served.
+   */
   readonly requestTimeoutMs?: number | undefined
   /** How often an unanswered call is re-posted. */
   readonly retryIntervalMs?: number | undefined
@@ -61,6 +66,8 @@ export class RemoteLocalStore implements LocalStore {
   private timer: ReturnType<typeof setInterval> | null = null
   private nextRequest = 0
   private disposed = false
+  /** Last time an owner proved it exists. Zero means we have never heard one. */
+  private lastOwnerSignalAt = 0
 
   constructor(private readonly options: RemoteStoreOptions) {
     this.requestTimeoutMs = options.requestTimeoutMs ?? 30_000
@@ -75,11 +82,15 @@ export class RemoteLocalStore implements LocalStore {
   /** Feed a channel message in. Messages for other peers are ignored. */
   handleMessage(message: StoreMessage): void {
     if (message.t === 'hello') {
-      // A new owner never saw what the previous one was holding.
-      this.repost()
+      this.lastOwnerSignalAt = this.clock()
+      // An owner that is still opening its database is alive but cannot
+      // answer. Re-posting at it would be noise; the point of hearing from it
+      // is that the silence timer no longer counts against us.
+      if (message.serving) this.repost()
       return
     }
     if (message.t !== 'res') return
+    this.lastOwnerSignalAt = this.clock()
     const entry = this.inFlight.get(message.id)
     if (!entry) return
     this.inFlight.delete(message.id)
@@ -125,7 +136,7 @@ export class RemoteLocalStore implements LocalStore {
         message,
         resolve: resolve as (value: unknown) => void,
         reject,
-        deadline: this.clock() + this.requestTimeoutMs,
+        startedAt: this.clock(),
       })
       this.startTimer()
       this.options.channel.post(message)
@@ -133,26 +144,40 @@ export class RemoteLocalStore implements LocalStore {
   }
 
   /**
-   * Re-post everything unanswered, failing whatever has run out of time.
+   * Re-post everything unanswered, failing whatever the bus has been silent
+   * about for too long.
    *
    * The bus has no delivery guarantee and no buffering, so a request posted
    * while the owner was still opening its database is simply gone. Re-posting
    * is the only way to find out — and is free, because every method is
    * idempotent.
+   *
+   * A request only expires after a stretch of *silence*, measured from the
+   * later of when it was made and when an owner last proved it exists. An
+   * owner that is slow is not an owner that is missing, and failing a request
+   * because a cold PGlite start ran long would take the whole client down for
+   * a database that was about to open.
    */
   private repost(): void {
     const now = this.clock()
     for (const [id, entry] of [...this.inFlight]) {
-      if (now > entry.deadline) {
+      const silentSince = Math.max(entry.startedAt, this.lastOwnerSignalAt)
+      if (now - silentSince > this.requestTimeoutMs) {
         this.inFlight.delete(id)
         entry.reject(
           new Error(
-            `the shared store owner did not answer ${entry.message.method} within ${this.requestTimeoutMs}ms`,
+            `no shared store owner answered ${entry.message.method} in ${this.requestTimeoutMs}ms`,
           ),
         )
         continue
       }
       this.options.channel.post(entry.message)
+    }
+    // Prod for an owner as well: one may have been elected after this
+    // follower's last attempt, and an owner that is mid-open answers this even
+    // though it cannot answer the request yet.
+    if (this.inFlight.size) {
+      this.options.channel.post({ t: 'who', from: this.options.clientId })
     }
     this.stopTimerIfIdle()
   }

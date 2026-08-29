@@ -315,6 +315,67 @@ describe('shared local store', () => {
     await owner.close()
   })
 
+  it('waits out an owner that is slow to open, rather than failing the request', async () => {
+    const bus = createBus()
+    const election = createElectionQueue()
+    const store = memoryStore()
+
+    // The owner takes far longer to open than a single request is allowed to
+    // go unanswered. On CI hardware a cold PGlite start really does run this
+    // much longer than the silence budget.
+    const owner = await createSharedLocalStore({
+      key: 'slow-open',
+      channel: bus.channel(),
+      elect: election.elect,
+      ownershipGraceMs: 5,
+      open: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 400))
+        return store
+      },
+    })
+
+    const follower = await createSharedLocalStore({
+      key: 'slow-open',
+      channel: bus.channel(),
+      elect: election.elect,
+      ownershipGraceMs: 5,
+      retryIntervalMs: 10,
+      requestTimeoutMs: 100,
+      open: async () => store,
+    })
+
+    await expect(follower.loadRecords('workspace:test')).resolves.toEqual([])
+    expect(owner.isOwner).toBe(true)
+
+    await follower.close()
+    await owner.close()
+  })
+
+  it('fails a request when no owner exists at all', async () => {
+    const bus = createBus()
+    const store = memoryStore()
+
+    // An election that never grants: nobody is coming, so silence really does
+    // mean absence and the request must not hang forever.
+    const neverElected = (): Election => ({ isOwner: false, close() {} })
+
+    const orphan = await createSharedLocalStore({
+      key: 'orphan',
+      channel: bus.channel(),
+      elect: neverElected,
+      ownershipGraceMs: 5,
+      retryIntervalMs: 10,
+      requestTimeoutMs: 60,
+      open: async () => store,
+    })
+
+    await expect(orphan.loadRecords('workspace:test')).rejects.toThrow(
+      /no shared store owner answered/,
+    )
+
+    await orphan.close()
+  })
+
   it('gives a follower no raw handle, rather than a fake one', async () => {
     const { contexts } = await makeContexts(2)
     const [owner, follower] = contexts as [SharedLocalStore, SharedLocalStore]

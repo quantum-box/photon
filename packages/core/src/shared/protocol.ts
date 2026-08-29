@@ -61,15 +61,22 @@ export interface ResponseMessage {
 }
 
 /**
- * The owner announcing that it is serving.
+ * The owner announcing itself.
  *
- * Followers treat this as "re-send anything in flight". A promoted owner never
- * saw the requests the dead one was holding, so without this they would sit
- * until their timeout for no reason.
+ * `serving: true` also means "re-send anything in flight": a promoted owner
+ * never saw the requests the dead one was holding, so without this they would
+ * sit until their timeout for no reason.
+ *
+ * `serving: false` is the more important one. An elected owner announces
+ * before it opens its database, which can take tens of seconds on slow
+ * hardware. That announcement is what tells a follower the difference between
+ * "the owner is coming" and "there is no owner" — without it, a follower
+ * fails a perfectly good request for the crime of asking during a cold start.
  */
 export interface HelloMessage {
   readonly t: 'hello'
   readonly from: string
+  readonly serving: boolean
 }
 
 /** A follower asking whether anyone is serving yet. The owner replies `hello`. */
