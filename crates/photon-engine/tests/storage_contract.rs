@@ -402,9 +402,9 @@ async fn mysql_adapter_satisfies_storage_contract_when_url_is_configured() {
         .unwrap();
 
     // Version tracking: connect() migrated, a second run is a no-op.
-    assert_eq!(adapter.schema_version().await.unwrap(), 1);
+    assert_eq!(adapter.schema_version().await.unwrap(), 2);
     adapter.migrate().await.unwrap();
-    assert_eq!(adapter.schema_version().await.unwrap(), 1);
+    assert_eq!(adapter.schema_version().await.unwrap(), 2);
 
     reset_mysql_storage(&adapter).await;
     run_storage_contract(adapter.clone()).await;
@@ -426,4 +426,12 @@ async fn reset_mysql_storage(adapter: &photon_engine::MySqlAdapter) {
             .await
             .unwrap();
     }
+
+    // The sequence allocator survives a DELETE of the op-log, so reset it too.
+    // Leaving it advanced would make "reset" mean something different for the
+    // sequence than for every other table.
+    sqlx::query("UPDATE photon_engine_sync_state SET next_sequence = 1 WHERE id = 1")
+        .execute(adapter.pool())
+        .await
+        .unwrap();
 }
