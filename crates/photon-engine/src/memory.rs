@@ -97,7 +97,7 @@ impl StorageAdapter for MemoryAdapter {
         let mut state = self.write_state()?;
 
         if let Some(existing) = state.operations.get(&operation.id) {
-            if existing.operation != operation {
+            if !existing.operation.is_replay_of(&operation) {
                 return Err(EngineError::Storage(format!(
                     "operation id {} was reused with a different payload",
                     operation.id

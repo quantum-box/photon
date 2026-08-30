@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SyncEngine } from './controller.js'
 import type { SyncEngineOptions } from './controller.js'
 import type { LocalStore } from '../store.js'
+import type { Operation } from '../types.js'
 import type { PullRequest, PullResult, SyncTransport } from './types.js'
 
 const PUSH_DEBOUNCE_MS = 150
@@ -21,15 +22,18 @@ interface Harness {
   readonly engine: SyncEngine
   readonly pulls: PullRequest[]
   setServerCursor(position: number): void
+  failPushesWith(error: unknown | null): void
 }
 
 function makeHarness(overrides: Partial<SyncEngineOptions> = {}): Harness {
   const pulls: PullRequest[] = []
   let serverCursor = 0
   let storedCursor: number | null = null
+  let pushError: unknown | null = null
 
   const transport: SyncTransport = {
     async push() {
+      if (pushError) throw pushError
       return { decisions: [] }
     },
     async pull(request) {
@@ -81,7 +85,20 @@ function makeHarness(overrides: Partial<SyncEngineOptions> = {}): Harness {
     setServerCursor(position: number) {
       serverCursor = position
     },
+    failPushesWith(error: unknown | null) {
+      pushError = error
+    },
   }
+}
+
+function pendingOperation(): Operation {
+  return {
+    id: 'op-pending-1',
+    key: { scope: 'workspace:test', collection: 'issues', record_id: 'issue-1' },
+    actor_id: 'actor-a',
+    timestamp: { wall_time_ms: 1, counter: 0, actor_id: 'actor-a' },
+    kind: { type: 'upsert', value: {} },
+  } as unknown as Operation
 }
 
 async function flushMicrotasks(): Promise<void> {
@@ -89,6 +106,55 @@ async function flushMicrotasks(): Promise<void> {
   // promise chain still needs draining between assertions.
   for (let i = 0; i < 10; i += 1) await Promise.resolve()
 }
+
+/**
+ * Push and pull are separate errands.
+ *
+ * They ran inside one try block, so an operation the server refused took the
+ * pull down with it every cycle. A client with one such operation queued kept
+ * its own writes and stopped seeing everyone else's — with no symptom beyond a
+ * sync status nobody was watching.
+ */
+describe('a push that fails', () => {
+  let harness: Harness
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    harness = makeHarness({ collectPending: () => [pendingOperation()] })
+  })
+
+  afterEach(() => {
+    harness.engine.stop()
+    vi.useRealTimers()
+  })
+
+  it('still lets the cycle pull', async () => {
+    harness.failPushesWith(Object.assign(new Error('push exploded'), { status: 500 }))
+    harness.setServerCursor(9)
+    harness.engine.start()
+    await vi.advanceTimersByTimeAsync(0)
+    await flushMicrotasks()
+
+    expect(harness.pulls).toHaveLength(1)
+    expect(harness.engine.getStatus().cursor).toBe(9)
+  })
+
+  it('is still reported, and still retried', async () => {
+    harness.failPushesWith(Object.assign(new Error('push exploded'), { status: 500 }))
+    harness.engine.start()
+    await vi.advanceTimersByTimeAsync(0)
+    await flushMicrotasks()
+
+    const status = harness.engine.getStatus()
+    expect(status.phase).toBe('error')
+    expect(status.lastError?.kind).toBe('server')
+    expect(status.nextAttemptInMs).toBeGreaterThan(0)
+
+    await vi.advanceTimersByTimeAsync(status.nextAttemptInMs ?? 0)
+    await flushMicrotasks()
+    expect(harness.pulls.length).toBeGreaterThanOrEqual(2)
+  })
+})
 
 describe('notifyRemoteChange', () => {
   let harness: Harness

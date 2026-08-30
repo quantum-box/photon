@@ -41,5 +41,5 @@ pub use storage::StorageAdapter;
 pub use types::{
     ActorId, CollectionName, Conflict, ConflictId, HybridTimestamp, Operation, OperationFilter,
     OperationId, OperationKind, OperationStatus, Record, RecordId, RecordKey, RemoteId, ScopeId,
-    Snapshot, SnapshotFormat, SnapshotUpdate, StoredOperation, SyncCursor,
+    Snapshot, SnapshotFormat, SnapshotUpdate, StoredOperation, SyncCursor, AUTHORITY_METADATA_KEY,
 };

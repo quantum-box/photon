@@ -6,6 +6,8 @@
  * - single-flight with a dirty flag, so concurrent triggers collapse into one
  *   cycle plus at most one follow-up
  * - every push/pull bounded by a timeout
+ * - a failed push does not cancel the pull; an operation the server will not
+ *   take must not leave this client unable to see anyone else's writes
  * - jittered backoff, so N tabs do not retry in lockstep after a blip
  * - 401 pauses instead of retrying; an expired token will not fix itself
  * - a durable cursor, saved in the same transaction as the operations it covers
@@ -59,6 +61,9 @@ export interface SyncEngineOptions {
 }
 
 const OFFLINE_FAILURE_THRESHOLD = 2
+
+/** The summary while a cycle is still filling it in. */
+type SummaryTally = { -readonly [K in keyof SyncSummary]: SyncSummary[K] }
 
 export class SyncEngine implements SyncController {
   private listeners = new Set<() => void>()
@@ -220,123 +225,154 @@ export class SyncEngine implements SyncController {
   }
 
   private async runCycle(): Promise<SyncSummary> {
-    const transport = this.options.transport!
     this.patch({ phase: 'syncing', nextAttemptInMs: null })
 
-    const summary = { pushed: 0, pulled: 0, rejected: 0, conflicts: 0 }
+    const summary: SummaryTally = { pushed: 0, pulled: 0, rejected: 0, conflicts: 0 }
 
+    // A failed push must not cancel the pull. Receiving does not depend on
+    // sending, and tying them together is what turns one operation the server
+    // will not take — a 5xx, a request that keeps timing out — into a client
+    // that can no longer see anything anyone else writes, silently, for as
+    // long as that operation stays pending.
+    let pushError: unknown = null
     try {
-      // --- push -----------------------------------------------------------
-      const pending = this.options.collectPending()
-      if (pending.length) {
-        const result = await transport.push({ scope: this.options.scope, operations: pending })
-        const statusUpdates: OperationStatusUpdate[] = []
-
-        for (const decision of result.decisions) {
-          this.options.onDecision(decision)
-          switch (decision.kind) {
-            case 'accepted':
-              summary.pushed += 1
-              statusUpdates.push({
-                operationId: decision.operationId,
-                status: 'accepted',
-                remoteSequence: decision.remoteSequence ?? null,
-              })
-              break
-            case 'rejected':
-              summary.rejected += 1
-              statusUpdates.push({ operationId: decision.operationId, status: 'rejected' })
-              break
-            case 'conflict':
-              summary.conflicts += 1
-              statusUpdates.push({ operationId: decision.operationId, status: 'conflict' })
-              break
-          }
-        }
-
-        if (statusUpdates.length) await this.options.store.commit({ statusUpdates })
-      }
-
-      // --- pull -----------------------------------------------------------
-      const cursorRow = await this.options.store.getCursor(this.options.scope, this.options.remoteId)
-      let cursor = cursorRow?.position ?? null
-      let guard = 0
-
-      for (;;) {
-        const page = await transport.pull({
-          scope: this.options.scope,
-          cursor,
-          limit: this.options.pullPageSize,
-        })
-
-        if (page.kind === 'snapshot') {
-          this.options.applySnapshot(page)
-          summary.pulled += page.records.length
-          cursor = page.cursor ?? cursor
-          break
-        }
-        if (!page.operations.length) {
-          cursor = page.cursor ?? cursor
-          break
-        }
-
-        const known = this.options.knownOperationIds()
-        // A pull returns our own operations back. Filtering them here is what
-        // stops the insert from violating operation_id uniqueness.
-        const fresh = page.operations.filter((row) => !known.has(row.operation.id))
-        const operations = fresh.map((row) => row.operation)
-
-        const records = await this.options.applyRemote(operations)
-        summary.pulled += operations.length
-
-        cursor = page.cursor ?? page.operations[page.operations.length - 1]!.remoteSequence
-
-        // Operations, their merged records, and cursor commit together: a
-        // crash between them would otherwise skip a page permanently.
-        await this.options.store.commit({
-          operations,
-          records,
-          statusUpdates: operations.map((operation) => ({
-            operationId: operation.id,
-            status: 'accepted' as const,
-          })),
-          cursor: {
-            scope: this.options.scope,
-            remote: this.options.remoteId,
-            position: cursor,
-            updatedAtMs: this.options.clock(),
-          },
-        })
-
-        guard += 1
-        if (!page.hasMore || guard >= 100) break
-      }
-
-      this.backoff.reset()
-      this.consecutiveNetworkFailures = 0
-      this.patch({
-        phase: 'idle',
-        online: true,
-        lastSyncAt: this.options.clock(),
-        lastError: null,
-        cursor,
-        pendingOperations: this.options.pendingCount(),
-        conflicts: this.options.conflictCount(),
-        nextAttemptInMs: null,
-      })
-      return summary
+      await this.runPush(summary)
     } catch (error) {
-      this.handleFailure(error)
+      pushError = error
+    }
+
+    let cursor: number | null
+    try {
+      cursor = await this.runPull(summary)
+    } catch (error) {
+      // The push error is the older one, and the one whose retry matters.
+      this.handleFailure(pushError ?? error)
       return summary
+    }
+
+    if (pushError) {
+      this.handleFailure(pushError, cursor)
+      return summary
+    }
+
+    this.backoff.reset()
+    this.consecutiveNetworkFailures = 0
+    this.patch({
+      phase: 'idle',
+      online: true,
+      lastSyncAt: this.options.clock(),
+      lastError: null,
+      cursor,
+      pendingOperations: this.options.pendingCount(),
+      conflicts: this.options.conflictCount(),
+      nextAttemptInMs: null,
+    })
+    return summary
+  }
+
+  private async runPush(summary: SummaryTally): Promise<void> {
+    const transport = this.options.transport!
+    const pending = this.options.collectPending()
+    if (pending.length) {
+      const result = await transport.push({ scope: this.options.scope, operations: pending })
+      const statusUpdates: OperationStatusUpdate[] = []
+
+      for (const decision of result.decisions) {
+        this.options.onDecision(decision)
+        switch (decision.kind) {
+          case 'accepted':
+            summary.pushed += 1
+            statusUpdates.push({
+              operationId: decision.operationId,
+              status: 'accepted',
+              remoteSequence: decision.remoteSequence ?? null,
+            })
+            break
+          case 'rejected':
+            summary.rejected += 1
+            statusUpdates.push({ operationId: decision.operationId, status: 'rejected' })
+            break
+          case 'conflict':
+            summary.conflicts += 1
+            statusUpdates.push({ operationId: decision.operationId, status: 'conflict' })
+            break
+        }
+      }
+
+      if (statusUpdates.length) await this.options.store.commit({ statusUpdates })
     }
   }
 
-  private handleFailure(error: unknown): void {
+  private async runPull(summary: SummaryTally): Promise<number | null> {
+    const transport = this.options.transport!
+    const cursorRow = await this.options.store.getCursor(this.options.scope, this.options.remoteId)
+    let cursor = cursorRow?.position ?? null
+    let guard = 0
+
+    for (;;) {
+      const page = await transport.pull({
+        scope: this.options.scope,
+        cursor,
+        limit: this.options.pullPageSize,
+      })
+
+      if (page.kind === 'snapshot') {
+        this.options.applySnapshot(page)
+        summary.pulled += page.records.length
+        cursor = page.cursor ?? cursor
+        break
+      }
+      if (!page.operations.length) {
+        cursor = page.cursor ?? cursor
+        break
+      }
+
+      const known = this.options.knownOperationIds()
+      // A pull returns our own operations back. Filtering them here is what
+      // stops the insert from violating operation_id uniqueness.
+      const fresh = page.operations.filter((row) => !known.has(row.operation.id))
+      const operations = fresh.map((row) => row.operation)
+
+      const records = await this.options.applyRemote(operations)
+      summary.pulled += operations.length
+
+      cursor = page.cursor ?? page.operations[page.operations.length - 1]!.remoteSequence
+
+      // Operations, their merged records, and cursor commit together: a
+      // crash between them would otherwise skip a page permanently.
+      await this.options.store.commit({
+        operations,
+        records,
+        statusUpdates: operations.map((operation) => ({
+          operationId: operation.id,
+          status: 'accepted' as const,
+        })),
+        cursor: {
+          scope: this.options.scope,
+          remote: this.options.remoteId,
+          position: cursor,
+          updatedAtMs: this.options.clock(),
+        },
+      })
+
+      guard += 1
+      if (!page.hasMore || guard >= 100) break
+    }
+
+    return cursor
+  }
+
+  private handleFailure(error: unknown, cursor?: number | null): void {
     const syncError = classify(error)
 
     if (syncError.kind === 'auth') {
       // Do not spin on an expired token; someone has to sign in again.
-      this.patch({ phase: 'paused', lastError: syncError, nextAttemptInMs: null })
+      this.patch({
+        phase: 'paused',
+        lastError: syncError,
+        nextAttemptInMs: null,
+        ...(cursor === undefined ? {} : { cursor }),
+      })
       return
     }
 
@@ -353,6 +389,8 @@ export class SyncEngine implements SyncController {
       lastError: syncError,
       nextAttemptInMs: delay,
       pendingOperations: this.options.pendingCount(),
+      // A pull that succeeded behind a failed push still moved the cursor.
+      ...(cursor === undefined ? {} : { cursor }),
     })
 
     if (this.retryTimer) clearTimeout(this.retryTimer)

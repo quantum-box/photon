@@ -5,6 +5,24 @@ dependency to the next tag. App-facing changes are separated from internals.
 
 ## Unreleased
 
+### App-facing
+
+- **A push the client did not hear the answer to no longer poisons its sync.**
+  The authority stamps its own audit metadata — a request id and a receive
+  timestamp — onto every operation before storing it, and then compared the
+  stamped operation against the stamped one already on file to decide whether a
+  push was a retry. The stamp differs on every request, so the idempotent
+  replay promised in 0.3.0 never actually applied to a real client: any
+  operation whose response was lost (a reload mid-push, a dropped connection, a
+  timeout) came back as `500 operation id ... was reused with a different
+  payload`, on every attempt, forever. Replay identity is now judged on what
+  the client authored, with the authority's own key excluded.
+- **A failed push no longer cancels the pull.** Both ran inside one cycle, so a
+  client holding a single operation the server would not take stopped receiving
+  everyone else's writes — with no symptom beyond a sync status nobody watches.
+  Sending and receiving are now attempted independently; a push failure is
+  still reported and still retried on the same backoff.
+
 ## 0.3.0
 
 A minor bump, not a patch, and deliberately so: `^0.2.0` in a consuming app

@@ -37,6 +37,13 @@ pub trait StorageAdapter: Send + Sync {
     /// and the current record unchanged. Re-projecting would be wrong, not
     /// merely wasteful: `OperationKind::Increment` is not idempotent, so a
     /// retried push must not reach the projection twice.
+    ///
+    /// "Already-accepted" is decided by [`Operation::is_replay_of`], which
+    /// compares what the client authored and ignores
+    /// [`crate::AUTHORITY_METADATA_KEY`]. An authority that stamps its own
+    /// audit record onto what it stores would otherwise see every retry as an
+    /// id reused for different content, and reject forever an operation the
+    /// client cannot stop re-sending.
     async fn append_authoritative_operation(
         &self,
         operation: Operation,

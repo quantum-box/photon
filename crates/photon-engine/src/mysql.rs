@@ -363,7 +363,7 @@ impl StorageAdapter for MySqlAdapter {
         .transpose()?;
 
         if let Some(existing) = &existing {
-            if existing.operation != operation {
+            if !existing.operation.is_replay_of(&operation) {
                 return Err(EngineError::Storage(format!(
                     "operation id {} was reused with a different payload",
                     operation.id
