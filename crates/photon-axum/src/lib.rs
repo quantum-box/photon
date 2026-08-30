@@ -622,7 +622,11 @@ fn authorize_scoped_request(
 /// The key under which the server records audit metadata on an accepted
 /// operation. Stored inside `Operation::metadata`, so it is durable in the
 /// same row as the operation itself and travels with every pull.
-const AUDIT_METADATA_KEY: &str = "photon_audit";
+///
+/// Taken from the engine rather than declared here: the engine has to exclude
+/// the same key when it decides whether a push is a retry, and two spellings
+/// of it would make every re-push look like an id collision.
+const AUDIT_METADATA_KEY: &str = photon_engine::AUTHORITY_METADATA_KEY;
 
 /// Stamp who was authorized to push this operation, and under which request.
 ///
@@ -1746,6 +1750,93 @@ mod tests {
         assert_eq!(pulled.operations.len(), 1);
         assert_eq!(pulled.operations[0].operation.id, operation.id);
         assert_eq!(pulled.operations[0].remote_sequence, 1);
+    }
+
+    /// A client that never saw its push response re-sends the same operations.
+    /// The server has to answer that with the acceptance it already made — it
+    /// stamps its own audit metadata onto every operation it accepts, and if
+    /// that stamp were part of the operation's identity the retry would look
+    /// like an id collision and fail forever, with the client's pull blocked
+    /// behind a push that can never succeed.
+    #[tokio::test]
+    async fn test_engine_push_is_idempotent_when_a_client_retries() {
+        let (app, _) = engine_test_app().await;
+        let operation = Operation::new(
+            engine_record_key("issues", "issue-retry-1"),
+            ActorId::from("client-retry"),
+            OperationKind::Upsert {
+                value: serde_json::json!({
+                    "id": "issue-retry-1",
+                    "identifier": "PLT-903",
+                    "title": "Pushed twice"
+                }),
+            },
+        );
+        let body = serde_json::to_string(&PushRequest {
+            scope: default_workspace_scope(),
+            operations: vec![operation.clone()],
+            cursor: None,
+        })
+        .unwrap();
+
+        let mut sequences = Vec::new();
+        for _ in 0..2 {
+            let resp = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/engine/push")
+                        .header("content-type", "application/json")
+                        .body(Body::from(body.clone()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::OK);
+            let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let pushed: PushResult = serde_json::from_slice(&bytes).unwrap();
+            match pushed.decisions.as_slice() {
+                [PushDecision::Accepted {
+                    remote_sequence, ..
+                }] => sequences.push(*remote_sequence),
+                other => panic!("expected one acceptance, got {other:?}"),
+            }
+        }
+        assert_eq!(
+            sequences[0], sequences[1],
+            "a retry must return the acceptance the first push already made",
+        );
+
+        // And it must not have been logged twice: a second entry would replay
+        // the operation into the projection on every future pull.
+        let pull_resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/engine/pull")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_string(&PullRequest {
+                            scope: default_workspace_scope(),
+                            cursor: None,
+                            limit: None,
+                        })
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(pull_resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(pull_resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let pulled: PullResult = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(pulled.operations.len(), 1);
+        assert_eq!(pulled.operations[0].operation.id, operation.id);
     }
 
     #[tokio::test]

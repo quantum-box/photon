@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use photon_engine::{
     ActorId, CollectionName, Conflict, HybridTimestamp, MemoryAdapter, Operation, OperationFilter,
     OperationKind, OperationStatus, PhotonEngine, RecordKey, RemoteId, ScopeId, Snapshot,
-    SnapshotUpdate, StorageAdapter, SyncCursor,
+    SnapshotUpdate, StorageAdapter, SyncCursor, AUTHORITY_METADATA_KEY,
 };
 use serde_json::json;
 
@@ -220,6 +220,107 @@ where
     );
     let stored = adapter.get_operation(&create.id).await.unwrap().unwrap();
     assert_eq!(stored.operation, create);
+
+    // The authority stamps its own audit record onto an operation before it
+    // stores it, and that stamp carries a request id and a receive time, so it
+    // is different on every attempt. A retry must still be recognized as the
+    // same operation: a client that lost a push response re-sends the exact
+    // operation it queued, and answering that with "id reused" leaves it
+    // pushing an operation the server will only ever refuse.
+    let stamped = |received_at_ms: i64| {
+        patch(
+            "issue-authority-stamped",
+            "authority-a",
+            40,
+            json!({ "title": "stamped payload" }),
+        )
+        .with_id("op-authority-stamped")
+        .with_metadata(json!({
+            AUTHORITY_METADATA_KEY: {
+                "authorized": "tenant",
+                "request_id": format!("req-{received_at_ms}"),
+                "received_at_ms": received_at_ms,
+            }
+        }))
+    };
+    let (stamped_first, _) = adapter
+        .append_authoritative_operation(stamped(1))
+        .await
+        .unwrap();
+    let (restamped, _) = adapter
+        .append_authoritative_operation(stamped(2))
+        .await
+        .unwrap();
+    assert_eq!(
+        restamped.remote_sequence, stamped_first.remote_sequence,
+        "a retry carrying a fresh authority stamp is the same acceptance",
+    );
+    assert_eq!(
+        restamped.operation.metadata,
+        stamped(1).metadata,
+        "the stamp of the accepted request is the one that stays stored",
+    );
+
+    // An authority that queued the operation locally already holds the
+    // unstamped row. Accepting it must promote the stamped payload, not just
+    // the status: `is_replay_of` lets the two match, so keeping the stored one
+    // would silently accept the write with no record of who authorized it.
+    let pending = patch(
+        "issue-authority-promoted",
+        "authority-a",
+        50,
+        json!({ "title": "queued before it was accepted" }),
+    )
+    .with_id("op-authority-promoted");
+    adapter
+        .append_operation(pending.clone(), OperationStatus::Pending)
+        .await
+        .unwrap();
+    let (promoted, _) = adapter
+        .append_authoritative_operation(pending.clone().with_metadata(json!({
+            AUTHORITY_METADATA_KEY: { "authorized": "tenant", "request_id": "req-promote" }
+        })))
+        .await
+        .unwrap();
+    assert_eq!(promoted.status, OperationStatus::Accepted);
+    assert_eq!(
+        promoted.operation.metadata[AUTHORITY_METADATA_KEY]["request_id"],
+        json!("req-promote"),
+        "promoting a pending row must keep the stamp of the request that accepted it",
+    );
+    let reread = adapter.get_operation(&pending.id).await.unwrap().unwrap();
+    assert_eq!(reread.operation.metadata, promoted.operation.metadata);
+
+    // The bare form is what a client actually re-pushes: it never saw the
+    // stamp the server added.
+    let (unstamped, _) = adapter
+        .append_authoritative_operation(
+            patch(
+                "issue-authority-stamped",
+                "authority-a",
+                40,
+                json!({ "title": "stamped payload" }),
+            )
+            .with_id("op-authority-stamped"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unstamped.remote_sequence, stamped_first.remote_sequence);
+
+    // Only the authority's own key is excused. Metadata the client authored is
+    // still part of what the operation id stands for.
+    let error = adapter
+        .append_authoritative_operation(
+            stamped(4).with_metadata(json!({ "origin": "a different write" })),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("was reused with a different payload"),
+        "unexpected error: {error}",
+    );
 
     // Replay must not reach the projection twice. `Increment` is the kind that
     // makes this visible: re-applying it would silently double the field.

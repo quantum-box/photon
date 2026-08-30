@@ -167,6 +167,18 @@ pub enum OperationKind {
     SetRemove { field: String, values: Vec<Value> },
 }
 
+/// Metadata key the accepting authority owns.
+///
+/// A server may stamp its own audit record onto an operation before it stores
+/// it. That stamp carries a request id and a receive timestamp, so it differs
+/// on every attempt — including the retry of an operation the authority has
+/// already accepted. Replay identity is therefore judged with this key
+/// excluded: comparing the stamped forms would turn the idempotent re-push
+/// that [`crate::StorageAdapter::append_authoritative_operation`] promises
+/// into a permanent error, and any client that lost a push response would
+/// then be stuck re-sending an operation the server can only reject.
+pub const AUTHORITY_METADATA_KEY: &str = "photon_audit";
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Operation {
     pub id: OperationId,
@@ -214,6 +226,41 @@ impl Operation {
     pub fn with_metadata(mut self, metadata: Value) -> Self {
         self.metadata = metadata;
         self
+    }
+
+    /// Whether `other` is a retry of this operation rather than a reuse of its
+    /// id for different content.
+    ///
+    /// Everything the client authored has to match exactly. Only the
+    /// authority's own stamp — see [`AUTHORITY_METADATA_KEY`] — is excluded,
+    /// because the stored operation carries the stamp of the request that was
+    /// accepted and a retry arrives either unstamped or stamped afresh.
+    pub fn is_replay_of(&self, other: &Operation) -> bool {
+        self.id == other.id
+            && self.key == other.key
+            && self.actor_id == other.actor_id
+            && self.timestamp == other.timestamp
+            && self.kind == other.kind
+            && client_metadata(&self.metadata) == client_metadata(&other.metadata)
+    }
+}
+
+/// An operation's metadata with the authority's stamp removed.
+///
+/// An emptied object normalizes to null so that a client operation with no
+/// metadata still matches its stored, stamped self.
+fn client_metadata(metadata: &Value) -> Value {
+    match metadata {
+        Value::Object(fields) => {
+            let mut fields = fields.clone();
+            fields.remove(AUTHORITY_METADATA_KEY);
+            if fields.is_empty() {
+                Value::Null
+            } else {
+                Value::Object(fields)
+            }
+        }
+        other => other.clone(),
     }
 }
 
