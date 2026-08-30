@@ -148,6 +148,7 @@ where
     assert_eq!(remaining_updates.len(), 1);
     assert_eq!(remaining_updates[0].sequence, 2);
 
+    run_pull_page_contract(adapter.clone()).await;
     run_authoritative_accept_contract(adapter).await;
 }
 
@@ -262,6 +263,87 @@ where
     assert_eq!(remote_sequence, expected);
     assert_eq!(record.value["status"], json!("done"));
     assert_eq!(record.value["title"], json!("canonical payload"));
+}
+
+/// How a pull page has to be ordered and cut.
+///
+/// A pull is cursor-driven: the client advances its cursor to the highest
+/// sequence a page carried, so anything the page delivered below that cursor is
+/// never asked for again. That makes the page order part of the contract, not a
+/// presentation detail, and it has to be the same for every adapter -- an
+/// in-memory store that pages in insertion order passes tests the SQL adapters
+/// fail.
+async fn run_pull_page_contract<A>(adapter: A)
+where
+    A: StorageAdapter,
+{
+    // "op-create-issue-1" already carries sequence 42. Accepting two more
+    // operations below it puts insertion order and sequence order in conflict,
+    // the way an authority does whenever it hands out sequences in a different
+    // order than this store appended the operations.
+    for (id, remote_sequence) in [("op-pull-page-a", 7), ("op-pull-page-b", 19)] {
+        let operation = patch(id, "actor-b", 40, json!({ "title": id })).with_id(id);
+        adapter
+            .append_operation(operation.clone(), OperationStatus::Pending)
+            .await
+            .unwrap();
+        adapter
+            .mark_operation_status(
+                &operation.id,
+                OperationStatus::Accepted,
+                Some(remote_sequence),
+            )
+            .await
+            .unwrap();
+    }
+
+    let page = adapter
+        .list_operations(OperationFilter {
+            after_remote_sequence: Some(0),
+            ..OperationFilter::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        remote_sequences(&page),
+        vec![7, 19, 42],
+        "a pull page must be ordered by remote_sequence",
+    );
+
+    // And the cut has to happen after the ordering. Cutting insertion order
+    // first returns [42, 7]: the client then advances its cursor to 42 and
+    // never asks for 19 again.
+    let first_page = adapter
+        .list_operations(OperationFilter {
+            after_remote_sequence: Some(0),
+            limit: Some(2),
+            ..OperationFilter::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        remote_sequences(&first_page),
+        vec![7, 19],
+        "limit must apply after ordering, or a page skips operations",
+    );
+
+    // The next page picks up exactly where that cursor left off.
+    let second_page = adapter
+        .list_operations(OperationFilter {
+            after_remote_sequence: Some(19),
+            limit: Some(2),
+            ..OperationFilter::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(remote_sequences(&second_page), vec![42]);
+}
+
+fn remote_sequences(operations: &[photon_engine::StoredOperation]) -> Vec<i64> {
+    operations
+        .iter()
+        .map(|stored| stored.remote_sequence.unwrap_or_default())
+        .collect()
 }
 
 #[tokio::test]
