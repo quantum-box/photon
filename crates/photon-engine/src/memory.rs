@@ -211,12 +211,19 @@ impl StorageAdapter for MemoryAdapter {
             }
 
             operations.push(stored.clone());
+        }
 
-            if let Some(limit) = filter.limit {
-                if operations.len() >= limit {
-                    break;
-                }
-            }
+        // Paginate in the same order the cursor advances, like the SQL
+        // adapters do. Insertion order and remote-sequence order diverge
+        // whenever the authority hands out sequences in a different order than
+        // this store appended the operations, and then a page cut in insertion
+        // order skips or repeats operations.
+        if filter.after_remote_sequence.is_some() {
+            operations.sort_by_key(|stored| stored.remote_sequence.unwrap_or_default());
+        }
+
+        if let Some(limit) = filter.limit {
+            operations.truncate(limit);
         }
 
         Ok(operations)
