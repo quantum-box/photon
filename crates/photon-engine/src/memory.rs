@@ -179,7 +179,13 @@ impl StorageAdapter for MemoryAdapter {
 
     async fn list_operations(&self, filter: OperationFilter) -> Result<Vec<StoredOperation>> {
         let state = self.read_state()?;
-        let mut operations = Vec::new();
+        // Paginate in the same order the cursor advances, like the SQL adapters
+        // do. Insertion order and remote-sequence order diverge whenever the
+        // authority hands out sequences in a different order than this store
+        // appended the operations, and then a page cut in insertion order skips
+        // or repeats operations.
+        let order_by_remote_sequence = filter.after_remote_sequence.is_some();
+        let mut matched: Vec<&StoredOperation> = Vec::new();
 
         for operation_id in &state.operation_order {
             let Some(stored) = state.operations.get(operation_id) else {
@@ -210,23 +216,30 @@ impl StorageAdapter for MemoryAdapter {
                 }
             }
 
-            operations.push(stored.clone());
+            matched.push(stored);
+
+            // Insertion order is already the page order here, so a full page
+            // means the walk is done -- no reason to scan the rest of the log.
+            if !order_by_remote_sequence {
+                if let Some(limit) = filter.limit {
+                    if matched.len() >= limit {
+                        break;
+                    }
+                }
+            }
         }
 
-        // Paginate in the same order the cursor advances, like the SQL
-        // adapters do. Insertion order and remote-sequence order diverge
-        // whenever the authority hands out sequences in a different order than
-        // this store appended the operations, and then a page cut in insertion
-        // order skips or repeats operations.
-        if filter.after_remote_sequence.is_some() {
-            operations.sort_by_key(|stored| stored.remote_sequence.unwrap_or_default());
+        // An ordered page has to see every candidate before it knows which ones
+        // it keeps, but only the kept ones are worth cloning.
+        if order_by_remote_sequence {
+            matched.sort_by_key(|stored| stored.remote_sequence.unwrap_or_default());
         }
 
         if let Some(limit) = filter.limit {
-            operations.truncate(limit);
+            matched.truncate(limit);
         }
 
-        Ok(operations)
+        Ok(matched.into_iter().cloned().collect())
     }
 
     async fn upsert_record(&self, record: Record) -> Result<()> {
