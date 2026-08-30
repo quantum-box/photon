@@ -7,6 +7,15 @@ dependency to the next tag. App-facing changes are separated from internals.
 
 ### App-facing
 
+- **A client can now serve collections it did not know about when it was
+  built.** `resolveCollection` is consulted once per collection the client
+  encounters and its answer is cached, so an app whose data is partitioned per
+  project, per board, or per repository no longer has to enumerate the
+  partitions up front — which previously meant either a network round trip
+  before the client existed, or rebuilding the client whenever the set changed.
+  Neither survives an offline start. `collections` keeps working unchanged and
+  wins for any name it declares.
+
 - **More than one Engine instance can now serve one database.** The authority
   assigned each accepted operation's remote sequence from a counter in the
   server process, so two replicas over one database handed out the same
