@@ -377,6 +377,11 @@ test.describe('Photon shell', () => {
   })
 
   test('syncs record creation between browser tabs', async ({ page, context }) => {
+    // The default 60s cap cannot hold a 60s toPass plus everything before
+    // it, so this test could only ever pass when convergence landed on the
+    // retry loop's first attempt.
+    test.setTimeout(120_000)
+
     const title = `E2E synced record ${Date.now()}`
 
     await page.goto('/databases')
@@ -443,6 +448,11 @@ test.describe('Photon shell', () => {
   test('keeps syncing records between clients when the Live socket is unreachable', async ({
     browser,
   }) => {
+    // The default 60s cap cannot hold a 60s toPass plus everything before
+    // it, so this test could only ever pass when convergence landed on the
+    // retry loop's first attempt.
+    test.setTimeout(120_000)
+
     const title = `E2E live-down record ${Date.now()}`
 
     // Kill the Photon Live socket at the browser boundary (and only it — the
@@ -482,6 +492,11 @@ test.describe('Photon shell', () => {
     context,
     browser,
   }) => {
+    // The default 60s cap cannot hold a 60s toPass plus everything before
+    // it, so this test could only ever pass when convergence landed on the
+    // retry loop's first attempt.
+    test.setTimeout(180_000)
+
     const title = `E2E offline engine record ${Date.now()}`
 
     await page.goto('/databases')
@@ -528,6 +543,11 @@ test.describe('Photon shell', () => {
   })
 
   test('converges records written by two disconnected writers', async ({ browser }) => {
+    // Two 60s convergence loops and two settle waits do not fit the default
+    // 60s cap. This test was hitting the test deadline, not the assertion:
+    // CI reported it failing at 59.8s.
+    test.setTimeout(240_000)
+
     const stamp = Date.now()
     const titleA = `E2E writer-a record ${stamp}`
     const titleB = `E2E writer-b record ${stamp}`
@@ -562,10 +582,33 @@ test.describe('Photon shell', () => {
       await expect(page.getByText(title).first()).toBeVisible()
     }
 
-    // Reconnect both. Reloading re-bootstraps each client, which re-registers
-    // its pending operation and pushes it on the startup sync.
+    // Reconnect both. An aborted route is invisible to the client — no
+    // 'online' event fires — so a writer that is not reloaded pushes again
+    // only when its backoff timer expires, and by now that has escalated to
+    // the 30s ceiling. Reload both here: re-bootstrapping re-registers each
+    // pending operation and the startup sync pushes it straight away.
+    //
+    // Reloading only inside the convergence loop below is not enough. That
+    // loop starts by waiting on writer A to see writer B's record, so on the
+    // first pass B has never been reloaded and its push is still parked
+    // behind the backoff — a 60s budget racing a 30s timer, which is the
+    // coin flip that made this test flaky.
     await contextA.unroute('**/api/engine/**')
     await contextB.unroute('**/api/engine/**')
+    await Promise.all([pageA.reload(), pageB.reload()])
+
+    // Settle both before asserting convergence: each writer must have
+    // re-bootstrapped and recovered its own offline write from the durable
+    // log. That is also what gives the startup push time to leave, so the
+    // reloads in the loop below do not cut it off mid-flight.
+    for (const [page, ownTitle] of [
+      [pageA, titleA],
+      [pageB, titleB],
+    ] as const) {
+      await expect(page.getByText(/\d+ records/)).toBeVisible({ timeout: 30_000 })
+      await page.getByPlaceholder('Filter records...').fill(ownTitle)
+      await expect(page.getByText(ownTitle).first()).toBeVisible({ timeout: 15_000 })
+    }
 
     // Each writer must end up seeing the *other* writer's offline record:
     // that round trip is what proves both pushes landed and both pulls
@@ -699,8 +742,9 @@ test.describe('Photon shell', () => {
 
   test('creates a doc and syncs Yjs blocks from a shared document URL', async ({ page, browser }) => {
     // The retry below needs up to 90s after both clients have cold-booted.
-    // Keep the enclosing test timeout large enough for that budget to exist.
-    test.setTimeout(180_000)
+    // Keep the enclosing test timeout large enough for that budget to exist:
+    // the assertions here add up to ~190s, which did not fit the old 180s.
+    test.setTimeout(240_000)
 
     const title = `E2E local doc ${Date.now()}`
 
@@ -742,7 +786,9 @@ test.describe('Photon shell', () => {
   })
 
   test('reconnects a document after an offline edit and syncs it to another client', async ({ browser }) => {
-    test.setTimeout(180_000)
+    // The 120s reconnect loop plus everything before it overran the old
+    // 180s cap.
+    test.setTimeout(240_000)
 
     const title = `E2E reconnect doc ${Date.now()}`
     const initialText = `Online baseline ${Date.now()}`
@@ -765,9 +811,14 @@ test.describe('Photon shell', () => {
     const documentUrl = editingPage.url()
     const verifierContext = await browser.newContext()
     const verifierPage = await verifierContext.newPage()
-    await verifierPage.goto(documentUrl)
-    await expect(verifierPage.getByText('Server connected')).toBeVisible({ timeout: 20_000 })
-    await expect(verifierPage.getByText(initialText)).toBeVisible({ timeout: 20_000 })
+    // Re-navigate on failure. A single dropped document socket used to end
+    // the test right here: the baseline never arrived and nothing retried,
+    // unlike every other cross-client assertion in this file.
+    await expect(async () => {
+      await verifierPage.goto(documentUrl)
+      await expect(verifierPage.getByText('Server connected')).toBeVisible({ timeout: 20_000 })
+      await expect(verifierPage.getByText(initialText)).toBeVisible({ timeout: 20_000 })
+    }).toPass({ timeout: 90_000 })
 
     await editingContext.setOffline(true)
     await editingPage.evaluate(() => window.__photonTestHooks?.closeDocumentSockets?.())

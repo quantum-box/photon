@@ -5,6 +5,15 @@ dependency to the next tag. App-facing changes are separated from internals.
 
 ## Unreleased
 
+## 0.3.0
+
+A minor bump, not a patch, and deliberately so: `^0.2.0` in a consuming app
+would swallow a patch on a plain `npm update`, and this release carries an
+Engine schema migration that runs on startup. Crossing to `0.3.0` makes the
+consuming app widen its range on purpose, so the migration lands when someone
+chose it. The Rust `StorageAdapter` trait also gained two required methods,
+which breaks any out-of-tree adapter.
+
 ### App-facing
 
 - **A client can now serve collections it did not know about when it was

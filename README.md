@@ -97,7 +97,7 @@ tarball には WASM カーネルがビルド済みで入っているので、**�
 レジストリを経由したくない場合は Git タグからも入る。こちらは install 時に `prepare` が WASM をビルドするので、**入れる側の環境に Rust toolchain（`wasm32-unknown-unknown` target）と wasm-pack が要る**：
 
 ```bash
-npm install git+ssh://git@github.com/quantum-box/photon.git#v0.2.0
+npm install git+ssh://git@github.com/quantum-box/photon.git#v0.3.0
 ```
 
 詳細は [docs/release-following.md](docs/release-following.md)。
