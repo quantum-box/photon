@@ -33,6 +33,15 @@ dependency to the next tag. App-facing changes are separated from internals.
 - **Engine schema migration v2** adds `photon_engine_sync_state`. It applies on
   startup and seeds past the sequences the op-log already used, so an existing
   database keeps its numbering. No app change required.
+- **A `rest-backed` collection can now create records.** The adapter guessed
+  create-or-update from the local projection, but the client writes the
+  optimistic value in before the push runs, so a first write always looked like
+  an edit and went out as an update. Against a real backend that is a 404,
+  which is a rejection, so the new record was silently dropped. `RestResource`
+  gains an optional `upsert(recordId, value)` for backends with PUT-style
+  semantics; supply it and `upsert` operations go through it instead of the
+  guess. Resources without one are unchanged, and still depend on the backend
+  tolerating an update to an id it has never seen.
 
 ### Internal
 

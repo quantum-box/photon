@@ -98,6 +98,84 @@ describe('createRestTransport push', () => {
     })
   })
 
+  it('sends a first write through the resource own upsert', async () => {
+    // The bug this guards: the client writes the optimistic value into the
+    // projection before the push runs, so `readRecord` reports the record as
+    // existing and the create goes out as an update. Against a real backend
+    // that is a 404, which is a rejection, so the record the user just made is
+    // silently dropped.
+    const calls: string[] = []
+    const issues = resource({
+      create: vi.fn(async () => {
+        calls.push('create')
+      }),
+      upsert: vi.fn(async () => {
+        calls.push('upsert')
+      }),
+      update: vi.fn(async () => {
+        calls.push('update')
+        throw Object.assign(new Error('not found'), { status: 404 })
+      }),
+    })
+    const transport = createRestTransport({
+      resources: { issues: issues as never },
+      readRecord: () => ({ title: 'new' }),
+    })
+
+    const result = await transport.push({
+      scope: 's',
+      operations: [operation('o1', 'r1', { type: 'upsert', value: { title: 'new' } })],
+    })
+
+    expect(calls).toEqual(['upsert'])
+    expect(issues.upsert).toHaveBeenCalledWith('r1', { title: 'new' })
+    expect(result.decisions[0]).toMatchObject({ kind: 'accepted' })
+  })
+
+  it('reports an alias when upsert returns a server-assigned id', async () => {
+    const issues = resource({
+      upsert: vi.fn(async () => ({ id: 'server-generated' })),
+    })
+    const transport = createRestTransport({ resources: { issues: issues as never } })
+
+    const result = await transport.push({
+      scope: 's',
+      operations: [operation('o1', 'local-temp', { type: 'upsert', value: { title: 'a' } })],
+    })
+
+    expect(result.decisions[0]).toMatchObject({
+      kind: 'accepted',
+      aliasRecordId: 'server-generated',
+    })
+  })
+
+  it('keeps guessing create-or-update for a resource with no upsert', async () => {
+    // Unchanged on purpose. A resource that opts out is telling the adapter its
+    // backend has no PUT-style endpoint, so the guess is all there is — and a
+    // first write is only safe if that backend tolerates an update to an id it
+    // has never seen.
+    const fresh = resource()
+    const withoutProjection = createRestTransport({ resources: { issues: fresh as never } })
+    await withoutProjection.push({
+      scope: 's',
+      operations: [operation('o1', 'r1', { type: 'upsert', value: { title: 'a' } })],
+    })
+    expect(fresh.create).toHaveBeenCalledWith({ title: 'a' })
+    expect(fresh.update).not.toHaveBeenCalled()
+
+    const seen = resource()
+    const withProjection = createRestTransport({
+      resources: { issues: seen as never },
+      readRecord: () => ({ title: 'a' }),
+    })
+    await withProjection.push({
+      scope: 's',
+      operations: [operation('o2', 'r1', { type: 'upsert', value: { title: 'b' } })],
+    })
+    expect(seen.update).toHaveBeenCalledWith('r1', { title: 'b' })
+    expect(seen.create).not.toHaveBeenCalled()
+  })
+
   it('resolves CRDT-only operations against the local value', async () => {
     // REST cannot express "add 1 to whatever the server has", so the adapter
     // computes the result locally and sends a plain patch. Merge semantics are

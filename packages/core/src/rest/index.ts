@@ -47,6 +47,12 @@ export interface RestListResult<T> {
 export interface RestResource<T> {
   list(): Promise<RestListResult<T> | readonly T[]>
   create(value: T): Promise<T | void>
+  /**
+   * Create-or-replace, when the backend has PUT-style semantics. Preferred for
+   * `upsert` operations, because the client cannot tell a first write from an
+   * edit: the optimistic value is in the projection either way.
+   */
+  upsert?(recordId: RecordId, value: T): Promise<T | void>
   update(recordId: RecordId, fields: Partial<T>): Promise<T | void>
   remove(recordId: RecordId): Promise<void>
   /** Map one item to its record id and stored value. */
@@ -55,7 +61,15 @@ export interface RestResource<T> {
 
 export interface RestTransportOptions {
   readonly resources: Readonly<Record<Collection, RestResource<never>>>
-  /** Local projection, used to resolve CRDT-only operations into a patch. */
+  /**
+   * Local projection, used to resolve CRDT-only operations into a patch.
+   *
+   * It is not evidence that the server has the record: the client writes the
+   * optimistic value in before the push runs, so a first write and an edit look
+   * identical here. That is why `upsert` operations prefer
+   * `RestResource.upsert`, and why a resource without one relies on the backend
+   * tolerating an update to an id it has never seen.
+   */
   readonly readRecord?: (collection: Collection, recordId: RecordId) => unknown
 }
 
@@ -122,6 +136,9 @@ function toRestChange(
 
   switch (kind.type) {
     case 'upsert':
+      // A guess, and only reached when the resource has no `upsert`: `current`
+      // is the local projection, which already holds the optimistic value, so a
+      // first write reads as an edit. See `RestTransportOptions.readRecord`.
       return { type: current ? 'update' : 'create', fields: kind.value as Record<string, unknown> }
     case 'restore':
       return {
@@ -153,6 +170,27 @@ function toRestChange(
       }
     }
   }
+}
+
+/**
+ * A REST backend usually assigns its own id. When it differs, the engine swaps
+ * the local record for the server one in a single transaction — the temp-id
+ * dance that `newId()` removes for engine-native collections but cannot remove
+ * here.
+ */
+function acceptance(
+  operationId: string,
+  recordId: RecordId,
+  resource: RestResource<never>,
+  returned: unknown,
+): PushDecision {
+  const assigned =
+    returned === undefined || returned === null
+      ? recordId
+      : resource.toRecord(returned as never).recordId
+  return assigned === recordId
+    ? { kind: 'accepted', operationId }
+    : { kind: 'accepted', operationId, aliasRecordId: assigned }
 }
 
 function normalizeList<T>(result: RestListResult<T> | readonly T[]): RestListResult<T> {
@@ -237,10 +275,22 @@ export function createRestTransport(options: RestTransportOptions): SyncTranspor
         continue
       }
 
-      const current = readRecord(collection, recordId)
-      const change = toRestChange(operation, current)
+      const kind = operation.kind
 
       try {
+        if (kind.type === 'upsert' && resource.upsert) {
+          // The one operation the create/update split cannot get right on its
+          // own, so hand the whole question to the backend when it can answer
+          // it. Without this, a first write goes out as an update against an id
+          // the server has never seen: a 404, which `decisionForError` maps to
+          // `rejected`, silently dropping the record the user just made.
+          const saved: unknown = await resource.upsert(recordId, kind.value as never)
+          decisions.push(acceptance(operation.id, recordId, resource, saved))
+          continue
+        }
+
+        const change = toRestChange(operation, readRecord(collection, recordId))
+
         if (change.type === 'delete') {
           await resource.remove(recordId)
           decisions.push({ kind: 'accepted', operationId: operation.id })
@@ -249,19 +299,7 @@ export function createRestTransport(options: RestTransportOptions): SyncTranspor
 
         if (change.type === 'create') {
           const created: unknown = await resource.create(change.fields as never)
-          // A REST backend usually assigns its own id. When it differs, the
-          // engine swaps the local record for the server one in a single
-          // transaction — the temp-id dance that `newId()` removes for
-          // engine-native collections but cannot remove here.
-          const assigned =
-            created === undefined || created === null
-              ? recordId
-              : resource.toRecord(created as never).recordId
-          decisions.push(
-            assigned === recordId
-              ? { kind: 'accepted', operationId: operation.id }
-              : { kind: 'accepted', operationId: operation.id, aliasRecordId: assigned },
-          )
+          decisions.push(acceptance(operation.id, recordId, resource, created))
           continue
         }
 
