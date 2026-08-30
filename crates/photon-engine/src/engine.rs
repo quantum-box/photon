@@ -53,6 +53,36 @@ where
         self.apply_to_projection(&operation).await
     }
 
+    /// Accept an operation as the authority, returning the new projection and
+    /// the remote sequence it was assigned.
+    ///
+    /// Unlike [`Self::apply_remote_operation`], the caller does not pick the
+    /// sequence. Storage allocates it inside the same transaction that commits
+    /// the operation and its projection, which is what keeps commit order equal
+    /// to sequence order once more than one instance shares a database — and a
+    /// pull that races an acceptance can then never skip past an uncommitted
+    /// sequence.
+    pub async fn accept_authoritative_operation(
+        &self,
+        operation: Operation,
+    ) -> Result<(Record, i64)> {
+        let (stored, record) = self
+            .storage
+            .append_authoritative_operation(operation)
+            .await?;
+        let remote_sequence = stored.remote_sequence.ok_or_else(|| {
+            crate::EngineError::Storage(
+                "authoritative operation is missing its remote sequence".to_owned(),
+            )
+        })?;
+        Ok((record, remote_sequence))
+    }
+
+    /// The remote sequence the next acceptance will assign. Reporting only.
+    pub async fn next_remote_sequence(&self) -> Result<i64> {
+        self.storage.next_remote_sequence().await
+    }
+
     pub async fn record(&self, key: &RecordKey) -> Result<Option<Record>> {
         self.storage.get_record(key).await
     }

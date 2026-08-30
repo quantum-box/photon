@@ -147,6 +147,121 @@ where
         .unwrap();
     assert_eq!(remaining_updates.len(), 1);
     assert_eq!(remaining_updates[0].sequence, 2);
+
+    run_authoritative_accept_contract(adapter).await;
+}
+
+/// What an authority must guarantee when it accepts an operation.
+///
+/// These hold for every adapter, which is the point: an in-process counter
+/// satisfies the sequence assertions and fails the moment a second instance
+/// shares the store, so the guarantee has to live in the adapter.
+async fn run_authoritative_accept_contract<A>(adapter: A)
+where
+    A: StorageAdapter + Clone,
+{
+    let engine = PhotonEngine::new(adapter.clone());
+
+    // Sequences start where the op-log left off and advance by one.
+    let first_expected = adapter.next_remote_sequence().await.unwrap();
+    let create = patch(
+        "issue-authority",
+        "authority-a",
+        20,
+        json!({ "title": "canonical payload" }),
+    )
+    .with_id("op-authority-create");
+    let (accepted, projected) = adapter
+        .append_authoritative_operation(create.clone())
+        .await
+        .unwrap();
+    assert_eq!(accepted.status, OperationStatus::Accepted);
+    assert_eq!(accepted.remote_sequence, Some(first_expected));
+    assert_eq!(projected.value["title"], json!("canonical payload"));
+    assert_eq!(
+        adapter.next_remote_sequence().await.unwrap(),
+        first_expected + 1,
+        "an acceptance must consume exactly one sequence",
+    );
+
+    // A retry is the same acceptance, not a second one: same sequence, same
+    // projection, and no sequence burned.
+    let (retried, reprojected) = adapter
+        .append_authoritative_operation(create.clone())
+        .await
+        .unwrap();
+    assert_eq!(retried.remote_sequence, accepted.remote_sequence);
+    assert_eq!(reprojected, projected);
+    assert_eq!(
+        adapter.next_remote_sequence().await.unwrap(),
+        first_expected + 1,
+        "replaying an accepted operation must not consume a sequence",
+    );
+
+    // The operation id is the idempotency key, so it must not be reusable for
+    // different content — otherwise a retry could rewrite history in place.
+    let mutated = patch(
+        "issue-authority",
+        "authority-a",
+        20,
+        json!({ "title": "mutated retry" }),
+    )
+    .with_id(create.id.clone());
+    let error = adapter
+        .append_authoritative_operation(mutated)
+        .await
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("was reused with a different payload"),
+        "unexpected error: {error}",
+    );
+    let stored = adapter.get_operation(&create.id).await.unwrap().unwrap();
+    assert_eq!(stored.operation, create);
+
+    // Replay must not reach the projection twice. `Increment` is the kind that
+    // makes this visible: re-applying it would silently double the field.
+    let increment = Operation::new(
+        key("issue-authority-counter"),
+        ActorId::from("authority-a"),
+        OperationKind::Increment {
+            field: "points".to_owned(),
+            by: 2,
+        },
+    )
+    .with_id("op-authority-increment");
+    let (_, once) = adapter
+        .append_authoritative_operation(increment.clone())
+        .await
+        .unwrap();
+    assert_eq!(once.value["points"], json!(2));
+    let (_, twice) = adapter
+        .append_authoritative_operation(increment.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        twice.value["points"],
+        json!(2),
+        "replaying an accepted increment must not apply it again",
+    );
+
+    // The engine wrapper reports the sequence storage actually assigned.
+    let follow_up = patch(
+        "issue-authority",
+        "authority-b",
+        30,
+        json!({ "status": "done" }),
+    )
+    .with_id("op-authority-follow-up");
+    let expected = adapter.next_remote_sequence().await.unwrap();
+    let (record, remote_sequence) = engine
+        .accept_authoritative_operation(follow_up)
+        .await
+        .unwrap();
+    assert_eq!(remote_sequence, expected);
+    assert_eq!(record.value["status"], json!("done"));
+    assert_eq!(record.value["title"], json!("canonical payload"));
 }
 
 #[tokio::test]
@@ -170,16 +285,106 @@ async fn sqlite_migrations_are_versioned_and_idempotent() {
     let adapter = photon_engine::SqliteAdapter::connect("sqlite::memory:")
         .await
         .unwrap();
-    assert_eq!(adapter.schema_version().await.unwrap(), 1);
+    assert_eq!(adapter.schema_version().await.unwrap(), 2);
 
     // Re-running must be a no-op, not a failure or a duplicate version row.
     adapter.migrate().await.unwrap();
-    assert_eq!(adapter.schema_version().await.unwrap(), 1);
+    assert_eq!(adapter.schema_version().await.unwrap(), 2);
     let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM photon_engine_schema_migrations")
         .fetch_one(adapter.pool())
         .await
         .unwrap();
-    assert_eq!(rows, 1);
+    assert_eq!(rows, 2);
+
+    // A database that predates the authority sequence gets seeded past the
+    // sequences its op-log already used, so migrating never reissues one.
+    let next_sequence: i64 =
+        sqlx::query_scalar("SELECT next_sequence FROM photon_engine_sync_state WHERE id = 1")
+            .fetch_one(adapter.pool())
+            .await
+            .unwrap();
+    assert_eq!(next_sequence, 1);
+}
+
+/// The guarantee an in-process counter cannot make.
+///
+/// Six independent adapters over one database file stand in for six replicas
+/// over one server database. Each acceptance must still get its own sequence,
+/// and every increment must land exactly once. With a per-process `AtomicI64`
+/// this test hands the same sequence to several operations and loses writes.
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn sqlite_authority_sequence_is_serialized_across_instances() {
+    const INSTANCES: usize = 6;
+
+    let database_path = std::env::temp_dir().join(format!(
+        "photon-authority-sequence-{}-{}.db",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos(),
+    ));
+    let database_url = format!("sqlite:{}?mode=rwc", database_path.display());
+
+    let mut engines = Vec::with_capacity(INSTANCES);
+    for _ in 0..INSTANCES {
+        engines.push(PhotonEngine::new(
+            photon_engine::SqliteAdapter::connect(&database_url)
+                .await
+                .unwrap(),
+        ));
+    }
+
+    let shared = RecordKey::new("workspace:authority", "counters", "shared");
+    let mut handles = Vec::with_capacity(INSTANCES);
+    for (index, engine) in engines.iter().enumerate() {
+        let engine = engine.clone();
+        let operation = Operation::new(
+            shared.clone(),
+            ActorId::from(format!("instance-{index}")),
+            OperationKind::Increment {
+                field: "count".to_owned(),
+                by: 1,
+            },
+        )
+        .with_id(format!("op-instance-{index}"))
+        .with_timestamp(HybridTimestamp::new(10, 0, "shared-authority"));
+        handles.push(tokio::spawn(async move {
+            engine.accept_authoritative_operation(operation).await
+        }));
+    }
+
+    let mut sequences = Vec::with_capacity(INSTANCES);
+    for handle in handles {
+        let (_record, remote_sequence) = handle
+            .await
+            .expect("acceptance task panicked")
+            .expect("acceptance failed");
+        sequences.push(remote_sequence);
+    }
+    sequences.sort_unstable();
+    assert_eq!(
+        sequences,
+        (1..=INSTANCES as i64).collect::<Vec<_>>(),
+        "every acceptance must get its own sequence, with no gaps",
+    );
+
+    let projected = engines[0].record(&shared).await.unwrap().unwrap();
+    assert_eq!(
+        projected.value["count"],
+        json!(INSTANCES),
+        "every increment must land exactly once",
+    );
+    assert_eq!(
+        engines[0].next_remote_sequence().await.unwrap(),
+        INSTANCES as i64 + 1,
+    );
+
+    drop(engines);
+    let _ = std::fs::remove_file(&database_path);
+    let _ = std::fs::remove_file(database_path.with_extension("db-shm"));
+    let _ = std::fs::remove_file(database_path.with_extension("db-wal"));
 }
 
 #[cfg(feature = "mysql")]
@@ -197,9 +402,9 @@ async fn mysql_adapter_satisfies_storage_contract_when_url_is_configured() {
         .unwrap();
 
     // Version tracking: connect() migrated, a second run is a no-op.
-    assert_eq!(adapter.schema_version().await.unwrap(), 1);
+    assert_eq!(adapter.schema_version().await.unwrap(), 2);
     adapter.migrate().await.unwrap();
-    assert_eq!(adapter.schema_version().await.unwrap(), 1);
+    assert_eq!(adapter.schema_version().await.unwrap(), 2);
 
     reset_mysql_storage(&adapter).await;
     run_storage_contract(adapter.clone()).await;
@@ -221,4 +426,12 @@ async fn reset_mysql_storage(adapter: &photon_engine::MySqlAdapter) {
             .await
             .unwrap();
     }
+
+    // The sequence allocator survives a DELETE of the op-log, so reset it too.
+    // Leaving it advanced would make "reset" mean something different for the
+    // sequence than for every other table.
+    sqlx::query("UPDATE photon_engine_sync_state SET next_sequence = 1 WHERE id = 1")
+        .execute(adapter.pool())
+        .await
+        .unwrap();
 }

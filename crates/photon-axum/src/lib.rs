@@ -171,16 +171,17 @@ const YJS_COMPACTION_THRESHOLD: i64 = 100;
 
 pub struct AppState {
     pub db: SqlitePool,
-    pub engine: PhotonEngine<ServerEngineAdapter>,
-    pub engine_next_seq: AtomicI64,
-    /// Serializes remote-sequence assignment with the operation write.
+    /// Remote-sequence assignment lives in this engine's storage, not on this
+    /// struct.
     ///
-    /// Without it two concurrent pushes can commit out of sequence order, and
-    /// a pull issued in that window returns sequence N+1 while N is still
-    /// uncommitted — the client's cursor then advances past N and never sees
-    /// it. The op-log is the durable truth, so a permanently skipped
-    /// operation is data loss on every other client.
-    pub engine_push_lock: tokio::sync::Mutex<()>,
+    /// Two concurrent pushes must not commit out of sequence order: a pull
+    /// issued in that window returns sequence N+1 while N is still uncommitted
+    /// — the client's cursor then advances past N and never sees it. The op-log
+    /// is the durable truth, so a permanently skipped operation is data loss on
+    /// every other client. A counter and mutex here would only order the pushes
+    /// this process serves, which is why the ordering is the storage layer's
+    /// job; see `StorageAdapter::append_authoritative_operation`.
+    pub engine: PhotonEngine<ServerEngineAdapter>,
     pub rooms: RwLock<HashMap<String, Arc<RoomState>>>,
     pub auth: AuthConfig,
     /// Domain-level write authorization, consulted per pushed operation.
@@ -259,6 +260,23 @@ impl StorageAdapter for ServerEngineAdapter {
         match self {
             Self::Sqlite(adapter) => adapter.append_operation(operation, status).await,
             Self::MySql(adapter) => adapter.append_operation(operation, status).await,
+        }
+    }
+
+    async fn append_authoritative_operation(
+        &self,
+        operation: Operation,
+    ) -> photon_engine::Result<(StoredOperation, photon_engine::Record)> {
+        match self {
+            Self::Sqlite(adapter) => adapter.append_authoritative_operation(operation).await,
+            Self::MySql(adapter) => adapter.append_authoritative_operation(operation).await,
+        }
+    }
+
+    async fn next_remote_sequence(&self) -> photon_engine::Result<i64> {
+        match self {
+            Self::Sqlite(adapter) => adapter.next_remote_sequence().await,
+            Self::MySql(adapter) => adapter.next_remote_sequence().await,
         }
     }
 
@@ -523,7 +541,6 @@ pub async fn build_state_with_auth_and_policy(
     init_db(&pool).await?;
     let engine = init_engine(&pool, engine_database_url).await?;
     verify_engine_startup(&engine, engine_database_url).await?;
-    let engine_next_seq = init_engine_next_sequence(&engine).await?;
 
     if auth.is_enabled() {
         info!("Photon auth boundary enabled: bearer tokens required");
@@ -537,8 +554,6 @@ pub async fn build_state_with_auth_and_policy(
     Ok(Arc::new(AppState {
         db: pool,
         engine,
-        engine_next_seq: AtomicI64::new(engine_next_seq),
-        engine_push_lock: tokio::sync::Mutex::new(()),
         rooms: RwLock::new(HashMap::new()),
         auth,
         policy,
@@ -706,18 +721,16 @@ async fn push_engine_operations(
             chrono::Utc::now().timestamp_millis(),
         );
 
-        // Assign and commit under one lock: commit order must equal sequence
-        // order, or a concurrent pull skips the not-yet-committed sequence
-        // forever (see `engine_push_lock`).
-        let remote_sequence = {
-            let _guard = state.engine_push_lock.lock().await;
-            let remote_sequence = state.engine_next_seq.fetch_add(1, Ordering::SeqCst) + 1;
-            state
-                .engine
-                .apply_remote_operation(operation.clone(), remote_sequence)
-                .await?;
-            remote_sequence
-        };
+        // Storage assigns the sequence and commits the operation in one
+        // transaction: commit order must equal sequence order, or a concurrent
+        // pull skips the not-yet-committed sequence forever. Doing that here,
+        // with a process-local counter and mutex, would only hold while this
+        // process is the sole authority — which stops being true the first time
+        // the server runs as two replicas over one database.
+        let (_record, remote_sequence) = state
+            .engine
+            .accept_authoritative_operation(operation.clone())
+            .await?;
         accepted_count += 1;
         decisions.push(PushDecision::Accepted {
             operation_id: operation.id,
@@ -966,7 +979,7 @@ async fn engine_debug_state(
         role: "photon-engine-authority".to_owned(),
         scope: scope.to_string(),
         remote: ENGINE_ACTOR_ID.to_owned(),
-        next_remote_sequence: state.engine_next_seq.load(Ordering::SeqCst) + 1,
+        next_remote_sequence: state.engine.next_remote_sequence().await?,
         cursor_position: cursor.map(|cursor| cursor.position),
         counts,
         collections,
@@ -1277,23 +1290,6 @@ async fn verify_engine_startup(
         engine_database_kind(engine_database_url)
     );
     Ok(())
-}
-
-async fn init_engine_next_sequence(
-    engine: &PhotonEngine<ServerEngineAdapter>,
-) -> photon_engine::Result<i64> {
-    let operations = engine
-        .storage()
-        .list_operations(OperationFilter {
-            status: Some(OperationStatus::Accepted),
-            ..OperationFilter::default()
-        })
-        .await?;
-    Ok(operations
-        .into_iter()
-        .filter_map(|operation| operation.remote_sequence)
-        .max()
-        .unwrap_or_default())
 }
 
 // ---------------------------------------------------------------------------
@@ -1607,13 +1603,10 @@ mod tests {
 
         init_db(&pool).await.unwrap();
         let engine = init_engine(&pool, "sqlite::memory:").await.unwrap();
-        let engine_next_seq = init_engine_next_sequence(&engine).await.unwrap();
 
         Arc::new(AppState {
             db: pool,
             engine,
-            engine_next_seq: AtomicI64::new(engine_next_seq),
-            engine_push_lock: tokio::sync::Mutex::new(()),
             rooms: RwLock::new(HashMap::new()),
             auth,
             policy,
