@@ -223,3 +223,11 @@ npm run dev -- --host 127.0.0.1
 - GitHub: https://github.com/quantum-box/photon
 - Linear プロジェクト: photon
 - 設計判断: [docs/architecture/decisions/](docs/architecture/decisions/)
+
+## ライセンス
+
+MIT License. 詳細は [LICENSE](LICENSE) を参照。
+
+- コントリビューション方法: [CONTRIBUTING.md](CONTRIBUTING.md)
+- 脆弱性の報告: [SECURITY.md](SECURITY.md)
+- 行動規範: [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
