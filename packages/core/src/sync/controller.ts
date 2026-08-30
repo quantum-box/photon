@@ -234,23 +234,26 @@ export class SyncEngine implements SyncController {
     // will not take — a 5xx, a request that keeps timing out — into a client
     // that can no longer see anything anyone else writes, silently, for as
     // long as that operation stays pending.
-    let pushError: unknown = null
+    // Tracked as a flag, not by the error's truthiness: a transport may reject
+    // with any value at all, and `null` or `''` is still a failed push.
+    let pushFailed = false
+    let pushError: unknown
     try {
       await this.runPush(summary)
     } catch (error) {
+      pushFailed = true
       pushError = error
     }
 
     let cursor: number | null
     try {
       cursor = await this.runPull(summary)
-    } catch (error) {
-      // The push error is the older one, and the one whose retry matters.
-      this.handleFailure(pushError ?? error)
+    } catch (pullError) {
+      this.handleFailure(pushFailed ? worseOf(pushError, pullError) : pullError)
       return summary
     }
 
-    if (pushError) {
+    if (pushFailed) {
       this.handleFailure(pushError, cursor)
       return summary
     }
@@ -404,6 +407,21 @@ export class SyncEngine implements SyncController {
     this.status = { ...this.status, ...next }
     for (const listener of this.listeners) listener()
   }
+}
+
+/**
+ * Which failure to report when both halves of a cycle failed.
+ *
+ * An expired token is the one failure retrying cannot fix, so it wins: report
+ * the push's 5xx over the pull's 401 and the loop schedules retries forever
+ * instead of pausing for the sign-in that would actually clear it. Otherwise
+ * the push error is the one to keep — it is the older of the two, and the one
+ * still holding unsent work.
+ */
+function worseOf(pushError: unknown, pullError: unknown): unknown {
+  if (classify(pushError).kind === 'auth') return pushError
+  if (classify(pullError).kind === 'auth') return pullError
+  return pushError
 }
 
 function classify(error: unknown): SyncError {

@@ -122,8 +122,15 @@ impl StorageAdapter for MemoryAdapter {
         let remote_sequence = self.remote_sequence.fetch_add(1, Ordering::SeqCst) + 1;
         let projected = apply_operation(state.records.get(&operation.key).cloned(), &operation)?;
 
-        let stored = match state.operations.get_mut(&operation.id) {
+        let operation_id = operation.id.clone();
+        let stored = match state.operations.get_mut(&operation_id) {
             Some(existing) => {
+                // The payload is rewritten, not just the status: the row may
+                // hold the unstamped copy this authority queued locally, and
+                // `is_replay_of` deliberately ignores the audit key, so keeping
+                // the stored payload would accept the operation while dropping
+                // the audit record of who was authorized to push it.
+                existing.operation = operation;
                 existing.status = OperationStatus::Accepted;
                 existing.remote_sequence = Some(remote_sequence);
                 existing.clone()

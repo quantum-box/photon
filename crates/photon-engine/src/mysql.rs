@@ -397,15 +397,22 @@ impl StorageAdapter for MySqlAdapter {
         .await?;
 
         if existing.is_some() {
+            // The payload is rewritten, not just the status: the row may hold
+            // the unstamped copy this authority queued locally, and
+            // `is_replay_of` deliberately ignores the audit key, so keeping the
+            // stored payload would accept the operation while dropping the
+            // audit record of who was authorized to push it.
             sqlx::query(
                 r#"
                 UPDATE photon_engine_operations
                 SET status = 'accepted',
-                    remote_sequence = ?
+                    remote_sequence = ?,
+                    operation_json = ?
                 WHERE operation_id = ?
                 "#,
             )
             .bind(next_sequence)
+            .bind(serde_json::to_string(&operation)?)
             .bind(operation.id.as_str())
             .execute(&mut *transaction)
             .await?;

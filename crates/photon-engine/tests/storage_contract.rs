@@ -261,6 +261,36 @@ where
         "the stamp of the accepted request is the one that stays stored",
     );
 
+    // An authority that queued the operation locally already holds the
+    // unstamped row. Accepting it must promote the stamped payload, not just
+    // the status: `is_replay_of` lets the two match, so keeping the stored one
+    // would silently accept the write with no record of who authorized it.
+    let pending = patch(
+        "issue-authority-promoted",
+        "authority-a",
+        50,
+        json!({ "title": "queued before it was accepted" }),
+    )
+    .with_id("op-authority-promoted");
+    adapter
+        .append_operation(pending.clone(), OperationStatus::Pending)
+        .await
+        .unwrap();
+    let (promoted, _) = adapter
+        .append_authoritative_operation(pending.clone().with_metadata(json!({
+            AUTHORITY_METADATA_KEY: { "authorized": "tenant", "request_id": "req-promote" }
+        })))
+        .await
+        .unwrap();
+    assert_eq!(promoted.status, OperationStatus::Accepted);
+    assert_eq!(
+        promoted.operation.metadata[AUTHORITY_METADATA_KEY]["request_id"],
+        json!("req-promote"),
+        "promoting a pending row must keep the stamp of the request that accepted it",
+    );
+    let reread = adapter.get_operation(&pending.id).await.unwrap().unwrap();
+    assert_eq!(reread.operation.metadata, promoted.operation.metadata);
+
     // The bare form is what a client actually re-pushes: it never saw the
     // stamp the server added.
     let (unstamped, _) = adapter

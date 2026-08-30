@@ -22,22 +22,25 @@ interface Harness {
   readonly engine: SyncEngine
   readonly pulls: PullRequest[]
   setServerCursor(position: number): void
-  failPushesWith(error: unknown | null): void
+  failPushesWith(error: unknown): void
+  failPullsWith(error: unknown): void
 }
 
 function makeHarness(overrides: Partial<SyncEngineOptions> = {}): Harness {
   const pulls: PullRequest[] = []
   let serverCursor = 0
   let storedCursor: number | null = null
-  let pushError: unknown | null = null
+  let pushFailure: { error: unknown } | null = null
+  let pullFailure: { error: unknown } | null = null
 
   const transport: SyncTransport = {
     async push() {
-      if (pushError) throw pushError
+      if (pushFailure) throw pushFailure.error
       return { decisions: [] }
     },
     async pull(request) {
       pulls.push(request)
+      if (pullFailure) throw pullFailure.error
       const result: PullResult = {
         kind: 'operations',
         operations: [],
@@ -85,8 +88,11 @@ function makeHarness(overrides: Partial<SyncEngineOptions> = {}): Harness {
     setServerCursor(position: number) {
       serverCursor = position
     },
-    failPushesWith(error: unknown | null) {
-      pushError = error
+    failPushesWith(error: unknown) {
+      pushFailure = { error }
+    },
+    failPullsWith(error: unknown) {
+      pullFailure = { error }
     },
   }
 }
@@ -137,6 +143,33 @@ describe('a push that fails', () => {
 
     expect(harness.pulls).toHaveLength(1)
     expect(harness.engine.getStatus().cursor).toBe(9)
+  })
+
+  it('is a failure even when the transport rejects with a falsy value', async () => {
+    // `undefined` is a perfectly legal rejection value, and a cycle that reads
+    // it as success leaves the write unsent with no retry armed.
+    harness.failPushesWith(undefined)
+    harness.engine.start()
+    await vi.advanceTimersByTimeAsync(0)
+    await flushMicrotasks()
+
+    const status = harness.engine.getStatus()
+    expect(status.phase).not.toBe('idle')
+    expect(status.nextAttemptInMs).toBeGreaterThan(0)
+  })
+
+  it('yields to an expired token reported by the pull', async () => {
+    // Reporting the push's 5xx here would schedule retries forever against a
+    // credential only a sign-in can renew.
+    harness.failPushesWith(Object.assign(new Error('push exploded'), { status: 500 }))
+    harness.failPullsWith(Object.assign(new Error('token expired'), { status: 401 }))
+    harness.engine.start()
+    await vi.advanceTimersByTimeAsync(0)
+    await flushMicrotasks()
+
+    const status = harness.engine.getStatus()
+    expect(status.lastError?.kind).toBe('auth')
+    expect(status.phase).toBe('paused')
   })
 
   it('is still reported, and still retried', async () => {
