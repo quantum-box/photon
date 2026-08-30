@@ -232,7 +232,12 @@ function memoryStore(): LocalStore & {
 }
 
 async function makeClient(
-  overrides: Partial<Pick<PhotonClientOptions, 'storage' | 'transport' | 'sync'>> = {},
+  overrides: Partial<
+    Pick<
+      PhotonClientOptions,
+      'storage' | 'transport' | 'sync' | 'collections' | 'resolveCollection'
+    >
+  > = {},
 ): Promise<PhotonClient> {
   let now = 1_700_000_000_000
   return createPhotonClient({
@@ -768,5 +773,129 @@ describe('writes from another context', () => {
     await expect(
       store.fromAnotherContext({ records: [engineRecord('records', 'r1', { n: 1 })] }),
     ).resolves.toBeUndefined()
+  })
+})
+
+describe('collections discovered at runtime', () => {
+  /** A REST resource that records what the transport asked it to do. */
+  function recordingResource(log: string[], label: string) {
+    return {
+      async list() {
+        log.push(`list:${label}`)
+        return []
+      },
+      async create(value: unknown) {
+        log.push(`create:${label}`)
+        return value
+      },
+      async update(recordId: string) {
+        log.push(`update:${label}:${recordId}`)
+      },
+      async remove(recordId: string) {
+        log.push(`remove:${label}:${recordId}`)
+      },
+      toRecord(item: { id: string }) {
+        return { recordId: item.id, value: item }
+      },
+    }
+  }
+
+  it('asks the resolver for a collection that `collections` does not name', async () => {
+    const seen: string[] = []
+    const client = await makeClient({
+      resolveCollection: (collection) => {
+        seen.push(collection)
+        return collection.startsWith('data:') ? { mode: 'passthrough', resource: recordingResource([], collection) } : undefined
+      },
+    })
+
+    // `passthrough` is pushed inline at mutation time, so the mode being
+    // honoured is observable: the operation never joins the durable queue.
+    client.upsert('data:repo-1', 'r1', { title: 'from a resolved collection' })
+    await tick()
+
+    expect(seen).toContain('data:repo-1')
+    await client.close()
+  })
+
+  it('caches the resolver answer, including "no answer"', async () => {
+    const calls: string[] = []
+    const client = await makeClient({
+      resolveCollection: (collection) => {
+        calls.push(collection)
+        return undefined
+      },
+    })
+
+    client.upsert('records', 'r1', { n: 1 })
+    client.upsert('records', 'r2', { n: 2 })
+    await tick()
+
+    // Once for the collection, not once per mutation: a resolver that is asked
+    // repeatedly could answer differently and make the mode non-deterministic.
+    expect(calls.filter((collection) => collection === 'records')).toHaveLength(1)
+    await client.close()
+  })
+
+  it('never consults the resolver for a collection `collections` already names', async () => {
+    const calls: string[] = []
+    const client = await makeClient({
+      collections: { records: { mode: 'engine-native' } },
+      resolveCollection: (collection) => {
+        calls.push(collection)
+        return undefined
+      },
+    })
+
+    client.upsert('records', 'r1', { n: 1 })
+    await tick()
+
+    expect(calls).not.toContain('records')
+    await client.close()
+  })
+
+  it('routes a resolved rest-backed collection through the REST transport', async () => {
+    const log: string[] = []
+    const engine: SyncTransport = {
+      async push(request) {
+        for (const operation of request.operations) log.push(`engine:${operation.key.collection}`)
+        return { decisions: [] }
+      },
+      async pull(request) {
+        return { kind: 'operations', operations: [], cursor: request.cursor }
+      },
+    }
+
+    const client = await makeClient({
+      transport: engine,
+      sync: { autoStart: false, pushDebounceMs: 0 },
+      resolveCollection: (collection) =>
+        collection.startsWith('data:')
+          ? { mode: 'rest-backed', resource: recordingResource(log, collection) }
+          : undefined,
+    })
+
+    client.upsert('data:repo-1', 'r1', { title: 'rest' })
+    client.upsert('records', 'r2', { title: 'engine' })
+    await tick()
+    await client.sync.syncNow()
+
+    // The mode router split them: one went to REST, the other to the engine.
+    // (The REST call is `update` rather than `create` because the optimistic
+    // value is already in the projection — that classification is the
+    // transport's, not the resolver's, and is asserted elsewhere.)
+    expect(log).toContain('update:data:repo-1:r1')
+    expect(log).toContain('engine:records')
+    expect(log).not.toContain('engine:data:repo-1')
+    await client.close()
+  })
+
+  it('rejects a resolved rest-backed collection with no resource', async () => {
+    const client = await makeClient({
+      resolveCollection: () => ({ mode: 'rest-backed' } as never),
+    })
+
+    expect(() => client.upsert('data:repo-1', 'r1', { n: 1 })).toThrow(/has no REST resource/)
+    await client.close()
   })
 })

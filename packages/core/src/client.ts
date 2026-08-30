@@ -105,6 +105,34 @@ export interface PhotonClientOptions {
   readonly kernel: PhotonKernelModule
   readonly transport?: SyncTransport
   readonly collections?: Readonly<Record<Collection, CollectionConfig>>
+  /**
+   * Config for a collection that `collections` does not name.
+   *
+   * Some applications do not know their collection set when the client is
+   * built: data is partitioned per project, per board, per repository, and the
+   * partitions are discovered at runtime — often from data the client itself
+   * holds. Enumerating them up front would mean either a network round trip
+   * before the client exists, or rebuilding the client whenever the set
+   * changes, and neither survives an offline start.
+   *
+   * The resolver is consulted once per collection the client encounters, and
+   * the answer is cached for the client's lifetime. Return `undefined` to take
+   * the default (`engine-native`).
+   *
+   * ```ts
+   * resolveCollection: (collection) => {
+   *   const id = collection.startsWith('data:') ? collection.slice(5) : null
+   *   return id ? { mode: 'rest-backed', resource: dataResource(id) } : undefined
+   * }
+   * ```
+   *
+   * One limit worth knowing: `bootstrap()` skips lazy collections by name, and
+   * a resolved collection has no name to skip until something asks for it. Its
+   * stored records therefore load with the eager ones on a warm start. Its
+   * remote data still arrives through `pull`, and `hydration: 'lazy'` still
+   * governs everything after bootstrap.
+   */
+  readonly resolveCollection?: (collection: Collection) => CollectionConfig | undefined
   readonly sync?: {
     readonly autoStart?: boolean
     readonly pushDebounceMs?: number
@@ -218,6 +246,9 @@ class PhotonClientImpl implements PhotonClient {
   private readonly lazyCollections = new Set<Collection>()
   private readonly hydratedLazyCollections = new Set<Collection>()
   private readonly hydrationInFlight = new Map<Collection, Promise<void>>()
+  /** Resources of rest-backed and passthrough collections, added to as the
+   * `resolveCollection` resolver answers. */
+  private readonly restResources: Record<Collection, RestResource<never>> = {}
   /** Wraps the REST resources of rest-backed and passthrough collections. */
   private readonly restTransport: SyncTransport | null
 
@@ -242,26 +273,20 @@ class PhotonClientImpl implements PhotonClient {
     }
     liveClients.add(this.registryKey)
 
-    const restResources: Record<Collection, RestResource<never>> = {}
+    // Held, not copied: `applyCollectionConfig` adds to it as the resolver
+    // answers, and `createRestTransport` reads it per request rather than
+    // capturing its keys, so a collection discovered later is pullable.
     for (const [collection, config] of Object.entries(options.collections ?? {})) {
-      this.collectionModes.set(collection, config.mode)
-      if (config.hydration === 'lazy') this.lazyCollections.add(collection)
-      if (config.mode === 'engine-native') continue
-      // Runtime guard for plain-JS callers: the union type cannot save them.
-      if (!('resource' in config) || !config.resource) {
-        throw new Error(
-          `Collection "${collection}" is configured as "${config.mode}" but has no REST resource`,
-        )
-      }
-      restResources[collection] = config.resource
+      this.applyCollectionConfig(collection, config)
     }
 
-    this.restTransport = Object.keys(restResources).length
-      ? createRestTransport({
-          resources: restResources,
-          readRecord: (collection, recordId) => this.projection.get(collection, recordId)?.value,
-        })
-      : null
+    this.restTransport =
+      Object.keys(this.restResources).length || options.resolveCollection
+        ? createRestTransport({
+            resources: this.restResources,
+            readRecord: (collection, recordId) => this.projection.get(collection, recordId)?.value,
+          })
+        : null
 
     const transport = createModeRouterTransport({
       ...(options.transport ? { engine: options.transport } : {}),
@@ -293,8 +318,37 @@ class PhotonClientImpl implements PhotonClient {
     })
   }
 
+  /**
+   * Register one collection's config. Idempotent, and safe to call after the
+   * client is running: the REST transport reads `restResources` per request.
+   */
+  private applyCollectionConfig(collection: Collection, config: CollectionConfig): void {
+    this.collectionModes.set(collection, config.mode)
+    if (config.hydration === 'lazy') this.lazyCollections.add(collection)
+    if (config.mode === 'engine-native') return
+    // Runtime guard for plain-JS callers: the union type cannot save them.
+    if (!('resource' in config) || !config.resource) {
+      throw new Error(
+        `Collection "${collection}" is configured as "${config.mode}" but has no REST resource`,
+      )
+    }
+    this.restResources[collection] = config.resource
+  }
+
   private modeOf(collection: Collection): CollectionMode {
-    return this.collectionModes.get(collection) ?? 'engine-native'
+    const known = this.collectionModes.get(collection)
+    if (known) return known
+
+    // Ask the resolver once per collection, then remember the answer —
+    // including "no answer", so a resolver is never called twice for the same
+    // name and cannot make `modeOf` non-deterministic mid-session.
+    const resolved = this.options.resolveCollection?.(collection)
+    if (resolved) {
+      this.applyCollectionConfig(collection, resolved)
+      return resolved.mode
+    }
+    this.collectionModes.set(collection, 'engine-native')
+    return 'engine-native'
   }
 
   async bootstrap(): Promise<void> {
