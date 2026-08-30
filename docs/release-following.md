@@ -16,7 +16,7 @@ consuming app's toolchain needs Rust. Pin the way the app pins any dependency:
 ```json
 {
   "dependencies": {
-    "@quantum-box/photon": "^0.2.0"
+    "@quantum-box/photon": "^0.3.0"
   }
 }
 ```
@@ -29,7 +29,7 @@ is not released yet:
 ```json
 {
   "dependencies": {
-    "@quantum-box/photon": "git+ssh://git@github.com/quantum-box/photon.git#v0.2.0"
+    "@quantum-box/photon": "git+ssh://git@github.com/quantum-box/photon.git#v0.3.0"
   }
 }
 ```
@@ -40,8 +40,8 @@ key or machine user already configured for the app build.
 Useful forms:
 
 ```bash
-npm install git+ssh://git@github.com/quantum-box/photon.git#v0.2.0
-npm install github:quantum-box/photon#v0.2.0
+npm install git+ssh://git@github.com/quantum-box/photon.git#v0.3.0
+npm install github:quantum-box/photon#v0.3.0
 npm install git+ssh://git@github.com/quantum-box/photon.git#7f4a2c1
 ```
 
@@ -142,7 +142,7 @@ publication.
 Update the app dependency to the target Photon release:
 
 ```bash
-npm install @quantum-box/photon@0.2.0
+npm install @quantum-box/photon@0.3.0
 ```
 
 Then run the app's verification gates:
@@ -160,7 +160,7 @@ browser before cutting the app release.
 
 Every Photon release should include:
 
-- A Git tag such as `v0.2.0`, which `release.yml` cuts from the version in
+- A Git tag such as `v0.3.0`, which `release.yml` cuts from the version in
   `package.json` once CI is green on `main`, and which triggers the npm
   publish.
 - A changelog that separates app-facing breaking changes from internals.
