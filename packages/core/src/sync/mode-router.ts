@@ -34,13 +34,26 @@ export function createModeRouterTransport(options: ModeRouterOptions): SyncTrans
   if (!rest) return engine
   if (!engine) {
     return {
+      ...(rest.pullSelection ? { pullSelection: (request: import('../selection.js').SelectionPullRequest) => rest.pullSelection!(request) } : {}),
       push: (request) => rest.push(filterOperations(request, (op) => modeOf(op.key.collection) === 'rest-backed')),
       pull: (request) => rest.pull(request),
     }
   }
 
   return {
+    supportsAtomic: engine.supportsAtomic === true,
+    async pullSelection(request) {
+      const target = modeOf(request.selector.collection) === 'engine-native' ? engine : rest
+      if (!target.pullSelection) throw new Error('transport does not support partial sync')
+      return target.pullSelection(request)
+    },
     async push(request: PushRequest): Promise<PushResult> {
+      if (request.atomicBatchId) {
+        if (!engine.supportsAtomic || request.operations.some(op => modeOf(op.key.collection) !== 'engine-native')) {
+          throw new Error('atomic batches cannot span transports')
+        }
+        return engine.push(request)
+      }
       const engineOperations: Operation[] = []
       const restOperations: Operation[] = []
       for (const operation of request.operations) {

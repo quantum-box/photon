@@ -231,3 +231,7 @@ MIT License. 詳細は [LICENSE](LICENSE) を参照。
 - コントリビューション方法: [CONTRIBUTING.md](CONTRIBUTING.md)
 - 脆弱性の報告: [SECURITY.md](SECURITY.md)
 - 行動規範: [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
+
+### Scoped sync and atomic batches
+
+See [scoped sync](docs/scoped-sync.md) for filtered subscriptions, bounded local reads, cache release, stable REST operation context and opt-in atomic writes.

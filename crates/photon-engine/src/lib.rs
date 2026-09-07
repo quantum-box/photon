@@ -43,3 +43,6 @@ pub use types::{
     OperationId, OperationKind, OperationStatus, Record, RecordId, RecordKey, RemoteId, ScopeId,
     Snapshot, SnapshotFormat, SnapshotUpdate, StoredOperation, SyncCursor, AUTHORITY_METADATA_KEY,
 };
+
+pub mod selection;
+pub use selection::RecordSelection;

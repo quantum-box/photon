@@ -49,6 +49,17 @@ pub trait StorageAdapter: Send + Sync {
         operation: Operation,
     ) -> Result<(StoredOperation, Record)>;
 
+    /// All operations commit together, including sequences and projections.
+    /// Unsupported adapters must fail, never fall back to individual writes.
+    async fn append_authoritative_batch(
+        &self,
+        _operations: Vec<Operation>,
+    ) -> Result<Vec<(StoredOperation, Record)>> {
+        Err(crate::EngineError::Storage(
+            "atomic batches are unsupported".into(),
+        ))
+    }
+
     /// The remote sequence the next [`Self::append_authoritative_operation`]
     /// will assign. For reporting only — never allocate a sequence from it.
     async fn next_remote_sequence(&self) -> Result<i64>;
@@ -73,6 +84,29 @@ pub trait StorageAdapter: Send + Sync {
         scope: &ScopeId,
         collection: &CollectionName,
     ) -> Result<Vec<Record>>;
+
+    /// Read the projection and its last accepted sequence in one snapshot.
+    async fn get_record_checkpoint(
+        &self,
+        _key: &RecordKey,
+    ) -> Result<Option<crate::selection::RecordCheckpoint>> {
+        Err(crate::EngineError::Storage(
+            "record checkpoints are unsupported".into(),
+        ))
+    }
+
+    /// Keyset page of matching projections, without materializing a collection.
+    async fn select_records(
+        &self,
+        _scope: &ScopeId,
+        _selection: &crate::RecordSelection,
+        _after_id: Option<&str>,
+        _limit: usize,
+    ) -> Result<Vec<Record>> {
+        Err(crate::EngineError::Storage(
+            "record selection is unsupported".into(),
+        ))
+    }
 
     async fn delete_record_projection(&self, key: &RecordKey) -> Result<()>;
 

@@ -72,6 +72,18 @@ describe('CreateRecordModal', () => {
     await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1))
   })
 
+  it('waits for durable creation before closing', async () => {
+    let persisted!: () => void
+    const local = new Promise<void>(resolve => { persisted = resolve })
+    const onClose = vi.fn()
+    render(<CreateRecordModal open onClose={onClose} onCreate={() => local} />)
+    fireEvent.change(screen.getByTestId('create-record-title'), { target: { value: 'Offline demo' } })
+    fireEvent.click(screen.getByTestId('create-record-submit'))
+    expect(onClose).not.toHaveBeenCalled()
+    persisted()
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1))
+  })
+
   it('closes from escape and backdrop interactions', () => {
     const onClose = vi.fn()
 

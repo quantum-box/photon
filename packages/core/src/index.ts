@@ -14,6 +14,7 @@ export type {
   CollectionMode,
   PhotonClient,
   PhotonClientOptions,
+  LocalRecordPage,
 } from './client.js'
 
 export { newId, uuidV7 } from './id.js'
@@ -40,6 +41,7 @@ export type {
   LocalStore,
   OperationStatusUpdate,
   StoreWrite,
+  MembershipWrite,
 } from './store.js'
 
 export { createSharedLocalStore, sharedStoreSupported } from './shared/index.js'
@@ -53,7 +55,7 @@ export type {
 } from './shared/index.js'
 
 export { createRestTransport, decisionForError } from './rest/index.js'
-export type { RestListResult, RestResource, RestTransportOptions } from './rest/index.js'
+export type { RestListResult, RestResource, RestOperationContext, RestTransportOptions } from './rest/index.js'
 
 export { createBackoff } from './sync/backoff.js'
 export type { Backoff, BackoffOptions } from './sync/backoff.js'
@@ -89,6 +91,7 @@ export type {
   HybridTimestamp,
   Mutation,
   MutationHandle,
+  MutationOptions,
   Operation,
   OperationId,
   OperationKind,
@@ -101,3 +104,6 @@ export type {
   StoredOperation,
   Unsubscribe,
 } from './types.js'
+
+export { normalizeSelection, validateSelection, sameSelection } from './selection.js'
+export type { RecordCheckpoint, OperationReceipt, RecordSelection, SelectionFilter, Scalar, RecordPageRequest, RecordPage, SelectionCursor, SelectionPullRequest, SelectionPullResult, SelectionRemoval, RemovalReason, SelectionState, SyncSubscription } from './selection.js'

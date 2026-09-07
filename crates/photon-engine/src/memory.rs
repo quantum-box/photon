@@ -157,6 +157,63 @@ impl StorageAdapter for MemoryAdapter {
         Ok((stored, projected))
     }
 
+    async fn append_authoritative_batch(
+        &self,
+        operations: Vec<Operation>,
+    ) -> Result<Vec<(StoredOperation, Record)>> {
+        let mut guard = self.write_state()?;
+        // Stage the entire batch under one lock. Failed projection or replay
+        // validation cannot consume sequences or publish a partial result.
+        let mut state = guard.clone();
+        let mut local = self.sequence.load(Ordering::SeqCst);
+        let mut remote = self.remote_sequence.load(Ordering::SeqCst);
+        let mut results = Vec::with_capacity(operations.len());
+        for operation in operations {
+            if let Some(existing) = state.operations.get(&operation.id) {
+                if !existing.operation.is_replay_of(&operation) {
+                    return Err(EngineError::Storage(
+                        "operation id reused with different payload".into(),
+                    ));
+                }
+                if existing.remote_sequence.is_some() {
+                    let record = state.records.get(&operation.key).cloned().ok_or_else(|| {
+                        EngineError::Storage("accepted projection is missing".into())
+                    })?;
+                    results.push((existing.clone(), record));
+                    continue;
+                }
+            }
+            let projected =
+                apply_operation(state.records.get(&operation.key).cloned(), &operation)?;
+            remote += 1;
+            let local_sequence = if let Some(existing) = state.operations.get(&operation.id) {
+                existing.local_sequence
+            } else {
+                local += 1;
+                state.operation_order.push(operation.id.clone());
+                local
+            };
+            let stored = StoredOperation {
+                operation,
+                status: OperationStatus::Accepted,
+                local_sequence,
+                remote_sequence: Some(remote),
+                received_at_ms: unix_time_ms(),
+            };
+            state
+                .operations
+                .insert(stored.operation.id.clone(), stored.clone());
+            state
+                .records
+                .insert(projected.key.clone(), projected.clone());
+            results.push((stored, projected));
+        }
+        *guard = state;
+        self.sequence.store(local, Ordering::SeqCst);
+        self.remote_sequence.store(remote, Ordering::SeqCst);
+        Ok(results)
+    }
+
     async fn next_remote_sequence(&self) -> Result<i64> {
         Ok(self.remote_sequence.load(Ordering::SeqCst) + 1)
     }
@@ -271,6 +328,48 @@ impl StorageAdapter for MemoryAdapter {
             .records
             .values()
             .filter(|record| &record.key.scope == scope && &record.key.collection == collection)
+            .cloned()
+            .collect())
+    }
+
+    async fn get_record_checkpoint(
+        &self,
+        key: &RecordKey,
+    ) -> Result<Option<crate::selection::RecordCheckpoint>> {
+        let state = self.read_state()?;
+        Ok(state
+            .records
+            .get(key)
+            .map(|record| crate::selection::RecordCheckpoint {
+                record: record.clone(),
+                sequence: state
+                    .operations
+                    .values()
+                    .filter(|op| &op.operation.key == key)
+                    .filter_map(|op| op.remote_sequence)
+                    .max()
+                    .unwrap_or(0),
+            }))
+    }
+
+    async fn select_records(
+        &self,
+        scope: &ScopeId,
+        selection: &crate::RecordSelection,
+        after_id: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<Record>> {
+        selection.validate()?;
+        Ok(self
+            .read_state()?
+            .records
+            .values()
+            .filter(|record| {
+                &record.key.scope == scope
+                    && record.key.record_id.as_str() > after_id.unwrap_or("")
+                    && selection.matches(record)
+            })
+            .take(limit.clamp(1, 1001))
             .cloned()
             .collect())
     }

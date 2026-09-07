@@ -40,6 +40,18 @@ pub enum PolicyVerdict {
 /// Host-supplied write authorization, consulted once per pushed operation.
 #[async_trait]
 pub trait EnginePolicy: Send + Sync {
+    /// Host-supplied read rule for scoped snapshots and deltas. Authorization
+    /// rules live outside the engine. Hosts must also emit a change/invalidation
+    /// when permissions change without a record mutation.
+    async fn authorize_read(
+        &self,
+        _grant: &TokenGrant,
+        _workspace: &WorkspaceScope,
+        _record: &photon_engine::Record,
+    ) -> bool {
+        true
+    }
+
     async fn authorize_operation(&self, ctx: OperationContext<'_>) -> PolicyVerdict;
 }
 

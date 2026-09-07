@@ -1,3 +1,4 @@
+import type { RecordPage, RecordPageRequest, SelectionState, RecordCheckpoint } from './selection.js'
 /**
  * Durable local storage.
  *
@@ -49,7 +50,22 @@ export interface LoadRecordsOptions {
 }
 
 /** One durable transaction. Everything inside commits or nothing does. */
+export interface MembershipWrite {
+  readonly scope: Scope
+  readonly subscriptionId: string
+  readonly collection: Collection
+  readonly recordId: RecordId
+  readonly remove?: boolean
+}
+
 export interface StoreWrite {
+  readonly evictions?: readonly { scope: Scope; collection: Collection; recordId: RecordId; deferred: boolean }[]
+  readonly deleteSelectionStates?: readonly { scope: Scope; id: string }[]
+  readonly selectionStates?: readonly SelectionState[]
+  readonly memberships?: readonly MembershipWrite[]
+  /** Server bases allow rollback without replaying an entire remote history. */
+  readonly bases?: readonly RecordCheckpoint[]
+  readonly deleteBases?: readonly { scope: Scope; collection: Collection; recordId: RecordId }[]
   /** Operations to append. Re-appending a known id is a no-op, not an error. */
   readonly operations?: readonly Operation[]
   readonly records?: readonly EngineRecord[]
@@ -71,6 +87,14 @@ export interface LocalStore {
 
   /** Every non-deleted record in the scope (or the slice `options` selects), for hydration. */
   loadRecords(scope: Scope, options?: LoadRecordsOptions): Promise<EngineRecord[]>
+
+  /** Optional extensions: scoped sync requires these, legacy stores remain valid. */
+  readRecordPage?(scope: Scope, request: RecordPageRequest): Promise<RecordPage>
+  getSelectionMembers?(scope: Scope, id: string, afterId: string | null, limit: number): Promise<string[]>
+  getSelectionState?(scope: Scope, id: string): Promise<SelectionState | null>
+  getRecordMemberships?(scope: Scope, collection: Collection, recordId: RecordId): Promise<string[]>
+  getDeferredEviction?(scope: Scope, collection: Collection, recordId: RecordId): Promise<boolean>
+  getRecordBase?(scope: Scope, collection: Collection, recordId: RecordId): Promise<RecordCheckpoint | null>
 
   /** Operations not yet accepted by the server, oldest first. */
   loadPendingOperations(scope: Scope): Promise<StoredOperation[]>

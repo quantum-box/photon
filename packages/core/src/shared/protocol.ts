@@ -33,6 +33,7 @@ export interface StoreChannel {
  * take everyone else's store down with it.
  */
 export type RemoteMethod =
+  | 'capabilities'
   | 'migrate'
   | 'loadRecords'
   | 'loadPendingOperations'
@@ -40,6 +41,12 @@ export type RemoteMethod =
   | 'loadOperationIds'
   | 'loadConflicts'
   | 'getCursor'
+  | 'readRecordPage'
+  | 'getSelectionState'
+  | 'getSelectionMembers'
+  | 'getRecordMemberships'
+  | 'getRecordBase'
+  | 'getDeferredEviction'
   | 'commit'
   | 'stats'
 
