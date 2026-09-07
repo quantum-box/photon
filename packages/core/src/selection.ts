@@ -38,6 +38,8 @@ export interface SelectionPullRequest {
   readonly selector: RecordSelection
   readonly cursor: SelectionCursor | null
   readonly limit: number
+  /** A bounded page of IDs already held by this subscription, for revocation checks. */
+  readonly knownRecordIds?: readonly string[]
   readonly pendingOperations?: readonly Operation[]
   readonly signal?: AbortSignal
 }
@@ -71,6 +73,7 @@ export interface SelectionState {
   /** Partial data must never masquerade as an empty, complete result. */
   readonly status: 'uninitialized' | 'partial' | 'complete'
   readonly updatedAtMs: number | null
+  readonly validationAfterId?: string | null
 }
 
 export interface SyncSubscription {

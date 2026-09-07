@@ -190,6 +190,18 @@ async function makeContexts(count: number): Promise<{
 }
 
 describe('shared local store', () => {
+  it('preserves missing optional capabilities in both owner and follower after migration', async () => {
+    const { contexts } = await makeContexts(2)
+    for (const context of contexts) {
+      await context.migrate()
+      expect(context.readRecordPage).toBeUndefined()
+      expect(context.getSelectionState).toBeUndefined()
+      await context.commit({ records: [record('legacy', {})] })
+      expect(await context.loadRecords('workspace:test')).toHaveLength(1)
+    }
+    await Promise.all(contexts.map(context => context.close()))
+  })
+
   it('opens the real store in exactly one context', async () => {
     const { contexts, store } = await makeContexts(3)
 

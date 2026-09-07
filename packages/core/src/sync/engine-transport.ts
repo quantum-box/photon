@@ -129,7 +129,7 @@ export function createEngineTransport(options: EngineTransportOptions): SyncTran
     supportsAtomic: options.atomic === true,
     async pullSelection(request) {
       return post<SelectionPullResult>(options.selectionPath ?? '/api/engine/selection', {
-        scope: request.scope, selector: request.selector, cursor: request.cursor, limit: request.limit, pendingOperations: request.pendingOperations ?? [],
+        scope: request.scope, selector: request.selector, cursor: request.cursor, limit: request.limit, knownRecordIds: request.knownRecordIds ?? [], pendingOperations: request.pendingOperations ?? [],
       }, request.signal)
     },
     async push(request: PushRequest): Promise<PushResult> {

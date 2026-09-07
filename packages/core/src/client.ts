@@ -325,8 +325,7 @@ class PhotonClientImpl implements PhotonClient {
         liveClients.delete(this.registryKey)
         throw new Error('scoped sync requires pageSize 1..1000 and a positive pageBudget')
       }
-      if (!transport?.pullSelection || !this.storage.readRecordPage || !this.storage.getSelectionState ||
-          !this.storage.getSelectionMembers || !this.storage.getRecordMemberships || !this.storage.getRecordBase || !this.storage.getDeferredEviction) {
+      if (!transport?.pullSelection) {
         liveClients.delete(this.registryKey)
         throw new Error('scoped sync requires selection transport and extended local storage')
       }
@@ -402,6 +401,10 @@ class PhotonClientImpl implements PhotonClient {
 
   async bootstrap(): Promise<void> {
     await this.storage.migrate()
+    if (this.selections && (!this.storage.readRecordPage || !this.storage.getSelectionState || !this.storage.getSelectionMembers || !this.storage.getRecordMemberships || !this.storage.getRecordBase || !this.storage.getDeferredEviction)) {
+      liveClients.delete(this.registryKey)
+      throw new Error('scoped sync requires extended local storage')
+    }
 
     // Lazy collections are the record-heavy ones; skipping them here is what
     // makes startup cost proportional to workspace structure, not data size.
@@ -479,7 +482,8 @@ class PhotonClientImpl implements PhotonClient {
       // make it look complete.
       if (
         this.lazyCollections.has(record.key.collection) &&
-        !this.hydratedLazyCollections.has(record.key.collection)
+        !this.hydratedLazyCollections.has(record.key.collection) &&
+        !(this.onDemandCollections.has(record.key.collection) && this.projection.get(record.key.collection, record.key.record_id))
       ) {
         continue
       }
@@ -488,6 +492,7 @@ class PhotonClientImpl implements PhotonClient {
     }
 
     for (const target of write.deleteRecords ?? []) {
+      this.accessOrder.delete(JSON.stringify([target.collection, target.recordId]))
       const change = this.projection.remove(target.collection, target.recordId)
       if (change) changes.push(change)
     }
@@ -986,7 +991,6 @@ class PhotonClientImpl implements PhotonClient {
           }
         }
         entry.resolve({ status: 'accepted', operationId: decision.operationId })
-        if (this.selections) void this.pruneDeferred(collection, recordId).catch(error => console.error('Photon: deferred eviction failed', error))
         break
       }
 
@@ -1021,6 +1025,7 @@ class PhotonClientImpl implements PhotonClient {
       }
     }
 
+    if (this.selections && reconciled) void this.pruneDeferred(collection, recordId).catch(error => console.error('Photon: deferred eviction failed', error))
     this.emit(decision.kind === 'rejected' ? 'rollback' : 'remote', changes)
   }
 
@@ -1035,16 +1040,33 @@ class PhotonClientImpl implements PhotonClient {
     collection: Collection,
     recordId: RecordId,
     origin: 'rollback' | 'remote',
+    persist = false,
+    resolveConflictId?: string,
   ): Promise<void> {
+    if (persist) return this.enqueueWrite(() => this.reprojectNow(collection, recordId, origin, true, resolveConflictId))
+    return this.reprojectNow(collection, recordId, origin, false)
+  }
+
+  private async reprojectNow(collection: Collection, recordId: RecordId, origin: 'rollback' | 'remote', persist: boolean, resolveConflictId?: string): Promise<void> {
     const accepted = await this.storage.loadAcceptedOperations(this.scope, collection, recordId)
     const base = this.options.sync?.mode === 'scoped' ? await this.storage.getRecordBase?.(this.scope, collection, recordId) : null
-    let rebuilt = base ? this.kernel.replay(base.record, accepted.filter(stored => stored.remoteSequence !== null && stored.remoteSequence > base.sequence).map(stored => stored.operation)) : this.kernel.replay(null, accepted.map(stored => stored.operation))
+    const acceptedBase = base ? this.kernel.replay(base.record, accepted.filter(stored => stored.remoteSequence !== null && stored.remoteSequence > base.sequence).map(stored => stored.operation)) : this.kernel.replay(null, accepted.map(stored => stored.operation))
+    let rebuilt = acceptedBase
     for (const entry of this.pending.values()) {
-      if (entry.operation.key.collection === collection && entry.operation.key.record_id === recordId) {
+      if ((!persist || this.durableOperationIds.has(entry.operation.id)) && entry.operation.key.collection === collection && entry.operation.key.record_id === recordId) {
         rebuilt = this.kernel.applyOperation(rebuilt, entry.operation)
       }
     }
 
+    if (persist) {
+      await this.storage.commit({ ...(rebuilt ? { records: [rebuilt] } : { deleteRecords: [{ scope: this.scope, collection, recordId }] }), ...(resolveConflictId ? { resolveConflictIds: [resolveConflictId] } : {}) })
+      if (resolveConflictId) this.conflictRows = this.conflictRows.filter(row => row.id !== resolveConflictId)
+      // Mutations may be optimistic while this durable commit is in flight.
+      rebuilt = acceptedBase
+      for (const entry of this.pending.values()) {
+        if (entry.operation.key.collection === collection && entry.operation.key.record_id === recordId) rebuilt = this.kernel.applyOperation(rebuilt, entry.operation)
+      }
+    }
     const changes: RecordChange[] = []
     if (rebuilt) {
       const change = this.projection.set(rebuilt, { durable: true })
@@ -1197,8 +1219,8 @@ class PhotonClientImpl implements PhotonClient {
     for (const recordId of recordIds) {
       if (this.projection.get(collection, recordId)?.pending || this.collectionQueries.get(collection)?.size ||
           [...(this.recordQueries.get(collection) ?? [])].some(q => q.recordId === recordId)) continue
+      this.accessOrder.delete(JSON.stringify([collection, recordId]))
       if (this.projection.remove(collection, recordId)) {
-        this.accessOrder.delete(JSON.stringify([collection, recordId]))
         count += 1
       }
     }
@@ -1241,6 +1263,7 @@ class PhotonClientImpl implements PhotonClient {
       if (members.length || [...this.pending.values()].some(entry => entry.operation.key.collection === collection && entry.operation.key.record_id === recordId)) return
       const target = { scope: this.scope, collection, recordId }
       await this.storage.commit({ deleteRecords: [target], deleteBases: [target], evictions: [{ ...target, deferred: false }] })
+      this.accessOrder.delete(JSON.stringify([collection, recordId]))
       const change = this.projection.remove(collection, recordId)
       if (change) this.emit('remote', [change])
     }).finally(() => { if (locked) this.unlockRemoval(key) })
@@ -1313,9 +1336,11 @@ class PhotonClientImpl implements PhotonClient {
         }
       }
       for (const entry of quarantine.values()) {
+        if (conflicts.some(conflict => conflict.operationId === entry.operation.id)) continue
+        const ownRemoval = entry.operation.key.collection === collection ? page.removals.find(removal => removal.recordId === entry.operation.key.record_id) : undefined
         const conflict: Conflict = {
           id: `${entry.operation.id}:conflict`, key: entry.operation.key, operationId: entry.operation.id,
-          reason: removal.reason, localValue: this.projection.get(entry.operation.key.collection, entry.operation.key.record_id)?.value ?? null,
+          reason: ownRemoval && ownRemoval.reason !== 'out_of_scope' ? ownRemoval.reason : 'atomic_batch_quarantined', localValue: this.projection.get(entry.operation.key.collection, entry.operation.key.record_id)?.value ?? null,
           remoteValue: null, createdAtMs: this.clock(),
         }
         conflicts.push(conflict)
@@ -1334,6 +1359,7 @@ class PhotonClientImpl implements PhotonClient {
         this.pending.delete(conflict.operationId)
         this.projection.releasePending(conflict.key.collection, conflict.key.record_id)
         entry.resolve({ status: 'conflict', operationId: conflict.operationId, conflictId: conflict.id })
+        void this.pruneDeferred(conflict.key.collection, conflict.key.record_id).catch(error => console.error('Photon: deferred eviction failed', error))
       }
     }
     const known = new Set(this.conflictRows.map(row => row.id))
@@ -1352,10 +1378,11 @@ class PhotonClientImpl implements PhotonClient {
       if (change) changes.push(change)
     }
     for (const target of deleteRecords) {
+      this.accessOrder.delete(JSON.stringify([collection, target.recordId]))
       const change = this.projection.remove(collection, target.recordId)
       if (change) changes.push(change)
     }
-    for (const [operationId, remoteSequence] of receipts) this.handleDecision({ kind: 'accepted', operationId, remoteSequence })
+    for (const [operationId, remoteSequence] of receipts) this.handleDecision({ kind: 'accepted', operationId, remoteSequence }, true)
     this.emit('remote', changes)
     this.trimCache()
   }
@@ -1372,6 +1399,10 @@ class PhotonClientImpl implements PhotonClient {
   async resolveConflict(conflictId: string, resolution: ConflictResolution): Promise<void> {
     const conflict = this.conflictRows.find((row) => row.id === conflictId)
     if (!conflict) return
+    if (resolution.keep === 'remote' && conflict.reason === 'atomic_batch_quarantined') {
+      await this.reproject(conflict.key.collection, conflict.key.record_id, 'rollback', true, conflictId)
+      return
+    }
 
     this.conflictRows = this.conflictRows.filter((row) => row.id !== conflictId)
     await this.commit({ resolveConflictIds: [conflictId] })

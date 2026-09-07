@@ -20,6 +20,8 @@ pub struct SelectionRequest {
     limit: usize,
     #[serde(default)]
     pending_operations: Vec<Operation>,
+    #[serde(default)]
+    known_record_ids: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -67,6 +69,21 @@ pub async fn pull_selection(
     {
         return Err(AppError::BadRequest("invalid pending operations".into()));
     }
+    if payload.known_record_ids.len() > 1000
+        || payload
+            .known_record_ids
+            .iter()
+            .any(|id| id.is_empty() || id.len() > 512)
+    {
+        return Err(AppError::BadRequest("invalid known record IDs".into()));
+    }
+    // These IDs came from the caller, so removals cannot enumerate unseen IDs.
+    let known: std::collections::BTreeSet<_> = payload
+        .known_record_ids
+        .iter()
+        .chain(payload.selector.record_ids.iter().flatten())
+        .cloned()
+        .collect();
     let store = state.engine.storage();
     let mut cursor = if let Some(cursor) = payload.cursor {
         if cursor.scope != payload.scope
@@ -94,6 +111,7 @@ pub async fn pull_selection(
     let mut records = Vec::new();
     let mut removals = Vec::new();
     let has_more;
+    let mut keys = std::collections::BTreeSet::new();
     if cursor.phase == "snapshot" {
         let mut page = store
             .select_records(
@@ -141,7 +159,6 @@ pub async fn pull_selection(
             })
             .await?;
         has_more = operations.len() == payload.limit;
-        let mut keys = std::collections::BTreeSet::new();
         for stored in operations {
             if let Some(sequence) = stored.remote_sequence {
                 cursor.position = cursor.position.max(sequence);
@@ -153,43 +170,60 @@ pub async fn pull_selection(
         if !has_more {
             cursor.position = cursor.position.max(high_watermark);
         }
-        for key in keys {
-            // ID-only interests must not reveal any unrelated IDs, even in
-            // removal notifications.
-            if payload
-                .selector
-                .record_ids
-                .as_ref()
-                .is_some_and(|ids| !ids.iter().any(|id| id == key.record_id.as_str()))
-            {
-                continue;
-            }
-            let record = store.get_record_checkpoint(&key).await?;
-            let reason = match record {
-                None => "deleted",
-                Some(checkpoint) => {
-                    let record = &checkpoint.record;
-                    if !state
-                        .policy
-                        .authorize_read(&grant, &workspace, record)
-                        .await
-                    {
-                        "revoked"
-                    } else if record.deleted_at.is_some() {
-                        "deleted"
-                    } else if !payload.selector.matches(record) {
-                        "out_of_scope"
-                    } else {
-                        records.push(checkpoint);
+    }
+    let changed = keys.clone();
+    // Recheck a bounded rotating page of held IDs even if its operation was
+    // passed by an earlier delta page, or permissions changed without a write.
+    for id in &payload.known_record_ids {
+        keys.insert(RecordKey::new(
+            payload.scope.clone(),
+            payload.selector.collection.clone(),
+            id.clone(),
+        ));
+    }
+    for key in keys {
+        if payload
+            .selector
+            .record_ids
+            .as_ref()
+            .is_some_and(|ids| !ids.iter().any(|id| id == key.record_id.as_str()))
+        {
+            continue;
+        }
+        let record = store.get_record_checkpoint(&key).await?;
+        let reason = match record {
+            None => "deleted",
+            Some(checkpoint) => {
+                let record = &checkpoint.record;
+                if !state
+                    .policy
+                    .authorize_read(&grant, &workspace, record)
+                    .await
+                {
+                    if !known.contains(key.record_id.as_str()) {
                         continue;
                     }
+                    "revoked"
+                } else if record.deleted_at.is_some() {
+                    "deleted"
+                } else if !payload.selector.matches(record) {
+                    "out_of_scope"
+                } else {
+                    if changed.contains(&key) && !records.iter().any(|r| r.record.key == key) {
+                        records.push(checkpoint);
+                    }
+                    continue;
                 }
-            };
-            removals.push(Removal {
-                record_id: key.record_id.to_string(),
-                reason,
-            });
+            }
+        };
+        if !known.contains(key.record_id.as_str()) {
+            continue;
         }
+        records.retain(|r| r.record.key != key);
+        removals.push(Removal {
+            record_id: key.record_id.to_string(),
+            reason,
+        });
     }
     let mut receipts = Vec::new();
     for operation in &payload.pending_operations {

@@ -16,6 +16,8 @@ const UPDATE_KEY_PREFIX = 'yjs:update:'
 const ENGINE_PROXY_PATHS = new Set([
   '/api/engine/push',
   '/api/engine/pull',
+  '/api/engine/selection',
+  '/api/engine/push-atomic',
   '/api/engine/debug',
 ])
 const MAX_PROXY_BODY_BYTES = 1024 * 1024
@@ -264,7 +266,7 @@ export default {
 
     if (ENGINE_PROXY_PATHS.has(url.pathname)) {
       const response = await proxyEngineRequest(request, env, url.pathname)
-      if (url.pathname === '/api/engine/push' && response.ok) {
+      if (['/api/engine/push', '/api/engine/push-atomic'].includes(url.pathname) && response.ok) {
         // Wake up the Live room's Engine sync loops right away instead of
         // leaving them to their poll interval. The push body carries no room
         // id, so only the default room is told; clients in other rooms fall

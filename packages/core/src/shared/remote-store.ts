@@ -125,6 +125,8 @@ export class RemoteLocalStore implements LocalStore {
     for (const entry of entries) entry.reject(new Error(reason))
   }
 
+  capabilities(): Promise<string[]> { return this.call('capabilities', []) }
+
   private call<T>(method: RemoteMethod, args: readonly unknown[]): Promise<T> {
     if (this.disposed) {
       return Promise.reject(new Error('this shared store follower is closed'))

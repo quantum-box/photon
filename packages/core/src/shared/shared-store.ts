@@ -37,6 +37,8 @@ import {
 } from './protocol.js'
 import { RemoteLocalStore } from './remote-store.js'
 
+const optionalMethods = ['readRecordPage', 'getSelectionState', 'getSelectionMembers', 'getRecordMemberships', 'getRecordBase', 'getDeferredEviction'] as const
+
 export interface SharedLocalStoreOptions {
   /**
    * Identifies the store, not the context. Every context that passes the same
@@ -288,6 +290,8 @@ class SharedStore implements SharedLocalStore {
     const local = this.local
     if (!local) return Promise.reject(new Error('this context does not own the shared store'))
     switch (method) {
+      case 'capabilities':
+        return Promise.resolve(optionalMethods.filter(method => typeof local[method] === 'function'))
       case 'migrate':
         return local.migrate()
       case 'loadRecords':
@@ -370,8 +374,14 @@ class SharedStore implements SharedLocalStore {
     return this.local ?? this.remote
   }
 
-  migrate(): Promise<void> {
-    return this.backend().migrate()
+  async migrate(): Promise<void> {
+    await this.backend().migrate()
+    const capabilities = this.local ? optionalMethods.filter(method => typeof this.local![method] === 'function') : await this.remote.capabilities()
+    // Capability checks happen after migration, including for followers. An
+    // older adapter must retain the full-sync client's loadRecords fallback.
+    for (const method of optionalMethods) {
+      if (!capabilities.includes(method)) Object.defineProperty(this, method, { value: undefined, configurable: true })
+    }
   }
 
   loadRecords(scope: Scope, options?: LoadRecordsOptions): Promise<EngineRecord[]> {

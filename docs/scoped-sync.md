@@ -107,18 +107,15 @@ than concurrently driving the same subscription ID in multiple clients.
 The pull protocol distinguishes `out_of_scope`, `deleted` and `revoked`.
 Scope exit drops one membership; other interests retain the row. A pending edit
 survives scope exit and restart, then the unretained cache is reclaimed after
-acknowledgement. Deletion/access loss removes the displayed projection and all
+any terminal decision (after conflict evidence is saved). Deletion/access loss removes the displayed projection and all
 memberships and turns unaccepted edits into durable conflicts, stopping automatic
-resend. Atomic siblings are quarantined together. The conflict retains the local
+resend. Atomic siblings are quarantined together; choosing remote for an accessible sibling restores its accepted base without creating a new write. The conflict retains the local
 value for recovery; this is not secure erasure of previously downloaded content.
 
 `EnginePolicy.authorize_read` lets the host filter selected records. It defaults
 to allow, matching the existing trusted-service deployment model. Authentication
 and scope checks still run before selection. Selectors cannot grant permission.
-When permissions change independently of record writes, the host must publish a
-record change/invalidation through its integration, or reset/revalidate the
-interest. The record operation feed cannot discover an external ACL change on
-its own. Hosts needing cryptographic revocation must manage cache encryption and
+Each pull also validates a rotating page of up to 200 already-held IDs, with its progress persisted across restart. Revocations only name IDs supplied by the caller, so broad subscriptions cannot enumerate unseen unauthorized records. Held-record access loss is eventually discovered without a record write; immediate revocation and newly granted access still require host invalidation or resetting the interest. Hosts needing cryptographic revocation must manage cache encryption and
 keys outside this feature.
 
 ## Stable REST operation context

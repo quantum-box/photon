@@ -33,6 +33,7 @@ export interface StoreChannel {
  * take everyone else's store down with it.
  */
 export type RemoteMethod =
+  | 'capabilities'
   | 'migrate'
   | 'loadRecords'
   | 'loadPendingOperations'

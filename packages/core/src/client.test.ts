@@ -739,6 +739,20 @@ describe('writes from another context', () => {
     })
   }
 
+  it('updates pinned on-demand records from another context without hydrating unloaded rows', async () => {
+    const store = sharedStore()
+    store.seedRecord(engineRecord('records', 'r1', { n: 1 }))
+    const client = await makeClient({ storage: store, collections: { records: { mode: 'engine-native', hydration: 'on-demand' } } })
+    const row = client.liveRecord('records', 'r1')
+    await row.ready()
+    await store.fromAnotherContext({ records: [engineRecord('records', 'r1', { n: 2 }), engineRecord('records', 'unloaded', {})] })
+    await tick()
+    expect(row.getSnapshot().data?.value).toEqual({ n: 2 })
+    expect(client.evictRecords('records', ['unloaded'])).toBe(0)
+    row.destroy()
+    await client.close()
+  })
+
   it("projects another context's record without waiting for the server", async () => {
     const store = sharedStore()
     const client = await makeClient({ storage: store })
@@ -1221,4 +1235,118 @@ it('orders a slow local page before a revocation so the page cannot resurrect it
   expect(record.getSnapshot().data).toBeNull()
   record.destroy()
   await client.close()
+})
+
+it('accepts snapshot progress in server collation order', async () => {
+  let page = 0
+  const transport = selectionTransport(async request => {
+    const id = ['a', 'B'][page++]
+    return { records: id ? [checkpoint(id, {})] : [], removals: [], cursor: { scope: 'workspace:test', selector: request.selector, phase: id ? 'snapshot' : 'delta', position: 2, afterId: id ?? null }, hasMore: !!id }
+  })
+  const client = await makeClient({ transport, sync: { mode: 'scoped', autoStart: false } })
+  const sub = client.subscribeSync('mixed-case', { collection: 'records' })
+  await sub.refresh()
+  expect(sub.getSnapshot().status).toBe('complete')
+  expect((await client.readPage({ collection: 'records', limit: 10 })).data).toHaveLength(2)
+  await client.close()
+})
+
+it('refreshes valid subscriptions after an earlier selector fails', async () => {
+  const transport = selectionTransport(async request => {
+    if (request.selector.collection === 'broken') throw new Error('selector unavailable')
+    return { records: [checkpoint('a', {})], removals: [], cursor: { scope: 'workspace:test', selector: request.selector, phase: 'delta', position: 1, afterId: null }, hasMore: false }
+  })
+  const client = await makeClient({ transport, sync: { mode: 'scoped', autoStart: false } })
+  const broken = client.subscribeSync('bad', { collection: 'broken' })
+  const good = client.subscribeSync('good', { collection: 'records' })
+  await client.sync.syncNow()
+  expect(broken.getSnapshot().error?.message).toContain('unavailable')
+  expect(good.getSnapshot().status).toBe('complete')
+  await client.close()
+})
+
+it.each(['rejected', 'conflict'] as const)('prunes deferred records after a %s decision while preserving recovery evidence', async kind => {
+  const store = memoryStore()
+  let remove = false
+  const transport: SyncTransport = { ...selectionTransport(async request => ({ records: remove ? [] : [checkpoint('a', { n: 1 })], removals: remove ? [{ recordId: 'a', reason: 'out_of_scope' }] : [], cursor: { scope: 'workspace:test', selector: request.selector, phase: 'delta', position: 2, afterId: null }, hasMore: false })), push: async request => ({ decisions: request.operations.map(op => ({ kind, operationId: op.id, reason: 'denied' })) }) }
+  const client = await makeClient({ storage: store, transport, sync: { mode: 'scoped', autoStart: false } })
+  const sub = client.subscribeSync('s', { collection: 'records' })
+  await sub.refresh()
+  await client.patch('records', 'a', { n: 2 }).local
+  remove = true
+  await sub.refresh()
+  await client.sync.syncNow()
+  await tick(); await tick()
+  expect((await store.loadRecords('workspace:test'))).toHaveLength(0)
+  expect(await store.getDeferredEviction!('workspace:test', 'records', 'a')).toBe(false)
+  if (kind === 'conflict') expect(client.conflicts()[0]?.localValue).toEqual({ n: 2 })
+  await client.close()
+})
+
+it.each([false, true])('restores an accessible atomic sibling durably after quarantine (concurrent edit: %s)', async concurrent => {
+  const store = memoryStore()
+  let remove = false
+  const transport: SyncTransport = { ...selectionTransport(async request => ({ records: remove ? [] : ['a', 'b'].map(id => checkpoint(id, { n: 1 })), removals: remove ? [{ recordId: 'a', reason: 'revoked' }] : [], cursor: { scope: 'workspace:test', selector: request.selector, phase: 'delta', position: 2, afterId: null }, hasMore: false })), supportsAtomic: true }
+  const client = await makeClient({ storage: store, transport, sync: { mode: 'scoped', autoStart: false } })
+  const sub = client.subscribeSync('s', { collection: 'records' })
+  await sub.refresh()
+  await client.transact(['a', 'b'].map(recordId => ({ collection: 'records', recordId, kind: { type: 'upsert' as const, value: { n: 2 } } })), { atomic: true }).local
+  remove = true; await sub.refresh()
+  const sibling = client.conflicts().find(row => row.key.record_id === 'b')!
+  expect(sibling.reason).toBe('atomic_batch_quarantined')
+  let release!: () => void
+  let entered!: () => void
+  const blocked = new Promise<void>(resolve => { release = resolve })
+  const reading = new Promise<void>(resolve => { entered = resolve })
+  const original = store.loadAcceptedOperations
+  if (concurrent) store.loadAcceptedOperations = async (...args) => { entered(); await blocked; return original(...args) }
+  const resolving = client.resolveConflict(sibling.id, { keep: 'remote' })
+  let concurrentLocal: Promise<unknown> | undefined
+  if (concurrent) {
+    await reading
+    concurrentLocal = client.increment('records', 'b', 'n', 1).local
+    release()
+  }
+  await resolving
+  await concurrentLocal
+  expect((await store.loadRecords('workspace:test')).find(row => row.key.record_id === 'b')?.value).toEqual({ n: concurrent ? 2 : 1 })
+  expect(store.writes.some(write => write.resolveConflictIds?.includes(sibling.id) && write.records?.some(record => record.key.record_id === 'b'))).toBe(true)
+  expect(client.pendingCount()).toBe(concurrent ? 1 : 0)
+  await client.close()
+})
+
+it('retains newly read cache rows after a prior row was removed', async () => {
+  const store = memoryStore()
+  let remove = false
+  const transport = selectionTransport(async request => ({ records: remove ? [] : ['a', 'b'].map(id => checkpoint(id, {})), removals: remove ? [{ recordId: 'a', reason: 'deleted' }] : [], cursor: { scope: 'workspace:test', selector: request.selector, phase: 'delta', position: 2, afterId: null }, hasMore: false }))
+  const client = await makeClient({ storage: store, transport, sync: { mode: 'scoped', autoStart: false }, collections: { records: { mode: 'engine-native', hydration: 'on-demand' } }, cache: { maxRecords: 1 } })
+  const sub = client.subscribeSync('s', { collection: 'records' })
+  await sub.refresh()
+  await client.readPage({ collection: 'records', recordIds: ['a'], limit: 1 })
+  remove = true; await sub.refresh()
+  await client.readPage({ collection: 'records', recordIds: ['b'], limit: 1 })
+  expect(client.evictRecords('records', ['b'])).toBe(1)
+  await client.close()
+})
+
+it('revalidates held IDs in bounded pages and resumes that scan after restart', async () => {
+  const store = memoryStore()
+  const selector = { collection: 'records' }
+  await store.commit({ memberships: Array.from({ length: 401 }, (_, i) => ({ scope: 'workspace:test', subscriptionId: 's', collection: 'records', recordId: String(i).padStart(3, '0') })) })
+  const seen: string[][] = []
+  const transport = selectionTransport(async request => {
+    seen.push([...(request.knownRecordIds ?? [])])
+    return { records: [], removals: [], cursor: { scope: 'workspace:test', selector, phase: 'delta', position: 1, afterId: null }, hasMore: false }
+  })
+  const first = await makeClient({ storage: store, transport, sync: { mode: 'scoped', autoStart: false } })
+  await first.subscribeSync('s', selector).refresh()
+  await first.close()
+  const second = await makeClient({ storage: store, transport, sync: { mode: 'scoped', autoStart: false } })
+  const sub = second.subscribeSync('s', selector)
+  await sub.refresh(); await sub.refresh(); await sub.refresh()
+  expect(seen.map(ids => ids.length)).toEqual([200, 200, 1, 200])
+  expect(seen[1]?.[0]).toBe('200')
+  expect(seen[2]).toEqual(['400'])
+  expect(seen[3]?.[0]).toBe('000')
+  await second.close()
 })

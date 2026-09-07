@@ -72,7 +72,7 @@ async fn scoped_http_pages_and_catches_writes_before_the_snapshot_keyset() {
         let (status, page) = scoped_post(
             app.clone(),
             "/api/engine/selection",
-            serde_json::json!({"scope":scope,"selector":selector,"cursor":cursor,"limit":1}),
+            serde_json::json!({"scope":scope,"selector":selector,"cursor":cursor,"limit":1,"knownRecordIds":["b"]}),
         )
         .await;
         assert_eq!(status, StatusCode::OK, "{page}");
@@ -200,4 +200,58 @@ async fn atomic_http_rejects_all_members_when_one_policy_check_fails() {
         .unwrap()
         .is_none());
     assert_eq!(state.engine.next_remote_sequence().await.unwrap(), 1);
+}
+
+#[tokio::test]
+async fn scoped_revocations_only_name_caller_known_ids_and_recheck_held_ids() {
+    struct ReadPolicy;
+    #[async_trait]
+    impl EnginePolicy for ReadPolicy {
+        async fn authorize_operation(&self, _: OperationContext<'_>) -> PolicyVerdict {
+            PolicyVerdict::Allow
+        }
+        async fn authorize_read(
+            &self,
+            _: &crate::auth::TokenGrant,
+            _: &crate::auth::WorkspaceScope,
+            record: &photon_engine::Record,
+        ) -> bool {
+            record.value["visible"] == true
+        }
+    }
+    let state = test_state_with(AuthConfig::disabled(), Arc::new(ReadPolicy)).await;
+    let app = engine_routes().with_state(state.clone());
+    let scope = "tenant:test:workspace:main";
+    for id in ["never-seen", "previously-held"] {
+        state
+            .engine
+            .accept_authoritative_operation(Operation::new(
+                RecordKey::new(scope, "records", id),
+                "test",
+                OperationKind::Upsert {
+                    value: serde_json::json!({"visible":false}),
+                },
+            ))
+            .await
+            .unwrap();
+    }
+    let selector = serde_json::json!({"collection":"records"});
+    let cursor = serde_json::json!({"scope":scope,"selector":selector,"phase":"delta","position":0,"afterId":null});
+    let (status, page) = scoped_post(
+        app.clone(),
+        "/api/engine/selection",
+        serde_json::json!({"scope":scope,"selector":selector,"cursor":cursor,"limit":100}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert!(page["records"].as_array().unwrap().is_empty());
+    assert!(page["removals"].as_array().unwrap().is_empty());
+    // The cursor already passed both writes. Held-ID validation still removes
+    // the revoked record and never exposes the other, unknown record ID.
+    let (status, checked) = scoped_post(app, "/api/engine/selection", serde_json::json!({"scope":scope,"selector":selector,"cursor":page["cursor"],"limit":100,"knownRecordIds":["previously-held"]})).await;
+    assert_eq!(status, StatusCode::OK, "{checked}");
+    assert_eq!(
+        checked["removals"],
+        serde_json::json!([{"recordId":"previously-held","reason":"revoked"}])
+    );
 }

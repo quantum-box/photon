@@ -31,7 +31,7 @@ packages/core、packages/store-pglite、shared-store、crates/photon-engine、cr
 
 業務コマンド/ERPルール、認証プロバイダ、外部APIの冪等性実装、独立したACL変更feed、Fieldへの組込みはホストの責務。既存の全量同期は維持。atomicはサーバ側のoperation/projection受理であり、別々の購読ページをまとめて配信する保証ではない。未送信操作とconflictの値を保持するため、データ回収は暗号学的消去ではない。
 
-公開npmパッケージをmainの0.3.0から0.4.0へminor更新。Rust workspaceの独立バージョンは変更しない。Ready PR用にこのディレクトリへ移動。UI変更なしのためスクリーンショット・ブラウザE2Eは対象外。
+公開npmパッケージをmainの0.3.0から0.4.0へminor更新。Rust workspaceの独立バージョンは変更しない。Ready PR用にこのディレクトリへ移動。見た目の変更はない。Browser E2Eの追加検証と修正は下記。
 
 ## PR CIでの追加修正
 
@@ -42,3 +42,19 @@ packages/core、packages/store-pglite、shared-store、crates/photon-engine、cr
 2回目CIではオフラインwriterの再読込は成功し、同一ブラウザ2タブのモーダル待ちが15秒でタイムアウトした。再実行CIは全件成功。ローカル計測で、画面描画後の共有PGlite初回起動が28〜31秒かかり、起動後の保存と同期は成功することを確認。該当E2Eの保存完了待ちを60秒、全体上限を180秒へ調整し、永続化・他タブ同期のassertionは維持した。診断ログは除去。
 
 調整後の同一ブラウザ2タブE2Eは、診断コードなしで3回連続成功（44.9秒、44.4秒、33.8秒）。対象ESLintとdiff checkも成功。
+
+## PRレビュー対応
+
+9件の指摘を検証して修正した。
+
+- SnapshotのafterId比較はサーバーの照合順序を尊重し、同一cursorの停止は検出する。
+- 1つのselectorが失敗しても残りの購読をrefreshする。
+- Atomic siblingの隔離理由を実際の削除・失効と区別する。remote採用は受理済みbaseの復元とconflict解決を同じ永続commitにし、同時編集の二重適用も防ぐ。
+- 削除・解放されたレコードをLRU索引からも外す。
+- Edge proxyにselection/push-atomicを追加し、atomic受理後もLive通知する。
+- 共有ストアはmigration後にownerのoptional capabilityをRPCで確認し、古いadapterの全量同期fallbackを維持する。
+- 読込済みon-demandレコードには別タブの更新を適用する。
+- 未取得・未認可のIDを失効通知に含めない。保持済みIDを200件ずつ再検証し、走査位置を再起動後も引き継ぐ。
+- 拒否・競合を含む終端decisionで、復旧用conflictを保存後にdeferred cacheを回収する。
+
+追加検証: Core 134 tests、photon-axum 40 tests、全package build/workspace type-check、対象ESLint、axum clippyが成功。実HTTP/WASM/filesystem PGlite smokeの8シナリオも再成功。ローカルworkerdからnative serverへのselectionは認証なし401、atomic push受理200、Live hint受信、保存レコードのselection取得200を確認。検証サーバーと使い捨てWorker stateは停止・削除済み。

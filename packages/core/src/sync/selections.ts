@@ -38,7 +38,9 @@ export class SelectionManager {
   }
 
   async refreshAll(): Promise<void> {
-    for (const handle of this.handles.values()) await handle.refresh()
+    const results = await Promise.allSettled([...this.handles.values()].map(handle => handle.refresh()))
+    const failed = results.find(result => result.status === 'rejected')
+    if (failed?.status === 'rejected') throw failed.reason
   }
 
   async drain(): Promise<void> { await this.tail }
@@ -89,19 +91,22 @@ class SelectionSubscription implements SyncSubscription {
       for (let pageNumber = 0; pageNumber < this.options.pageBudget; pageNumber++) {
         if (this.closed) return
         const previous = this.snapshot.cursor
+        let knownRecordIds = await this.options.store.getSelectionMembers!(this.options.scope, this.snapshot.id, this.snapshot.validationAfterId ?? null, 200)
+        if (!knownRecordIds.length && this.snapshot.validationAfterId) knownRecordIds = await this.options.store.getSelectionMembers!(this.options.scope, this.snapshot.id, null, 200)
         const pending = this.options.pendingOperations()
         if (pending.length > 1000) throw new Error('drain the pending queue below 1001 operations before a scoped pull')
         const page = await this.options.transport.pullSelection!({
           scope: this.options.scope, selector: this.snapshot.selector, cursor: previous,
-          limit: this.options.pageSize, pendingOperations: pending, signal: this.controller.signal,
+          limit: this.options.pageSize, knownRecordIds, pendingOperations: pending, signal: this.controller.signal,
         })
         if (this.closed) return
         if (page.cursor.scope !== this.options.scope || !sameSelection(page.cursor.selector, this.snapshot.selector) ||
             !['snapshot', 'delta'].includes(page.cursor.phase) ||
             !Number.isSafeInteger(page.cursor.position) || page.cursor.position < (previous?.position ?? 0) ||
             (!page.hasMore && page.cursor.phase !== 'delta')) throw new Error('invalid selection cursor')
+        // afterId is a server keyset token: database collation need not match UTF-16 ordering.
         if ((previous?.phase === 'delta' && page.cursor.phase === 'snapshot') ||
-            (previous?.phase === 'snapshot' && page.cursor.phase === 'snapshot' && (!page.cursor.afterId || page.cursor.afterId <= (previous.afterId ?? '')))) throw new Error('selection cursor regressed')
+            (previous?.phase === 'snapshot' && page.cursor.phase === 'snapshot' && (!page.cursor.afterId || page.cursor.afterId === previous.afterId))) throw new Error('selection cursor regressed')
         const recordIds = new Set(page.records.map(r => r.record.key.record_id))
         const removedIds = new Set(page.removals.map(r => r.recordId))
         if (recordIds.size !== page.records.length || removedIds.size !== page.removals.length || page.removals.some(r => recordIds.has(r.recordId) || !['deleted', 'out_of_scope', 'revoked'].includes(r.reason))) throw new Error('invalid selection records/removals')
@@ -111,6 +116,7 @@ class SelectionSubscription implements SyncSubscription {
         if (page.hasMore && JSON.stringify(page.cursor) === JSON.stringify(previous)) throw new Error('selection cursor made no progress')
         const state: SelectionState = {
           scope: this.snapshot.scope, id: this.snapshot.id, selector: this.snapshot.selector,
+          validationAfterId: knownRecordIds.at(-1) ?? null,
           cursor: page.cursor, status: page.hasMore ? 'partial' : 'complete', updatedAtMs: this.options.clock(),
         }
         await this.options.apply(page, state)
