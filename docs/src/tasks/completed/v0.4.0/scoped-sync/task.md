@@ -32,3 +32,9 @@ packages/core、packages/store-pglite、shared-store、crates/photon-engine、cr
 業務コマンド/ERPルール、認証プロバイダ、外部APIの冪等性実装、独立したACL変更feed、Fieldへの組込みはホストの責務。既存の全量同期は維持。atomicはサーバ側のoperation/projection受理であり、別々の購読ページをまとめて配信する保証ではない。未送信操作とconflictの値を保持するため、データ回収は暗号学的消去ではない。
 
 公開npmパッケージをmainの0.3.0から0.4.0へminor更新。Rust workspaceの独立バージョンは変更しない。Ready PR用にこのディレクトリへ移動。UI変更なしのためスクリーンショット・ブラウザE2Eは対象外。
+
+## PR CIでの追加修正
+
+最初のBrowser E2Eは24/25成功。2つのオフラインwriterの再読込で片方のレコードが消えた。databases routeが作成Promiseを返さずモーダルのawaitを無効化していたため、Promiseを返し戻り型も明記した。保存完了まで閉じない回帰テストを追加。見た目の変更はない。修正後のCIで再検証する。
+
+追加のCreateRecordModalテスト5件と対象ESLintが成功。ローカルPlaywrightはRustサーバの初回コンパイル中にwebServer起動上限120秒に達し、ブラウザテスト未実行。修正後CIのBrowser E2Eを確認する。

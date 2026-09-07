@@ -344,8 +344,8 @@ function DatabasesLayout() {
   )
 
   const handleCreateRecordInDatabase = useCallback(
-    (data: Parameters<typeof handleCreateRecord>[0]) => {
-      handleCreateRecord({
+    (data: Parameters<typeof handleCreateRecord>[0]): Promise<void> => {
+      return handleCreateRecord({
         ...data,
         project: selectedDatabase?.label ?? data.project,
       })
