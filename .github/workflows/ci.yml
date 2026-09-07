@@ -13,7 +13,7 @@ concurrency:
 jobs:
   playground:
     name: Frontend checks
-    runs-on: ubuntu-latest
+    runs-on: tachyoncloud-4vcpu
 
     steps:
       - uses: actions/checkout@v6
@@ -23,9 +23,6 @@ jobs:
           node-version: 22
           cache: npm
 
-      - name: Install dependencies
-        run: npm ci
-
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
@@ -33,6 +30,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - uses: jetli/wasm-pack-action@v0.4.0
+
+      # npm ci runs the root `prepare` script, which builds the WASM kernel
+      # through wasm-pack. Cargo has to exist before the install, not after.
+      - name: Install dependencies
+        run: npm ci
 
       - name: Build WASM kernel
         run: npm run engine:wasm
@@ -60,7 +62,7 @@ jobs:
 
   e2e:
     name: Browser E2E
-    runs-on: ubuntu-latest
+    runs-on: tachyoncloud-4vcpu
 
     steps:
       - uses: actions/checkout@v6
@@ -101,7 +103,7 @@ jobs:
 
   rust:
     name: Backend checks
-    runs-on: ubuntu-latest
+    runs-on: tachyoncloud-4vcpu
 
     steps:
       - uses: actions/checkout@v6
@@ -135,7 +137,7 @@ jobs:
 
   rust-features:
     name: Rust feature matrix
-    runs-on: ubuntu-latest
+    runs-on: tachyoncloud
     # Workspace-wide clippy unifies features, which hides a broken feature gate.
     # Check photon-engine's feature combinations on their own.
     strategy:
@@ -168,7 +170,7 @@ jobs:
 
   rust-mysql:
     name: MySQL storage contract
-    runs-on: ubuntu-latest
+    runs-on: tachyoncloud
     # The production storage path. Without a real MySQL in CI the adapter's
     # contract test silently skips and mysql.rs ships unexecuted.
     services:
@@ -201,7 +203,7 @@ jobs:
 
   wasm:
     name: Photon Engine WASM
-    runs-on: ubuntu-latest
+    runs-on: tachyoncloud
     # Nothing else in CI proves the kernel still compiles for wasm32, and the
     # browser client cannot run without it.
     steps:
@@ -225,7 +227,7 @@ jobs:
 
   pack-smoke:
     name: Package contract
-    runs-on: ubuntu-latest
+    runs-on: tachyoncloud
     # `prepare` + workspaces + subpath exports interact in ways that are easy to
     # get wrong and invisible until a consumer installs. Install the real
     # tarball into a scratch app, then import, run, and type-check it.
