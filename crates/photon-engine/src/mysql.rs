@@ -333,137 +333,22 @@ impl StorageAdapter for MySqlAdapter {
         operation: Operation,
     ) -> Result<(StoredOperation, Record)> {
         let mut transaction = self.pool.begin().await?;
-
-        // `FOR UPDATE` on the singleton row is the authority lock. Every other
-        // acceptance — in this process or any other sharing this database —
-        // waits here, so sequence allocation and commit stay in the same order.
-        // Held until commit, not just until the read returns.
-        let next_sequence = sqlx::query_scalar::<_, i64>(
-            r#"
-            SELECT next_sequence
-            FROM photon_engine_sync_state
-            WHERE id = 1
-            FOR UPDATE
-            "#,
-        )
-        .fetch_one(&mut *transaction)
-        .await?;
-
-        let existing = sqlx::query(
-            r#"
-            SELECT local_sequence, operation_json, status, remote_sequence, received_at_ms
-            FROM photon_engine_operations
-            WHERE operation_id = ?
-            "#,
-        )
-        .bind(operation.id.as_str())
-        .fetch_optional(&mut *transaction)
-        .await?
-        .map(stored_operation_from_row)
-        .transpose()?;
-
-        if let Some(existing) = &existing {
-            if !existing.operation.is_replay_of(&operation) {
-                return Err(EngineError::Storage(format!(
-                    "operation id {} was reused with a different payload",
-                    operation.id
-                )));
-            }
-            if existing.remote_sequence.is_some() {
-                // Already accepted. Return the committed projection rather than
-                // replaying a non-idempotent kind.
-                let record = match read_record(&mut transaction, &existing.operation.key).await? {
-                    Some(record) => record,
-                    None => {
-                        let record = apply_operation(None, &existing.operation)?;
-                        write_record(&mut transaction, &record).await?;
-                        record
-                    }
-                };
-                let stored = existing.clone();
-                transaction.commit().await?;
-                return Ok((stored, record));
-            }
-        }
-
-        sqlx::query(
-            r#"
-            UPDATE photon_engine_sync_state
-            SET next_sequence = next_sequence + 1
-            WHERE id = 1
-            "#,
-        )
-        .execute(&mut *transaction)
-        .await?;
-
-        if existing.is_some() {
-            // The payload is rewritten, not just the status: the row may hold
-            // the unstamped copy this authority queued locally, and
-            // `is_replay_of` deliberately ignores the audit key, so keeping the
-            // stored payload would accept the operation while dropping the
-            // audit record of who was authorized to push it.
-            sqlx::query(
-                r#"
-                UPDATE photon_engine_operations
-                SET status = 'accepted',
-                    remote_sequence = ?,
-                    operation_json = ?
-                WHERE operation_id = ?
-                "#,
-            )
-            .bind(next_sequence)
-            .bind(serde_json::to_string(&operation)?)
-            .bind(operation.id.as_str())
-            .execute(&mut *transaction)
-            .await?;
-        } else {
-            sqlx::query(
-                r#"
-                INSERT INTO photon_engine_operations (
-                    operation_id,
-                    scope,
-                    collection,
-                    record_id,
-                    actor_id,
-                    status,
-                    remote_sequence,
-                    received_at_ms,
-                    operation_json
-                )
-                VALUES (?, ?, ?, ?, ?, 'accepted', ?, ?, ?)
-                "#,
-            )
-            .bind(operation.id.as_str())
-            .bind(operation.key.scope.as_str())
-            .bind(operation.key.collection.as_str())
-            .bind(operation.key.record_id.as_str())
-            .bind(operation.actor_id.as_str())
-            .bind(next_sequence)
-            .bind(unix_time_ms())
-            .bind(serde_json::to_string(&operation)?)
-            .execute(&mut *transaction)
-            .await?;
-        }
-
-        let stored = sqlx::query(
-            r#"
-            SELECT local_sequence, operation_json, status, remote_sequence, received_at_ms
-            FROM photon_engine_operations
-            WHERE operation_id = ?
-            "#,
-        )
-        .bind(operation.id.as_str())
-        .fetch_one(&mut *transaction)
-        .await
-        .map_err(EngineError::from)
-        .and_then(stored_operation_from_row)?;
-
-        let current = read_record(&mut transaction, &stored.operation.key).await?;
-        let projected = apply_operation(current, &stored.operation)?;
-        write_record(&mut transaction, &projected).await?;
-
+        let result = accept_in_transaction(&mut transaction, operation).await?;
         transaction.commit().await?;
-        Ok((stored, projected))
+        Ok(result)
+    }
+
+    async fn append_authoritative_batch(
+        &self,
+        operations: Vec<Operation>,
+    ) -> Result<Vec<(StoredOperation, Record)>> {
+        let mut transaction = self.pool.begin().await?;
+        let mut result = Vec::with_capacity(operations.len());
+        for operation in operations {
+            result.push(accept_in_transaction(&mut transaction, operation).await?);
+        }
+        transaction.commit().await?;
+        Ok(result)
     }
 
     async fn next_remote_sequence(&self) -> Result<i64> {
@@ -626,6 +511,51 @@ impl StorageAdapter for MySqlAdapter {
             .map(|row| {
                 let record_json: String = row.try_get("record_json")?;
                 Ok(serde_json::from_str(&record_json)?)
+            })
+            .collect()
+    }
+
+    async fn get_record_checkpoint(
+        &self,
+        key: &RecordKey,
+    ) -> Result<Option<crate::selection::RecordCheckpoint>> {
+        let row = sqlx::query("SELECT r.record_json, COALESCE((SELECT MAX(o.remote_sequence) FROM photon_engine_operations o WHERE o.scope = r.scope AND o.collection = r.collection AND o.record_id = r.record_id AND o.status = 'accepted'), 0) AS sequence FROM photon_engine_records r WHERE r.scope = ? AND r.collection = ? AND r.record_id = ?")
+            .bind(key.scope.as_str()).bind(key.collection.as_str()).bind(key.record_id.as_str()).fetch_optional(&self.pool).await?;
+        row.map(|row| {
+            let json: String = row.try_get("record_json")?;
+            Ok(crate::selection::RecordCheckpoint {
+                record: serde_json::from_str(&json)?,
+                sequence: row.try_get("sequence")?,
+            })
+        })
+        .transpose()
+    }
+
+    async fn select_records(
+        &self,
+        scope: &ScopeId,
+        selection: &crate::RecordSelection,
+        after_id: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<Record>> {
+        selection.validate()?;
+        let (predicate, params) = crate::selection::selection_sql(selection, true);
+        let sql = format!("SELECT record_json FROM photon_engine_records WHERE scope = ? AND collection = ? AND record_id > ? AND ({predicate}) ORDER BY record_id ASC LIMIT ?");
+        let mut query = sqlx::query(&sql)
+            .bind(scope.as_str())
+            .bind(selection.collection.as_str())
+            .bind(after_id.unwrap_or(""));
+        for param in params {
+            query = query.bind(param);
+        }
+        let rows = query
+            .bind(limit.clamp(1, 1001) as i64)
+            .fetch_all(&self.pool)
+            .await?;
+        rows.into_iter()
+            .map(|row| {
+                let json: String = row.try_get("record_json")?;
+                Ok(serde_json::from_str(&json)?)
             })
             .collect()
     }
@@ -979,6 +909,140 @@ fn snapshot_update_from_row(key: RecordKey, row: sqlx::mysql::MySqlRow) -> Resul
         metadata: serde_json::from_str(&metadata_json)?,
         created_at_ms: row.try_get("created_at_ms")?,
     })
+}
+
+async fn accept_in_transaction(
+    transaction: &mut sqlx::Transaction<'_, MySql>,
+    operation: Operation,
+) -> Result<(StoredOperation, Record)> {
+    // `FOR UPDATE` on the singleton row is the authority lock. Every other
+    // acceptance — in this process or any other sharing this database —
+    // waits here, so sequence allocation and commit stay in the same order.
+    // Held until commit, not just until the read returns.
+    let next_sequence = sqlx::query_scalar::<_, i64>(
+        r#"
+            SELECT next_sequence
+            FROM photon_engine_sync_state
+            WHERE id = 1
+            FOR UPDATE
+            "#,
+    )
+    .fetch_one(&mut **transaction)
+    .await?;
+
+    let existing = sqlx::query(
+        r#"
+            SELECT local_sequence, operation_json, status, remote_sequence, received_at_ms
+            FROM photon_engine_operations
+            WHERE operation_id = ?
+            "#,
+    )
+    .bind(operation.id.as_str())
+    .fetch_optional(&mut **transaction)
+    .await?
+    .map(stored_operation_from_row)
+    .transpose()?;
+
+    if let Some(existing) = &existing {
+        if !existing.operation.is_replay_of(&operation) {
+            return Err(EngineError::Storage(format!(
+                "operation id {} was reused with a different payload",
+                operation.id
+            )));
+        }
+        if existing.remote_sequence.is_some() {
+            // Already accepted. Return the committed projection rather than
+            // replaying a non-idempotent kind.
+            let record = match read_record(transaction, &existing.operation.key).await? {
+                Some(record) => record,
+                None => {
+                    let record = apply_operation(None, &existing.operation)?;
+                    write_record(transaction, &record).await?;
+                    record
+                }
+            };
+            let stored = existing.clone();
+            return Ok((stored, record));
+        }
+    }
+
+    sqlx::query(
+        r#"
+            UPDATE photon_engine_sync_state
+            SET next_sequence = next_sequence + 1
+            WHERE id = 1
+            "#,
+    )
+    .execute(&mut **transaction)
+    .await?;
+
+    if existing.is_some() {
+        // The payload is rewritten, not just the status: the row may hold
+        // the unstamped copy this authority queued locally, and
+        // `is_replay_of` deliberately ignores the audit key, so keeping the
+        // stored payload would accept the operation while dropping the
+        // audit record of who was authorized to push it.
+        sqlx::query(
+            r#"
+                UPDATE photon_engine_operations
+                SET status = 'accepted',
+                    remote_sequence = ?,
+                    operation_json = ?
+                WHERE operation_id = ?
+                "#,
+        )
+        .bind(next_sequence)
+        .bind(serde_json::to_string(&operation)?)
+        .bind(operation.id.as_str())
+        .execute(&mut **transaction)
+        .await?;
+    } else {
+        sqlx::query(
+            r#"
+                INSERT INTO photon_engine_operations (
+                    operation_id,
+                    scope,
+                    collection,
+                    record_id,
+                    actor_id,
+                    status,
+                    remote_sequence,
+                    received_at_ms,
+                    operation_json
+                )
+                VALUES (?, ?, ?, ?, ?, 'accepted', ?, ?, ?)
+                "#,
+        )
+        .bind(operation.id.as_str())
+        .bind(operation.key.scope.as_str())
+        .bind(operation.key.collection.as_str())
+        .bind(operation.key.record_id.as_str())
+        .bind(operation.actor_id.as_str())
+        .bind(next_sequence)
+        .bind(unix_time_ms())
+        .bind(serde_json::to_string(&operation)?)
+        .execute(&mut **transaction)
+        .await?;
+    }
+
+    let stored = sqlx::query(
+        r#"
+            SELECT local_sequence, operation_json, status, remote_sequence, received_at_ms
+            FROM photon_engine_operations
+            WHERE operation_id = ?
+            "#,
+    )
+    .bind(operation.id.as_str())
+    .fetch_one(&mut **transaction)
+    .await
+    .map_err(EngineError::from)
+    .and_then(stored_operation_from_row)?;
+
+    let current = read_record(transaction, &stored.operation.key).await?;
+    let projected = apply_operation(current, &stored.operation)?;
+    write_record(transaction, &projected).await?;
+
+    Ok((stored, projected))
 }
 
 #[cfg(test)]

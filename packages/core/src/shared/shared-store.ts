@@ -1,3 +1,4 @@
+import type { RecordPageRequest, RecordPage, SelectionState, RecordCheckpoint } from '../selection.js'
 /**
  * One store, many contexts.
  *
@@ -303,6 +304,24 @@ class SharedStore implements SharedLocalStore {
         return local.loadOperationIds(args[0] as Scope)
       case 'loadConflicts':
         return local.loadConflicts(args[0] as Scope)
+      case 'readRecordPage':
+        if (!local.readRecordPage) return Promise.reject(new Error('store does not support readRecordPage'))
+        return local.readRecordPage(args[0] as Scope, args[1] as RecordPageRequest)
+      case 'getSelectionMembers':
+        if (!local.getSelectionMembers) return Promise.reject(new Error('store does not support selection memberships'))
+        return local.getSelectionMembers(args[0] as Scope, args[1] as string, args[2] as string | null, args[3] as number)
+      case 'getSelectionState':
+        if (!local.getSelectionState) return Promise.reject(new Error('store does not support getSelectionState'))
+        return local.getSelectionState(args[0] as Scope, args[1] as string)
+      case 'getRecordMemberships':
+        if (!local.getRecordMemberships) return Promise.reject(new Error('store does not support getRecordMemberships'))
+        return local.getRecordMemberships(args[0] as Scope, args[1] as Collection, args[2] as RecordId)
+      case 'getDeferredEviction':
+        if (!local.getDeferredEviction) return Promise.reject(new Error('store does not support deferred evictions'))
+        return local.getDeferredEviction(args[0] as Scope, args[1] as Collection, args[2] as RecordId)
+      case 'getRecordBase':
+        if (!local.getRecordBase) return Promise.reject(new Error('store does not support getRecordBase'))
+        return local.getRecordBase(args[0] as Scope, args[1] as Collection, args[2] as RecordId)
       case 'getCursor':
         return local.getCursor(args[0] as Scope, args[1] as string)
       case 'commit':
@@ -357,6 +376,42 @@ class SharedStore implements SharedLocalStore {
 
   loadRecords(scope: Scope, options?: LoadRecordsOptions): Promise<EngineRecord[]> {
     return this.backend().loadRecords(scope, options)
+  }
+
+  readRecordPage(scope: Scope, request: RecordPageRequest): Promise<RecordPage> {
+    const backend = this.backend()
+    if (!backend.readRecordPage) return Promise.reject(new Error('store does not support readRecordPage'))
+    return backend.readRecordPage(scope, request)
+  }
+
+  getSelectionMembers(scope: Scope, id: string, afterId: string | null, limit: number): Promise<string[]> {
+    const backend = this.backend()
+    if (!backend.getSelectionMembers) return Promise.reject(new Error('store does not support selection memberships'))
+    return backend.getSelectionMembers(scope, id, afterId, limit)
+  }
+
+  getSelectionState(scope: Scope, id: string): Promise<SelectionState | null> {
+    const backend = this.backend()
+    if (!backend.getSelectionState) return Promise.reject(new Error('store does not support getSelectionState'))
+    return backend.getSelectionState(scope, id)
+  }
+
+  getRecordMemberships(scope: Scope, collection: Collection, recordId: RecordId): Promise<string[]> {
+    const backend = this.backend()
+    if (!backend.getRecordMemberships) return Promise.reject(new Error('store does not support getRecordMemberships'))
+    return backend.getRecordMemberships(scope, collection, recordId)
+  }
+
+  getDeferredEviction(scope: Scope, collection: Collection, recordId: RecordId): Promise<boolean> {
+    const backend = this.backend()
+    if (!backend.getDeferredEviction) return Promise.reject(new Error('store does not support deferred evictions'))
+    return backend.getDeferredEviction(scope, collection, recordId)
+  }
+
+  getRecordBase(scope: Scope, collection: Collection, recordId: RecordId): Promise<RecordCheckpoint | null> {
+    const backend = this.backend()
+    if (!backend.getRecordBase) return Promise.reject(new Error('store does not support getRecordBase'))
+    return backend.getRecordBase(scope, collection, recordId)
   }
 
   loadPendingOperations(scope: Scope): Promise<StoredOperation[]> {

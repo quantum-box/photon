@@ -1,3 +1,4 @@
+import type { SelectionPullResult } from '../selection.js'
 /**
  * Transport for a server that speaks the Photon Engine protocol.
  *
@@ -20,6 +21,10 @@ export interface EngineTransportOptions {
   readonly baseUrl: string
   readonly pushPath?: string
   readonly pullPath?: string
+  /** Enable only when the endpoint implements the atomic protocol. */
+  readonly atomic?: boolean
+  readonly selectionPath?: string
+  readonly atomicPushPath?: string
   readonly fetch?: typeof globalThis.fetch
   readonly headers?: () => Record<string, string> | Promise<Record<string, string>>
   /** Every request is bounded. Without this a stalled socket wedges the loop. */
@@ -39,6 +44,7 @@ export class SyncHttpError extends Error {
 interface WirePushResponse {
   decisions?: {
     operation_id: string
+    type?: string
     decision?: string
     kind?: string
     reason?: string
@@ -71,8 +77,10 @@ function normalizeDecisionKind(raw: string | undefined): PushDecision['kind'] {
       return 'rejected'
     case 'conflict':
       return 'conflict'
-    default:
+    case 'accepted':
       return 'accepted'
+    default:
+      throw new Error('push returned an unknown decision kind')
   }
 }
 
@@ -118,16 +126,24 @@ export function createEngineTransport(options: EngineTransportOptions): SyncTran
   }
 
   return {
+    supportsAtomic: options.atomic === true,
+    async pullSelection(request) {
+      return post<SelectionPullResult>(options.selectionPath ?? '/api/engine/selection', {
+        scope: request.scope, selector: request.selector, cursor: request.cursor, limit: request.limit, pendingOperations: request.pendingOperations ?? [],
+      }, request.signal)
+    },
     async push(request: PushRequest): Promise<PushResult> {
+      if (request.atomicBatchId && !options.atomic) throw new Error('atomic push is not enabled')
       const body = await post<WirePushResponse>(
-        pushPath,
-        { scope: request.scope, operations: request.operations },
+        request.atomicBatchId ? options.atomicPushPath ?? '/api/engine/push-atomic' : pushPath,
+        { scope: request.scope, operations: request.operations,
+          ...(request.atomicBatchId ? { batch_id: request.atomicBatchId } : {}) },
         request.signal,
       )
 
       const decisions: PushDecision[] = (body.decisions ?? []).map((raw) => {
         const operationId = raw.operation_id
-        switch (normalizeDecisionKind(raw.decision ?? raw.kind)) {
+        switch (normalizeDecisionKind(raw.type ?? raw.decision ?? raw.kind)) {
           case 'rejected':
             return { kind: 'rejected', operationId, reason: raw.reason ?? 'rejected by server' }
           case 'conflict':

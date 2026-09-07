@@ -40,6 +40,9 @@ export interface SyncEngineOptions {
   readonly pollIntervalMs: number
   readonly pullPageSize: number
   readonly requestTimeoutMs?: number
+  beforePush?(): Promise<void>
+  commitDecisions?(decisions: readonly PushDecision[], updates: readonly OperationStatusUpdate[]): Promise<void>
+  pullSelections?(): Promise<void>
   collectPending(): Operation[]
   onDecision(decision: PushDecision): void
   /**
@@ -147,6 +150,10 @@ export class SyncEngine implements SyncController {
     this.pollTimer = null
     for (const off of this.detach) off()
     this.detach = []
+  }
+
+  async drain(): Promise<void> {
+    while (this.inFlight || this.queued) await (this.queued ?? this.inFlight)
   }
 
   /** Debounced: a burst of edits produces one push, not one per keystroke. */
@@ -275,38 +282,61 @@ export class SyncEngine implements SyncController {
 
   private async runPush(summary: SummaryTally): Promise<void> {
     const transport = this.options.transport!
+    await this.options.beforePush?.()
     const pending = this.options.collectPending()
-    if (pending.length) {
-      const result = await transport.push({ scope: this.options.scope, operations: pending })
-      const statusUpdates: OperationStatusUpdate[] = []
-
-      for (const decision of result.decisions) {
-        this.options.onDecision(decision)
-        switch (decision.kind) {
-          case 'accepted':
-            summary.pushed += 1
-            statusUpdates.push({
-              operationId: decision.operationId,
-              status: 'accepted',
-              remoteSequence: decision.remoteSequence ?? null,
-            })
-            break
-          case 'rejected':
-            summary.rejected += 1
-            statusUpdates.push({ operationId: decision.operationId, status: 'rejected' })
-            break
-          case 'conflict':
-            summary.conflicts += 1
-            statusUpdates.push({ operationId: decision.operationId, status: 'conflict' })
-            break
-        }
+    // Keep the queue order. An atomic envelope is never split, including after
+    // restart; ordinary operations before/after it cannot overtake the group.
+    const groups: { operations: Operation[]; atomicBatchId?: string }[] = []
+    const consumed = new Set<string>()
+    for (const op of pending) {
+      if (consumed.has(op.id)) continue
+      const batch = (op.metadata as { photon_batch?: { id: string; operationIds: string[] } } | undefined)?.photon_batch
+      if (!batch) {
+        const last = groups[groups.length - 1]
+        if (last && !last.atomicBatchId) last.operations.push(op)
+        else groups.push({ operations: [op] })
+        continue
       }
-
-      if (statusUpdates.length) await this.options.store.commit({ statusUpdates })
+      if (!transport.supportsAtomic) throw new Error('transport does not support queued atomic batch')
+      const members = batch.operationIds.map(id => pending.find(candidate => candidate.id === id))
+      if (members.some(member => !member)) throw new Error('incomplete queued atomic batch')
+      const operations = members as Operation[]
+      operations.forEach(member => consumed.add(member.id))
+      groups.push({ operations, atomicBatchId: batch.id })
+    }
+    for (const group of groups) {
+      const result = await transport.push({ scope: this.options.scope, ...group })
+      const expected = new Set(group.operations.map(op => op.id))
+      if (result.decisions.some(d => !expected.has(d.operationId)) ||
+          new Set(result.decisions.map(d => d.operationId)).size !== result.decisions.length) {
+        throw new Error('push returned unknown or duplicate decisions')
+      }
+      if (group.atomicBatchId && (result.decisions.length !== group.operations.length ||
+          new Set(result.decisions.map(d => d.kind)).size !== 1)) {
+        throw new Error('atomic push returned partial or mixed decisions')
+      }
+      const statusUpdates: OperationStatusUpdate[] = result.decisions.map(decision => ({
+        operationId: decision.operationId,
+        status: decision.kind,
+        ...(decision.kind === 'accepted' ? { remoteSequence: decision.remoteSequence ?? null } : {}),
+      }))
+      // Persist the whole acknowledgement before releasing pending handles.
+      // A failed local commit must leave the original envelope retryable.
+      if (this.options.commitDecisions) await this.options.commitDecisions(result.decisions, statusUpdates)
+      else {
+        if (statusUpdates.length) await this.options.store.commit({ statusUpdates })
+        for (const decision of result.decisions) this.options.onDecision(decision)
+      }
+      for (const decision of result.decisions) {
+        if (decision.kind === 'accepted') summary.pushed += 1
+        else if (decision.kind === 'rejected') summary.rejected += 1
+        else summary.conflicts += 1
+      }
     }
   }
 
   private async runPull(summary: SummaryTally): Promise<number | null> {
+    if (this.options.pullSelections) { await this.options.pullSelections(); return null }
     const transport = this.options.transport!
     const cursorRow = await this.options.store.getCursor(this.options.scope, this.options.remoteId)
     let cursor = cursorRow?.position ?? null

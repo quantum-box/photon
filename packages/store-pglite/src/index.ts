@@ -11,6 +11,8 @@
  */
 
 import { PGlite } from '@electric-sql/pglite'
+import { validateSelection } from '@quantum-box/photon-core'
+import type { RecordPageRequest, RecordPage, SelectionState, RecordCheckpoint } from '@quantum-box/photon-core'
 import type {
   Collection,
   Conflict,
@@ -223,6 +225,24 @@ CREATE TABLE IF NOT EXISTS photon_engine_records (
   PRIMARY KEY (scope, collection, record_id)
 );
 
+CREATE TABLE IF NOT EXISTS photon_engine_selection_states (
+  scope TEXT NOT NULL, subscription_id TEXT NOT NULL, state_json TEXT NOT NULL,
+  PRIMARY KEY (scope, subscription_id)
+);
+CREATE TABLE IF NOT EXISTS photon_engine_memberships (
+  scope TEXT NOT NULL, subscription_id TEXT NOT NULL, collection TEXT NOT NULL, record_id TEXT NOT NULL,
+  PRIMARY KEY (scope, subscription_id, collection, record_id)
+);
+CREATE INDEX IF NOT EXISTS idx_photon_membership_record ON photon_engine_memberships(scope, collection, record_id);
+CREATE TABLE IF NOT EXISTS photon_engine_deferred_evictions (
+  scope TEXT NOT NULL, collection TEXT NOT NULL, record_id TEXT NOT NULL,
+  PRIMARY KEY (scope, collection, record_id)
+);
+CREATE TABLE IF NOT EXISTS photon_engine_record_bases (
+  scope TEXT NOT NULL, collection TEXT NOT NULL, record_id TEXT NOT NULL, record_json TEXT NOT NULL,
+  PRIMARY KEY (scope, collection, record_id)
+);
+
 CREATE TABLE IF NOT EXISTS photon_engine_cursors (
   scope          TEXT NOT NULL,
   remote         TEXT NOT NULL,
@@ -345,6 +365,71 @@ class PGliteStore implements LocalStore {
     return result.rows.map((row) => JSON.parse(row.record_json) as EngineRecord)
   }
 
+  async readRecordPage(scope: Scope, request: RecordPageRequest): Promise<RecordPage> {
+    validateSelection(request)
+    if (!Number.isInteger(request.limit) || request.limit < 1 || request.limit > 1000) throw new Error('page limit must be 1..=1000')
+    const params: unknown[] = []
+    const bind = (value: unknown): string => { params.push(value); return `$${params.length}` }
+    const clauses = [`scope = ${bind(scope)}`, `collection = ${bind(request.collection)}`]
+    if (!request.includeDeleted) clauses.push('deleted = FALSE')
+    if (request.afterId !== undefined) clauses.push(`record_id COLLATE "C" > ${bind(request.afterId)}`)
+    if (request.recordIds) clauses.push(request.recordIds.length ? `record_id IN (${request.recordIds.map(id => bind(id)).join(',')})` : 'FALSE')
+    for (const filter of request.filters ?? []) {
+      if (filter.op === 'in' && filter.value.length === 0) { clauses.push('FALSE'); continue }
+      const field = `(record_json::jsonb #> string_to_array(${bind(`value.${filter.field}`)}, '.'))`
+      if (filter.op === 'exists') {
+        clauses.push(`${field} IS ${filter.value ? 'NOT ' : ''}NULL`)
+      } else if (filter.op === 'in') {
+        clauses.push(filter.value.length ? `${field} IN (${filter.value.map(value => `${bind(JSON.stringify(value))}::jsonb`).join(',')})` : 'FALSE')
+      } else {
+        const op = { eq: '=', ne: '<>', gt: '>', gte: '>=', lt: '<', lte: '<=' }[filter.op]
+        const comparison = `${field} ${op} ${bind(JSON.stringify(filter.value))}::jsonb`
+        clauses.push(filter.op === 'ne' ? `COALESCE((${comparison}), TRUE)` :
+          filter.op === 'eq' ? comparison : `(jsonb_typeof(${field}) = ${bind(typeof filter.value)} AND ${comparison})`)
+      }
+    }
+    const result = await this.db.query<{ record_json: string }>(
+      `SELECT record_json FROM photon_engine_records WHERE ${clauses.map(c => `(${c})`).join(' AND ')} ORDER BY record_id COLLATE "C" ASC LIMIT ${bind(request.limit + 1)}`, params,
+    )
+    const records = result.rows.slice(0, request.limit).map(row => JSON.parse(row.record_json) as EngineRecord)
+    const hasMore = result.rows.length > request.limit
+    return { records, hasMore, nextAfterId: hasMore ? records[records.length - 1]!.key.record_id : null }
+  }
+
+  async getSelectionMembers(scope: Scope, id: string, afterId: string | null, limit: number): Promise<string[]> {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 1000) throw new Error('membership page limit must be 1..=1000')
+    const result = await this.db.query<{ record_id: string }>(
+      'SELECT record_id FROM photon_engine_memberships WHERE scope = $1 AND subscription_id = $2 AND record_id COLLATE "C" > $3 ORDER BY record_id COLLATE "C" LIMIT $4', [scope, id, afterId ?? '', limit],
+    )
+    return result.rows.map(row => row.record_id)
+  }
+
+  async getSelectionState(scope: Scope, id: string): Promise<SelectionState | null> {
+    const result = await this.db.query<{ state_json: string }>(
+      'SELECT state_json FROM photon_engine_selection_states WHERE scope = $1 AND subscription_id = $2', [scope, id],
+    )
+    return result.rows[0] ? JSON.parse(result.rows[0].state_json) as SelectionState : null
+  }
+
+  async getRecordMemberships(scope: Scope, collection: Collection, recordId: RecordId): Promise<string[]> {
+    const result = await this.db.query<{ subscription_id: string }>(
+      'SELECT subscription_id FROM photon_engine_memberships WHERE scope = $1 AND collection = $2 AND record_id = $3', [scope, collection, recordId],
+    )
+    return result.rows.map(row => row.subscription_id)
+  }
+
+  async getDeferredEviction(scope: Scope, collection: Collection, recordId: RecordId): Promise<boolean> {
+    const result = await this.db.query('SELECT 1 FROM photon_engine_deferred_evictions WHERE scope = $1 AND collection = $2 AND record_id = $3', [scope, collection, recordId])
+    return result.rows.length > 0
+  }
+
+  async getRecordBase(scope: Scope, collection: Collection, recordId: RecordId): Promise<RecordCheckpoint | null> {
+    const result = await this.db.query<{ record_json: string }>(
+      'SELECT record_json FROM photon_engine_record_bases WHERE scope = $1 AND collection = $2 AND record_id = $3', [scope, collection, recordId],
+    )
+    return result.rows[0] ? JSON.parse(result.rows[0].record_json) as RecordCheckpoint : null
+  }
+
   async loadPendingOperations(scope: Scope): Promise<StoredOperation[]> {
     const result = await this.db.query<OperationRow>(
       `SELECT operation_json, status, local_sequence, remote_sequence, received_at_ms
@@ -441,6 +526,31 @@ class PGliteStore implements LocalStore {
   private async applyWrite(write: StoreWrite, journalSeq: number | null): Promise<void> {
     await this.db.transaction(async (tx) => {
       const now = Date.now()
+
+      for (const eviction of write.evictions ?? []) {
+        const values = [eviction.scope, eviction.collection, eviction.recordId]
+        if (eviction.deferred) await tx.query('INSERT INTO photon_engine_deferred_evictions (scope, collection, record_id) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING', values)
+        else await tx.query('DELETE FROM photon_engine_deferred_evictions WHERE scope = $1 AND collection = $2 AND record_id = $3', values)
+      }
+      for (const target of write.deleteSelectionStates ?? []) await tx.query('DELETE FROM photon_engine_selection_states WHERE scope = $1 AND subscription_id = $2', [target.scope, target.id])
+      for (const state of write.selectionStates ?? []) {
+        await tx.query(`INSERT INTO photon_engine_selection_states (scope, subscription_id, state_json) VALUES ($1, $2, $3)
+          ON CONFLICT (scope, subscription_id) DO UPDATE SET state_json = EXCLUDED.state_json`, [state.scope, state.id, JSON.stringify(state)])
+      }
+      for (const member of write.memberships ?? []) {
+        if (member.remove) {
+          await tx.query('DELETE FROM photon_engine_memberships WHERE scope = $1 AND subscription_id = $2 AND collection = $3 AND record_id = $4', [member.scope, member.subscriptionId, member.collection, member.recordId])
+        } else {
+          await tx.query('INSERT INTO photon_engine_memberships (scope, subscription_id, collection, record_id) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING', [member.scope, member.subscriptionId, member.collection, member.recordId])
+        }
+      }
+      for (const base of write.bases ?? []) {
+        await tx.query(`INSERT INTO photon_engine_record_bases (scope, collection, record_id, record_json) VALUES ($1, $2, $3, $4)
+          ON CONFLICT (scope, collection, record_id) DO UPDATE SET record_json = EXCLUDED.record_json`, [base.record.key.scope, base.record.key.collection, base.record.key.record_id, JSON.stringify(base)])
+      }
+      for (const key of write.deleteBases ?? []) {
+        await tx.query('DELETE FROM photon_engine_record_bases WHERE scope = $1 AND collection = $2 AND record_id = $3', [key.scope, key.collection, key.recordId])
+      }
 
       for (const operation of write.operations ?? []) {
         // A pull returns operations we may already hold. Upsert rather than

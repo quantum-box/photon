@@ -1,3 +1,4 @@
+import type { RecordPageRequest, RecordPage, SelectionState, RecordCheckpoint } from '../selection.js'
 /**
  * The follower half of a shared store: a `LocalStore` that owns no database
  * and forwards every call to whichever context does.
@@ -215,6 +216,30 @@ export class RemoteLocalStore implements LocalStore {
 
   loadRecords(scope: Scope, options?: LoadRecordsOptions): Promise<EngineRecord[]> {
     return this.call('loadRecords', [scope, options])
+  }
+
+  readRecordPage(scope: Scope, request: RecordPageRequest): Promise<RecordPage> {
+    return this.call('readRecordPage', [scope, request])
+  }
+
+  getSelectionMembers(scope: Scope, id: string, afterId: string | null, limit: number): Promise<string[]> {
+    return this.call('getSelectionMembers', [scope, id, afterId, limit])
+  }
+
+  getSelectionState(scope: Scope, id: string): Promise<SelectionState | null> {
+    return this.call('getSelectionState', [scope, id])
+  }
+
+  getRecordMemberships(scope: Scope, collection: Collection, recordId: RecordId): Promise<string[]> {
+    return this.call('getRecordMemberships', [scope, collection, recordId])
+  }
+
+  getDeferredEviction(scope: Scope, collection: Collection, recordId: RecordId): Promise<boolean> {
+    return this.call('getDeferredEviction', [scope, collection, recordId])
+  }
+
+  getRecordBase(scope: Scope, collection: Collection, recordId: RecordId): Promise<RecordCheckpoint | null> {
+    return this.call('getRecordBase', [scope, collection, recordId])
   }
 
   loadPendingOperations(scope: Scope): Promise<StoredOperation[]> {

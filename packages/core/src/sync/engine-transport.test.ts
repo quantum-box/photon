@@ -70,3 +70,14 @@ describe('engine transport pull', () => {
     expect(page.cursor).toBe(12)
   })
 })
+
+describe('engine transport decisions', () => {
+  it('decodes native rejected decisions instead of accepting them', async () => {
+    const transport = createEngineTransport({ baseUrl: 'http://engine.test', fetch: fetchReturning({ decisions: [{ operation_id: 'op-1', type: 'rejected', reason: 'policy' }] }) })
+    expect(await transport.push({ scope: 'workspace:test', operations: [operation('op-1')] })).toEqual({ decisions: [{ kind: 'rejected', operationId: 'op-1', reason: 'policy' }] })
+  })
+  it('fails closed on an unrecognized decision discriminator', async () => {
+    const transport = createEngineTransport({ baseUrl: 'http://engine.test', atomic: true, fetch: fetchReturning({ decisions: [{ operation_id: 'op-1', type: 'unknown' }] }) })
+    await expect(transport.push({ scope: 'workspace:test', operations: [operation('op-1')], atomicBatchId: 'batch' })).rejects.toThrow('unknown decision')
+  })
+})

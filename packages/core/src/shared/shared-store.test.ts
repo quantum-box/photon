@@ -319,39 +319,33 @@ describe('shared local store', () => {
   })
 
   it('waits out an owner that is slow to open, rather than failing the request', async () => {
-    const bus = createBus()
-    const election = createElectionQueue()
-    const store = memoryStore()
-
-    // The owner takes far longer to open than a single request is allowed to
-    // go unanswered. On CI hardware a cold PGlite start really does run this
-    // much longer than the silence budget.
-    const owner = await createSharedLocalStore({
-      key: 'slow-open',
-      channel: bus.channel(),
-      elect: election.elect,
-      ownershipGraceMs: 5,
-      open: async () => {
-        await new Promise((resolve) => setTimeout(resolve, 400))
-        return store
-      },
-    })
-
-    const follower = await createSharedLocalStore({
-      key: 'slow-open',
-      channel: bus.channel(),
-      elect: election.elect,
-      ownershipGraceMs: 5,
-      retryIntervalMs: 10,
-      requestTimeoutMs: 100,
-      open: async () => store,
-    })
-
-    await expect(follower.loadRecords('workspace:test')).resolves.toEqual([])
-    expect(owner.isOwner).toBe(true)
-
-    await follower.close()
-    await owner.close()
+    vi.useFakeTimers()
+    try {
+      const bus = createBus()
+      const election = createElectionQueue()
+      const store = memoryStore()
+      const opening = createSharedLocalStore({
+        key: 'slow-open', channel: bus.channel(), elect: election.elect, ownershipGraceMs: 5,
+        open: async () => { await new Promise(resolve => setTimeout(resolve, 400)); return store },
+      })
+      await vi.advanceTimersByTimeAsync(10)
+      const owner = await opening
+      const following = createSharedLocalStore({
+        key: 'slow-open', channel: bus.channel(), elect: election.elect, ownershipGraceMs: 5,
+        retryIntervalMs: 10, requestTimeoutMs: 100, open: async () => store,
+      })
+      await vi.advanceTimersByTimeAsync(10)
+      const follower = await following
+      const read = follower.loadRecords('workspace:test')
+      const assertion = expect(read).resolves.toEqual([])
+      await vi.advanceTimersByTimeAsync(450)
+      await assertion
+      expect(owner.isOwner).toBe(true)
+      await follower.close()
+      await owner.close()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('probes on its own schedule instead of ping-ponging with the owner', async () => {

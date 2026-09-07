@@ -101,7 +101,12 @@ export type ConflictResolution = { keep: 'local' } | { keep: 'remote' } | { keep
 // Mutations
 // ---------------------------------------------------------------------------
 
-export interface Mutation {
+export interface MutationOptions {
+  /** An application/server version (for example an ETag), stable across retries. */
+  readonly expectedVersion?: string | number
+}
+
+export interface Mutation extends MutationOptions {
   readonly collection: Collection
   readonly recordId: RecordId
   readonly kind: OperationKind

@@ -1,6 +1,6 @@
 {
   "name": "@quantum-box/photon",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "type": "module",
   "description": "Local-first sync engine: durable offline writes, instant UI, convergent reconciliation",
   "license": "MIT",
@@ -84,6 +84,7 @@
     "server:engine": "cargo run --bin photon-engine-server",
     "server:live": "cargo run --bin photon-live-server",
     "server:engine:smoke": "node scripts/smoke-engine-api.mjs",
+    "smoke:scoped-sync": "node scripts/smoke-scoped-sync.mjs",
     "server:test": "cargo test --workspace",
     "mock:tachyon": "cargo run --bin mock-tachyon-api",
     "worker:dev": "npm run dev --workspace @quantum-box/photon-edge-worker",

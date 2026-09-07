@@ -35,6 +35,7 @@ use yrs::{updates::decoder::Decode, Doc, ReadTxn, StateVector, Transact, Update}
 
 mod auth;
 mod policy;
+mod selection;
 
 use auth::bearer_token;
 pub use auth::{parse_workspace_scope, AuthConfig, AuthError, TokenGrant, WorkspaceScope};
@@ -273,6 +274,16 @@ impl StorageAdapter for ServerEngineAdapter {
         }
     }
 
+    async fn append_authoritative_batch(
+        &self,
+        operations: Vec<Operation>,
+    ) -> photon_engine::Result<Vec<(StoredOperation, Record)>> {
+        match self {
+            Self::Sqlite(adapter) => adapter.append_authoritative_batch(operations).await,
+            Self::MySql(adapter) => adapter.append_authoritative_batch(operations).await,
+        }
+    }
+
     async fn next_remote_sequence(&self) -> photon_engine::Result<i64> {
         match self {
             Self::Sqlite(adapter) => adapter.next_remote_sequence().await,
@@ -342,6 +353,37 @@ impl StorageAdapter for ServerEngineAdapter {
         match self {
             Self::Sqlite(adapter) => adapter.list_records(scope, collection).await,
             Self::MySql(adapter) => adapter.list_records(scope, collection).await,
+        }
+    }
+
+    async fn get_record_checkpoint(
+        &self,
+        key: &RecordKey,
+    ) -> photon_engine::Result<Option<photon_engine::selection::RecordCheckpoint>> {
+        match self {
+            Self::Sqlite(adapter) => adapter.get_record_checkpoint(key).await,
+            Self::MySql(adapter) => adapter.get_record_checkpoint(key).await,
+        }
+    }
+
+    async fn select_records(
+        &self,
+        scope: &ScopeId,
+        selection: &photon_engine::RecordSelection,
+        after_id: Option<&str>,
+        limit: usize,
+    ) -> photon_engine::Result<Vec<Record>> {
+        match self {
+            Self::Sqlite(adapter) => {
+                adapter
+                    .select_records(scope, selection, after_id, limit)
+                    .await
+            }
+            Self::MySql(adapter) => {
+                adapter
+                    .select_records(scope, selection, after_id, limit)
+                    .await
+            }
         }
     }
 
@@ -447,6 +489,14 @@ pub fn engine_routes() -> Router<Arc<AppState>> {
         .route(
             "/api/engine/pull",
             axum::routing::post(pull_engine_operations),
+        )
+        .route(
+            "/api/engine/selection",
+            axum::routing::post(selection::pull_selection),
+        )
+        .route(
+            "/api/engine/push-atomic",
+            axum::routing::post(push_atomic_operations),
         )
         .route("/api/engine/debug", get(engine_debug_state))
 }
@@ -665,6 +715,130 @@ fn stamp_audit_metadata(
     }
 }
 
+#[derive(Deserialize)]
+struct AtomicPushRequest {
+    scope: ScopeId,
+    batch_id: String,
+    operations: Vec<Operation>,
+}
+
+async fn push_atomic_operations(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(mut payload): Json<AtomicPushRequest>,
+) -> Result<Json<PushResult>, AppError> {
+    let (grant, workspace) = authorize_scoped_request(&state, &headers, &payload.scope)?;
+    if payload.batch_id.is_empty()
+        || payload.operations.is_empty()
+        || payload.operations.len() > 1000
+    {
+        return Err(AppError::BadRequest(
+            "atomic batch requires an id and 1..=1000 operations".into(),
+        ));
+    }
+    let ids: Vec<_> = payload.operations.iter().map(|op| op.id.as_str()).collect();
+    let unique: std::collections::BTreeSet<_> = ids.iter().collect();
+    let envelope = serde_json::json!({ "id": payload.batch_id, "operationIds": ids });
+    if unique.len() != ids.len()
+        || payload.operations.iter().any(|op| {
+            op.key.scope != payload.scope || op.metadata.get("photon_batch") != Some(&envelope)
+        })
+    {
+        return Err(AppError::BadRequest(
+            "atomic batch scope, membership or metadata mismatch".into(),
+        ));
+    }
+    // A lost response must replay the original acceptance, even if the host's
+    // write policy has changed since that transaction committed.
+    let mut replay = Vec::new();
+    for operation in &payload.operations {
+        if let Some(stored) = state.engine.storage().get_operation(&operation.id).await? {
+            if !stored.operation.is_replay_of(operation) {
+                return Err(AppError::BadRequest(
+                    "operation id reused with different payload".into(),
+                ));
+            }
+            if let Some(sequence) = stored.remote_sequence {
+                replay.push(PushDecision::Accepted {
+                    operation_id: operation.id.clone(),
+                    remote_sequence: sequence,
+                });
+            }
+        }
+    }
+    if replay.len() == payload.operations.len() {
+        return Ok(Json(PushResult {
+            decisions: replay,
+            ..Default::default()
+        }));
+    }
+    if !replay.is_empty() {
+        return Err(AppError::BadRequest(
+            "atomic batch has partially accepted members".into(),
+        ));
+    }
+    for operation in &payload.operations {
+        if let PolicyVerdict::Reject { reason } = state
+            .policy
+            .authorize_operation(OperationContext {
+                grant: &grant,
+                workspace: &workspace,
+                operation,
+            })
+            .await
+        {
+            let decisions = payload
+                .operations
+                .iter()
+                .map(|op| PushDecision::Rejected {
+                    operation_id: op.id.clone(),
+                    reason: reason.clone(),
+                })
+                .collect();
+            return Ok(Json(PushResult {
+                decisions,
+                ..Default::default()
+            }));
+        }
+    }
+    let request_id = headers
+        .get("x-photon-request-id")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("none");
+    for operation in &mut payload.operations {
+        stamp_audit_metadata(
+            operation,
+            &grant,
+            request_id,
+            chrono::Utc::now().timestamp_millis(),
+        );
+    }
+    let accepted = state
+        .engine
+        .storage()
+        .append_authoritative_batch(payload.operations)
+        .await?;
+    let mut cursor = 0;
+    let decisions = accepted
+        .into_iter()
+        .map(|(stored, _)| {
+            let sequence = stored
+                .remote_sequence
+                .expect("authoritative storage supplies sequence");
+            cursor = cursor.max(sequence);
+            PushDecision::Accepted {
+                operation_id: stored.operation.id,
+                remote_sequence: sequence,
+            }
+        })
+        .collect();
+    broadcast_engine_changed(&state, &workspace.tenant_id, cursor).await;
+    Ok(Json(PushResult {
+        decisions,
+        ..Default::default()
+    }))
+}
+
 async fn push_engine_operations(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -695,6 +869,16 @@ async fn push_engine_operations(
             "operation {} is scoped to {:?} but the request is scoped to {:?}",
             operation.id, operation.key.scope, scope
         )));
+    }
+
+    if payload
+        .operations
+        .iter()
+        .any(|op| op.metadata.get("photon_batch").is_some())
+    {
+        return Err(AppError::BadRequest(
+            "atomic operations require /api/engine/push-atomic".into(),
+        ));
     }
 
     for mut operation in payload.operations {
@@ -3042,4 +3226,5 @@ mod tests {
         assert_eq!(max_seq, 1);
         assert_eq!(read_map_string(&doc, "survives"), Some("yes".into()));
     }
+    include!("scoped_tests.rs");
 }

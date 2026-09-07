@@ -65,7 +65,7 @@ describe('createRestTransport push', () => {
       scope: 's',
       operations: [operation('o1', 'r1', { type: 'upsert', value: { title: 'a' } })],
     })
-    expect(issues.create).toHaveBeenCalledWith({ title: 'a' })
+    expect(issues.create).toHaveBeenCalledWith({ title: 'a' }, expect.objectContaining({ operationId: expect.any(String) }))
 
     const withCurrent = createRestTransport({
       resources: { issues: issues as never },
@@ -75,10 +75,10 @@ describe('createRestTransport push', () => {
       scope: 's',
       operations: [operation('o2', 'r1', { type: 'patch', fields: { title: 'b' } })],
     })
-    expect(issues.update).toHaveBeenCalledWith('r1', { title: 'b' })
+    expect(issues.update).toHaveBeenCalledWith('r1', { title: 'b' }, expect.objectContaining({ operationId: expect.any(String) }))
 
     await transport.push({ scope: 's', operations: [operation('o3', 'r1', { type: 'delete' })] })
-    expect(issues.remove).toHaveBeenCalledWith('r1')
+    expect(issues.remove).toHaveBeenCalledWith('r1', expect.objectContaining({ operationId: expect.any(String) }))
   })
 
   it('reports an alias when the server assigns a different id', async () => {
@@ -128,7 +128,7 @@ describe('createRestTransport push', () => {
     })
 
     expect(calls).toEqual(['upsert'])
-    expect(issues.upsert).toHaveBeenCalledWith('r1', { title: 'new' })
+    expect(issues.upsert).toHaveBeenCalledWith('r1', { title: 'new' }, expect.objectContaining({ operationId: expect.any(String) }))
     expect(result.decisions[0]).toMatchObject({ kind: 'accepted' })
   })
 
@@ -160,7 +160,7 @@ describe('createRestTransport push', () => {
       scope: 's',
       operations: [operation('o1', 'r1', { type: 'upsert', value: { title: 'a' } })],
     })
-    expect(fresh.create).toHaveBeenCalledWith({ title: 'a' })
+    expect(fresh.create).toHaveBeenCalledWith({ title: 'a' }, expect.objectContaining({ operationId: expect.any(String) }))
     expect(fresh.update).not.toHaveBeenCalled()
 
     const seen = resource()
@@ -172,7 +172,7 @@ describe('createRestTransport push', () => {
       scope: 's',
       operations: [operation('o2', 'r1', { type: 'upsert', value: { title: 'b' } })],
     })
-    expect(seen.update).toHaveBeenCalledWith('r1', { title: 'b' })
+    expect(seen.update).toHaveBeenCalledWith('r1', { title: 'b' }, expect.objectContaining({ operationId: expect.any(String) }))
     expect(seen.create).not.toHaveBeenCalled()
   })
 
@@ -190,25 +190,25 @@ describe('createRestTransport push', () => {
       scope: 's',
       operations: [operation('o1', 'r1', { type: 'increment', field: 'votes', by: 3 })],
     })
-    expect(issues.update).toHaveBeenCalledWith('r1', { votes: 7 })
+    expect(issues.update).toHaveBeenCalledWith('r1', { votes: 7 }, expect.objectContaining({ operationId: expect.any(String) }))
 
     await transport.push({
       scope: 's',
       operations: [operation('o2', 'r1', { type: 'set_add', field: 'labels', values: ['ui'] })],
     })
-    expect(issues.update).toHaveBeenCalledWith('r1', { labels: ['bug', 'ui'] })
+    expect(issues.update).toHaveBeenCalledWith('r1', { labels: ['bug', 'ui'] }, expect.objectContaining({ operationId: expect.any(String) }))
 
     await transport.push({
       scope: 's',
       operations: [operation('o3', 'r1', { type: 'set_remove', field: 'labels', values: ['bug'] })],
     })
-    expect(issues.update).toHaveBeenCalledWith('r1', { labels: [] })
+    expect(issues.update).toHaveBeenCalledWith('r1', { labels: [] }, expect.objectContaining({ operationId: expect.any(String) }))
 
     await transport.push({
       scope: 's',
       operations: [operation('o4', 'r1', { type: 'remove_fields', fields: ['votes'] })],
     })
-    expect(issues.update).toHaveBeenCalledWith('r1', { votes: null })
+    expect(issues.update).toHaveBeenCalledWith('r1', { votes: null }, expect.objectContaining({ operationId: expect.any(String) }))
   })
 
   it('sends operations on one record in order and stops after a failure', async () => {
@@ -301,4 +301,19 @@ describe('createRestTransport pull', () => {
       ['docs', 'issues'],
     )
   })
+})
+
+it('passes stable idempotency and expected-version context across retries', async () => {
+  const api = resource()
+  const transport = createRestTransport({ resources: { issues: api as never } })
+  const op = { ...operation('stable-id', 'r1', { type: 'patch', fields: { n: 1 } }), metadata: { photon_context: { expectedVersion: 'etag-7' } } }
+  api.update.mockRejectedValueOnce({ status: 503 })
+  const signal = new AbortController().signal
+  await expect(transport.push({ scope: 's', operations: [op], signal })).rejects.toBeDefined()
+  await transport.push({ scope: 's', operations: [op], signal })
+  const first = api.update.mock.calls[0]![2]
+  const second = api.update.mock.calls[1]![2]
+  expect(first).toEqual({ operationId: 'stable-id', scope: 's', actorId: 'a', expectedVersion: 'etag-7', signal })
+  expect(second).toEqual(first)
+  expect(Object.isFrozen(first)).toBe(true)
 })

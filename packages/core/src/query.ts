@@ -266,7 +266,7 @@ export class RecordQuery<T> implements LiveQuery<PhotonRecord<T> | null> {
 
   constructor(
     readonly collection: Collection,
-    private readonly recordId: string,
+    readonly recordId: string,
     private readonly lookup: (collection: Collection, recordId: string) => PhotonRecord<T> | null,
     private readonly hydrated: Promise<void>,
     private readonly onDestroy: (query: RecordQuery<T>) => void,

@@ -1,3 +1,5 @@
+import { SelectionManager } from './sync/selections.js'
+import type { RecordSelection, RecordPageRequest, SelectionPullResult, SelectionState, SyncSubscription } from './selection.js'
 /**
  * The Photon client.
  *
@@ -37,6 +39,7 @@ import type {
   EngineRecord,
   HybridTimestamp,
   Mutation,
+  MutationOptions,
   MutationHandle,
   Operation,
   PhotonRecord,
@@ -67,7 +70,7 @@ export type CollectionMode = 'engine-native' | 'rest-backed' | 'passthrough'
  * flow that shows a record before editing it is safe; a write-only flow
  * should `await hydrateCollection()` first.
  */
-export type CollectionHydration = 'eager' | 'lazy'
+export type CollectionHydration = 'eager' | 'lazy' | 'on-demand'
 
 /**
  * Per-collection sync behavior. The staged-adoption story is this one line:
@@ -133,7 +136,11 @@ export interface PhotonClientOptions {
    * governs everything after bootstrap.
    */
   readonly resolveCollection?: (collection: Collection) => CollectionConfig | undefined
+  readonly cache?: { readonly maxRecords: number }
   readonly sync?: {
+    /** Scoped mode never runs the legacy full-scope pull. */
+    readonly mode?: 'full' | 'scoped'
+    readonly selectionPageBudget?: number
     readonly autoStart?: boolean
     readonly pushDebounceMs?: number
     readonly pollIntervalMs?: number
@@ -145,12 +152,22 @@ export interface PhotonClientOptions {
   readonly onChange?: (changes: ChangeSet) => void
 }
 
+export interface LocalRecordPage<T = unknown> {
+  readonly data: readonly PhotonRecord<T>[]
+  readonly hasMore: boolean
+  readonly nextAfterId: string | null
+}
+
 export interface PhotonClient {
   readonly scope: Scope
   readonly actorId: string
   readonly storage: LocalStore
   readonly sync: SyncController
 
+  subscribeSync(id: string, selector: RecordSelection): SyncSubscription
+  readPage<T = unknown>(request: RecordPageRequest): Promise<LocalRecordPage<T>>
+  /** Evict memory only; pending and actively subscribed records are pinned. */
+  evictRecords(collection: Collection, recordIds: readonly RecordId[]): number
   query<T = unknown>(descriptor: QueryDescriptor<T>): LiveQuery<PhotonRecord<T>[]>
   liveRecord<T = unknown>(collection: Collection, recordId: RecordId): LiveQuery<PhotonRecord<T> | null>
 
@@ -163,11 +180,11 @@ export interface PhotonClient {
 
   mutate<T = unknown>(mutation: Mutation): MutationHandle<T>
   /** One ChangeSet, one durable transaction, one push batch. */
-  transact(mutations: readonly Mutation[]): MutationHandle<void>
+  transact(mutations: readonly Mutation[], options?: { atomic?: boolean }): MutationHandle<void>
 
-  upsert<T = unknown>(collection: Collection, recordId: RecordId, value: T): MutationHandle<T>
+  upsert<T = unknown>(collection: Collection, recordId: RecordId, value: T, options?: MutationOptions): MutationHandle<T>
   /** Pass only the fields that changed: per-field merge depends on it. */
-  patch<T = unknown>(collection: Collection, recordId: RecordId, fields: Partial<T>): MutationHandle<T>
+  patch<T = unknown>(collection: Collection, recordId: RecordId, fields: Partial<T>, options?: MutationOptions): MutationHandle<T>
   removeFields<T = unknown>(collection: Collection, recordId: RecordId, fields: string[]): MutationHandle<T>
   remove<T = unknown>(collection: Collection, recordId: RecordId): MutationHandle<T>
   restore<T = unknown>(collection: Collection, recordId: RecordId, value?: T): MutationHandle<T>
@@ -244,6 +261,13 @@ class PhotonClientImpl implements PhotonClient {
   private readonly registryKey: string
   private readonly collectionModes = new Map<Collection, CollectionMode>()
   private readonly lazyCollections = new Set<Collection>()
+  private selections: SelectionManager | null = null
+  private readonly onDemandCollections = new Set<Collection>()
+  private readonly accessOrder = new Map<string, { collection: Collection; recordId: RecordId }>()
+  private readonly removalInFlight = new Map<string, number>()
+  private readonly localWrites = new Set<Promise<unknown>>()
+  private writeTail: Promise<void> = Promise.resolve()
+  private readonly durableOperationIds = new Set<string>()
   private readonly hydratedLazyCollections = new Set<Collection>()
   private readonly hydrationInFlight = new Map<Collection, Promise<void>>()
   /** Resources of rest-backed and passthrough collections, added to as the
@@ -294,7 +318,31 @@ class PhotonClientImpl implements PhotonClient {
       modeOf: (collection) => this.modeOf(collection),
     })
 
+    if (options.sync?.mode === 'scoped') {
+      const pageSize = options.sync.pullPageSize ?? 200
+      const pageBudget = options.sync.selectionPageBudget ?? 100
+      if (!Number.isInteger(pageSize) || pageSize < 1 || pageSize > 1000 || !Number.isInteger(pageBudget) || pageBudget < 1) {
+        liveClients.delete(this.registryKey)
+        throw new Error('scoped sync requires pageSize 1..1000 and a positive pageBudget')
+      }
+      if (!transport?.pullSelection || !this.storage.readRecordPage || !this.storage.getSelectionState ||
+          !this.storage.getSelectionMembers || !this.storage.getRecordMemberships || !this.storage.getRecordBase || !this.storage.getDeferredEviction) {
+        liveClients.delete(this.registryKey)
+        throw new Error('scoped sync requires selection transport and extended local storage')
+      }
+      this.selections = new SelectionManager({
+        scope: this.scope, store: this.storage, transport,
+        clock, pageSize: options.sync?.pullPageSize ?? 200,
+        pageBudget: options.sync?.selectionPageBudget ?? 100,
+        release: (state) => this.releaseSelection(state),
+        pendingOperations: () => [...this.pending.values()].filter(entry => this.durableOperationIds.has(entry.operation.id)).map(entry => entry.operation),
+        apply: (page, state) => this.applySelectionPage(page, state),
+      })
+    }
     this.sync = new SyncEngine({
+      commitDecisions: (decisions, updates) => this.commitDecisions(decisions, updates),
+      beforePush: () => Promise.all([...this.localWrites]).then(() => undefined),
+      ...(this.selections ? { pullSelections: () => this.selections!.refreshAll() } : {}),
       scope: options.scope,
       ...(transport ? { transport } : {}),
       store: options.storage,
@@ -308,7 +356,7 @@ class PhotonClientImpl implements PhotonClient {
       collectPending: () =>
         [...this.pending.values()]
           .map((entry) => entry.operation)
-          .filter((operation) => this.modeOf(operation.key.collection) !== 'passthrough'),
+          .filter((operation) => this.modeOf(operation.key.collection) !== 'passthrough' && this.durableOperationIds.has(operation.id)),
       onDecision: (decision) => this.handleDecision(decision),
       applyRemote: (operations) => this.applyRemoteOperations(operations),
       applySnapshot: (page) => this.applySnapshot(page),
@@ -324,7 +372,8 @@ class PhotonClientImpl implements PhotonClient {
    */
   private applyCollectionConfig(collection: Collection, config: CollectionConfig): void {
     this.collectionModes.set(collection, config.mode)
-    if (config.hydration === 'lazy') this.lazyCollections.add(collection)
+    if (config.hydration === 'lazy' || config.hydration === 'on-demand') this.lazyCollections.add(collection)
+    if (config.hydration === 'on-demand') this.onDemandCollections.add(collection)
     if (config.mode === 'engine-native') return
     // Runtime guard for plain-JS callers: the union type cannot save them.
     if (!('resource' in config) || !config.resource) {
@@ -356,11 +405,12 @@ class PhotonClientImpl implements PhotonClient {
 
     // Lazy collections are the record-heavy ones; skipping them here is what
     // makes startup cost proportional to workspace structure, not data size.
+    if (this.options.cache && (!Number.isInteger(this.options.cache.maxRecords) || this.options.cache.maxRecords < 1)) throw new Error('maxRecords must be a positive integer')
     const lazy = [...this.lazyCollections]
     const [records, pendingOps, operationIds, conflicts] = await Promise.all([
       this.storage.loadRecords(this.scope, lazy.length ? { excludeCollections: lazy } : undefined),
       this.storage.loadPendingOperations(this.scope),
-      this.storage.loadOperationIds(this.scope),
+      this.selections ? Promise.resolve([]) : this.storage.loadOperationIds(this.scope),
       this.storage.loadConflicts(this.scope),
     ])
 
@@ -369,6 +419,7 @@ class PhotonClientImpl implements PhotonClient {
 
     const changes: RecordChange[] = []
     for (const record of records) {
+      this.kernel.observeTimestamp(record.version)
       const change = this.projection.set(record, { durable: true })
       if (change) changes.push(change)
     }
@@ -380,6 +431,7 @@ class PhotonClientImpl implements PhotonClient {
     // are already in the projection; for a lazy one they arrive with the
     // stored record when the collection hydrates.
     for (const stored of pendingOps) {
+      this.durableOperationIds.add(stored.operation.id)
       this.registerPending(stored.operation)
       const change = this.projection.addPending(
         stored.operation.key.collection,
@@ -388,6 +440,13 @@ class PhotonClientImpl implements PhotonClient {
       if (change) changes.push(change)
     }
 
+    // Restore only the pending records for on-demand collections, never their
+    // entire collection. Ordinary accepted records remain in the store.
+    for (const stored of pendingOps) {
+      if (this.onDemandCollections.has(stored.operation.key.collection)) {
+        await this.hydrateRecord(stored.operation.key.collection, stored.operation.key.record_id)
+      }
+    }
     this.hydrateResolve()
     this.emit('hydrate', changes)
 
@@ -436,6 +495,7 @@ class PhotonClientImpl implements PhotonClient {
     // Their effect is already in the records above, so a later pull echoing
     // them back must not re-apply it.
     for (const operation of write.operations ?? []) {
+      this.durableOperationIds.add(operation.id)
       this.appliedOperationIds.add(operation.id)
       // Another context's unpushed write is pending for this client too — the
       // operations were loaded from the same store at bootstrap.
@@ -483,6 +543,7 @@ class PhotonClientImpl implements PhotonClient {
   query<T = unknown>(descriptor: QueryDescriptor<T>): LiveQuery<PhotonRecord<T>[]> {
     // Subscribing is what pulls a lazy collection in; the query stays
     // `loading` until its collection's stored records are in the projection.
+    if (this.onDemandCollections.has(descriptor.collection)) throw new Error('use readPage() for on-demand collections')
     const collectionReady = this.hydrateCollection(descriptor.collection)
     const query = new CollectionQuery<T>(
       descriptor,
@@ -514,7 +575,7 @@ class PhotonClientImpl implements PhotonClient {
     collection: Collection,
     recordId: RecordId,
   ): LiveQuery<PhotonRecord<T> | null> {
-    const collectionReady = this.hydrateCollection(collection)
+    const collectionReady = this.onDemandCollections.has(collection) ? this.hydrateRecord(collection, recordId) : this.hydrateCollection(collection)
     const query = new RecordQuery<T>(
       collection,
       recordId,
@@ -543,6 +604,7 @@ class PhotonClientImpl implements PhotonClient {
   private isHydrated = false
 
   private collectionStatus(collection: Collection): QueryStatus {
+    if (this.onDemandCollections.has(collection)) return 'ready'
     if (this.lazyCollections.has(collection)) {
       return this.hydratedLazyCollections.has(collection) ? 'ready' : 'loading'
     }
@@ -550,6 +612,7 @@ class PhotonClientImpl implements PhotonClient {
   }
 
   hydrateCollection(collection: Collection): Promise<void> {
+    if (this.onDemandCollections.has(collection)) return Promise.reject(new Error('use readPage() for on-demand collections'))
     if (!this.lazyCollections.has(collection) || this.hydratedLazyCollections.has(collection)) {
       return this.hydrated
     }
@@ -599,43 +662,67 @@ class PhotonClientImpl implements PhotonClient {
     return this.applyMutations<T>([mutation])
   }
 
-  transact(mutations: readonly Mutation[]): MutationHandle<void> {
-    return this.applyMutations<void>(mutations)
+  transact(mutations: readonly Mutation[], options?: { atomic?: boolean }): MutationHandle<void> {
+    if (options?.atomic && (!this.options.transport?.supportsAtomic || mutations.some(m => this.modeOf(m.collection) !== 'engine-native'))) {
+      throw new Error('atomic batches require a single atomic engine transport')
+    }
+    return this.applyMutations<void>(mutations, options?.atomic === true)
   }
 
-  private applyMutations<T>(mutations: readonly Mutation[]): MutationHandle<T> {
+  private applyMutations<T>(mutations: readonly Mutation[], atomic = false): MutationHandle<T> {
     if (this.closed) throw new Error('Photon client is closed')
+    if (atomic && mutations.length > 1000) throw new Error('atomic batches support at most 1000 operations')
     if (!mutations.length) throw new Error('transact() requires at least one mutation')
 
-    const operations: Operation[] = []
+    for (const mutation of mutations) {
+      if (this.removalInFlight.has(JSON.stringify([mutation.collection, mutation.recordId]))) throw new Error('record is being removed from the local sync cache')
+      this.modeOf(mutation.collection)
+      if (this.onDemandCollections.has(mutation.collection) && !this.projection.get(mutation.collection, mutation.recordId) && mutation.kind.type !== 'upsert') {
+        throw new Error('load an on-demand record before editing it')
+      }
+    }
+    const built = mutations.map(mutation => {
+      const operation = this.kernel.buildOperation({
+        key: { scope: this.scope, collection: mutation.collection, record_id: mutation.recordId },
+        kind: mutation.kind,
+      })
+      return mutation.expectedVersion === undefined ? operation : {
+        ...operation, metadata: { photon_context: { expectedVersion: mutation.expectedVersion } },
+      }
+    })
+    const batch = atomic ? { id: newId('batch', this.clock()), operationIds: built.map(op => op.id) } : null
+    const operations: Operation[] = built.map(op => batch ? {
+      ...op, metadata: { ...(op.metadata as Record<string, unknown> ?? {}), photon_batch: batch },
+    } : op)
+    const staged = new Map<string, EngineRecord>()
+    const projections = operations.map(operation => {
+      const key = JSON.stringify([operation.key.collection, operation.key.record_id])
+      const previous = staged.get(key) ?? this.toEngineRecord(operation.key.collection, operation.key.record_id)
+      const projected = this.kernel.applyOperation(previous, operation)
+      staged.set(key, projected)
+      return { previous, projected }
+    })
     const changes: RecordChange[] = []
     const durableOperations: Operation[] = []
     const durableMutations: Mutation[] = []
-    const engineRecords: EngineRecord[] = []
     const passthrough: { operation: Operation; previous: EngineRecord | null }[] = []
     let lastRecord: PhotonRecord<T> | null = null
 
-    for (const mutation of mutations) {
+    for (const [index, mutation] of mutations.entries()) {
       // A write can target a lazy collection before it hydrates. Kick the
       // hydration off so the stored base converges into the projection; the
       // optimistic record itself is shielded from the load by the
       // pending/durable guard in loadLazyCollection.
-      if (this.lazyCollections.has(mutation.collection)) {
+      if (this.onDemandCollections.has(mutation.collection) && !this.projection.get(mutation.collection, mutation.recordId) && mutation.kind.type !== 'upsert') {
+        throw new Error('load an on-demand record with readPage() or liveRecord().ready() before editing')
+      }
+      if (this.lazyCollections.has(mutation.collection) && !this.onDemandCollections.has(mutation.collection)) {
         void this.hydrateCollection(mutation.collection)
       }
-      const operation = this.kernel.buildOperation({
-        key: {
-          scope: this.scope,
-          collection: mutation.collection,
-          record_id: mutation.recordId,
-        },
-        kind: mutation.kind,
-      })
+      const operation = operations[index]!
 
-      const current = this.toEngineRecord(mutation.collection, mutation.recordId)
-      const projected = this.kernel.applyOperation(current, operation)
+      const { previous: current, projected } = projections[index]!
 
-      operations.push(operation)
       if (this.modeOf(mutation.collection) === 'passthrough') {
         // No durable log for passthrough: the write is pushed inline below,
         // and `previous` is what a rejection restores — there are no accepted
@@ -644,7 +731,6 @@ class PhotonClientImpl implements PhotonClient {
       } else {
         durableOperations.push(operation)
         durableMutations.push(mutation)
-        engineRecords.push(projected)
       }
       this.registerPending(operation)
       this.appliedOperationIds.add(operation.id)
@@ -661,9 +747,11 @@ class PhotonClientImpl implements PhotonClient {
     this.emit('local', changes)
 
     const persisted = durableOperations.length
-      ? this.commit({ operations: durableOperations, records: engineRecords })
+      ? this.persistLocalOperations(durableOperations)
       : Promise.resolve()
     const local = persisted.then(() => {
+      for (const operation of durableOperations) this.durableOperationIds.add(operation.id)
+      if (durableOperations.length) this.sync.notifyLocalChange()
       const durableChanges: RecordChange[] = []
       for (const mutation of durableMutations) {
         const change = this.projection.markDurable(mutation.collection, mutation.recordId)
@@ -674,6 +762,8 @@ class PhotonClientImpl implements PhotonClient {
       return this.projection.get(last.collection, last.recordId) as PhotonRecord<T> | null
     })
 
+    this.localWrites.add(local)
+    void local.then(() => this.localWrites.delete(local), () => this.localWrites.delete(local))
     const settled = Promise.all(
       operations.map(
         (operation) =>
@@ -686,7 +776,6 @@ class PhotonClientImpl implements PhotonClient {
     ).then((results) => results.find((result) => result.status !== 'accepted') ?? results[0]!)
 
     if (passthrough.length) void this.pushPassthrough(passthrough)
-    if (durableOperations.length) void this.sync.notifyLocalChange()
 
     return {
       operationId: operations[0]!.id,
@@ -770,15 +859,16 @@ class PhotonClientImpl implements PhotonClient {
     this.emit('rollback', changes)
   }
 
-  upsert<T>(collection: Collection, recordId: RecordId, value: T): MutationHandle<T> {
-    return this.mutate<T>({ collection, recordId, kind: { type: 'upsert', value } })
+  upsert<T>(collection: Collection, recordId: RecordId, value: T, options?: MutationOptions): MutationHandle<T> {
+    return this.mutate<T>({ ...options, collection, recordId, kind: { type: 'upsert', value } })
   }
 
-  patch<T>(collection: Collection, recordId: RecordId, fields: Partial<T>): MutationHandle<T> {
+  patch<T>(collection: Collection, recordId: RecordId, fields: Partial<T>, options?: MutationOptions): MutationHandle<T> {
     return this.mutate<T>({
       collection,
       recordId,
       kind: { type: 'patch', fields: fields as Record<string, unknown> },
+      ...options,
     })
   }
 
@@ -863,7 +953,7 @@ class PhotonClientImpl implements PhotonClient {
     remoteValue?: unknown
     remoteSequence?: number
     aliasRecordId?: string
-  }): void {
+  }, reconciled = false): void {
     const entry = this.pending.get(decision.operationId)
     if (!entry) return
 
@@ -896,6 +986,7 @@ class PhotonClientImpl implements PhotonClient {
           }
         }
         entry.resolve({ status: 'accepted', operationId: decision.operationId })
+        if (this.selections) void this.pruneDeferred(collection, recordId).catch(error => console.error('Photon: deferred eviction failed', error))
         break
       }
 
@@ -905,7 +996,7 @@ class PhotonClientImpl implements PhotonClient {
           operationId: decision.operationId,
           reason: decision.reason ?? 'rejected by server',
         })
-        void this.reproject(collection, recordId, 'rollback')
+        if (!reconciled) void this.reproject(collection, recordId, 'rollback')
         break
       }
 
@@ -920,7 +1011,7 @@ class PhotonClientImpl implements PhotonClient {
           createdAtMs: this.clock(),
         }
         this.conflictRows = [...this.conflictRows, conflict]
-        void this.commit({ conflicts: [conflict] })
+        if (!reconciled) void this.commit({ conflicts: [conflict] })
         entry.resolve({
           status: 'conflict',
           operationId: decision.operationId,
@@ -946,10 +1037,13 @@ class PhotonClientImpl implements PhotonClient {
     origin: 'rollback' | 'remote',
   ): Promise<void> {
     const accepted = await this.storage.loadAcceptedOperations(this.scope, collection, recordId)
-    const rebuilt = this.kernel.replay(
-      null,
-      accepted.map((stored) => stored.operation),
-    )
+    const base = this.options.sync?.mode === 'scoped' ? await this.storage.getRecordBase?.(this.scope, collection, recordId) : null
+    let rebuilt = base ? this.kernel.replay(base.record, accepted.filter(stored => stored.remoteSequence !== null && stored.remoteSequence > base.sequence).map(stored => stored.operation)) : this.kernel.replay(null, accepted.map(stored => stored.operation))
+    for (const entry of this.pending.values()) {
+      if (entry.operation.key.collection === collection && entry.operation.key.record_id === recordId) {
+        rebuilt = this.kernel.applyOperation(rebuilt, entry.operation)
+      }
+    }
 
     const changes: RecordChange[] = []
     if (rebuilt) {
@@ -1026,11 +1120,14 @@ class PhotonClientImpl implements PhotonClient {
     // Merging a remote operation needs the record's current state as its base.
     // For a lazy collection that base may still be in storage only, so pull
     // the collection in before applying — correctness outranks deferral.
+    for (const operation of operations) {
+      if (this.onDemandCollections.has(operation.key.collection)) await this.hydrateRecord(operation.key.collection, operation.key.record_id)
+    }
     const needHydration = [
       ...new Set(operations.map((operation) => operation.key.collection)),
     ].filter(
       (collection) =>
-        this.lazyCollections.has(collection) && !this.hydratedLazyCollections.has(collection),
+        this.lazyCollections.has(collection) && !this.onDemandCollections.has(collection) && !this.hydratedLazyCollections.has(collection),
     )
     if (needHydration.length) {
       await Promise.all(needHydration.map((collection) => this.hydrateCollection(collection)))
@@ -1062,6 +1159,207 @@ class PhotonClientImpl implements PhotonClient {
     return result.records
   }
 
+  subscribeSync(id: string, selector: RecordSelection): SyncSubscription {
+    if (!this.selections) throw new Error('subscribeSync requires sync.mode = scoped')
+    const handle = this.selections.open(id, selector)
+    if (this.options.sync?.autoStart !== false) void this.sync.syncNow('manual')
+    return handle
+  }
+
+  async readPage<T = unknown>(request: RecordPageRequest): Promise<LocalRecordPage<T>> {
+    if (!this.storage.readRecordPage) throw new Error('store does not support paged reads')
+    return this.enqueueWrite(async () => {
+      const page = await this.storage.readRecordPage!(this.scope, request)
+      const changes: RecordChange[] = []
+      const data: PhotonRecord<T>[] = []
+      for (const record of page.records) {
+        this.kernel.observeTimestamp(record.version)
+        const current = this.projection.get(record.key.collection, record.key.record_id)
+        if (!current || (!current.pending && current.durable)) {
+          const change = this.projection.set(record, { durable: true })
+          if (change) changes.push(change)
+        }
+        this.touch(record.key.collection, record.key.record_id)
+        data.push(this.projection.get(record.key.collection, record.key.record_id) as PhotonRecord<T>)
+      }
+      this.emit('hydrate', changes)
+      this.trimCache()
+      return { data, hasMore: page.hasMore, nextAfterId: page.nextAfterId }
+    })
+  }
+
+  private async hydrateRecord(collection: Collection, recordId: RecordId): Promise<void> {
+    await this.readPage({ collection, recordIds: [recordId], limit: 1 })
+  }
+
+  evictRecords(collection: Collection, recordIds: readonly RecordId[]): number {
+    let count = 0
+    for (const recordId of recordIds) {
+      if (this.projection.get(collection, recordId)?.pending || this.collectionQueries.get(collection)?.size ||
+          [...(this.recordQueries.get(collection) ?? [])].some(q => q.recordId === recordId)) continue
+      if (this.projection.remove(collection, recordId)) {
+        this.accessOrder.delete(JSON.stringify([collection, recordId]))
+        count += 1
+      }
+    }
+    return count
+  }
+
+  private touch(collection: Collection, recordId: RecordId): void {
+    const key = JSON.stringify([collection, recordId])
+    this.accessOrder.delete(key)
+    this.accessOrder.set(key, { collection, recordId })
+  }
+
+  private trimCache(): void {
+    const limit = this.options.cache?.maxRecords
+    if (limit === undefined) return
+    for (const { collection, recordId } of this.accessOrder.values()) {
+      if (this.accessOrder.size <= limit) break
+      if (this.onDemandCollections.has(collection)) this.evictRecords(collection, [recordId])
+    }
+  }
+
+  private lockRemoval(key: string): void {
+    this.removalInFlight.set(key, (this.removalInFlight.get(key) ?? 0) + 1)
+  }
+
+  private unlockRemoval(key: string): void {
+    const remaining = (this.removalInFlight.get(key) ?? 1) - 1
+    if (remaining) this.removalInFlight.set(key, remaining)
+    else this.removalInFlight.delete(key)
+  }
+
+  private pruneDeferred(collection: Collection, recordId: RecordId): Promise<void> {
+    const key = JSON.stringify([collection, recordId])
+    let locked = false
+    return this.enqueueWrite(async () => {
+      if (!await this.storage.getDeferredEviction?.(this.scope, collection, recordId)) return
+      this.lockRemoval(key)
+      locked = true
+      const members = await this.storage.getRecordMemberships!(this.scope, collection, recordId)
+      if (members.length || [...this.pending.values()].some(entry => entry.operation.key.collection === collection && entry.operation.key.record_id === recordId)) return
+      const target = { scope: this.scope, collection, recordId }
+      await this.storage.commit({ deleteRecords: [target], deleteBases: [target], evictions: [{ ...target, deferred: false }] })
+      const change = this.projection.remove(collection, recordId)
+      if (change) this.emit('remote', [change])
+    }).finally(() => { if (locked) this.unlockRemoval(key) })
+  }
+
+  private async releaseSelection(state: SelectionState): Promise<void> {
+    let afterId: string | null = null
+    for (;;) {
+      const ids = await this.storage.getSelectionMembers!(this.scope, state.id, afterId, 200)
+      if (!ids.length) break
+      await this.applySelectionPage({ records: [], removals: ids.map(recordId => ({ recordId, reason: 'out_of_scope' })), cursor: state.cursor ?? { scope: this.scope, selector: state.selector, phase: 'delta', position: 0, afterId: null }, hasMore: false }, state)
+      afterId = ids[ids.length - 1]!
+    }
+    await this.commit({ deleteSelectionStates: [{ scope: this.scope, id: state.id }] })
+  }
+
+  private async applySelectionPage(page: SelectionPullResult, state: SelectionState): Promise<void> {
+    const keys = page.removals.map(removal => JSON.stringify([state.selector.collection, removal.recordId]))
+    keys.forEach(key => this.lockRemoval(key))
+    try { await this.enqueueWrite(() => this.commitSelectionPage(page, state)) }
+    finally { keys.forEach(key => this.unlockRemoval(key)) }
+  }
+
+  private async commitSelectionPage(page: SelectionPullResult, state: SelectionState): Promise<void> {
+    const collection = state.selector.collection
+    const members: NonNullable<StoreWrite['memberships']>[number][] = []
+    const records: EngineRecord[] = []
+    const deleteRecords: NonNullable<StoreWrite['deleteRecords']>[number][] = []
+    const deleteBases: NonNullable<StoreWrite['deleteBases']>[number][] = []
+    const conflicts: Conflict[] = []
+    const evictions: NonNullable<StoreWrite['evictions']>[number][] = []
+    const statusUpdates: NonNullable<StoreWrite['statusUpdates']>[number][] = []
+    const receipts = new Map((page.receipts ?? []).map(receipt => [receipt.operationId, receipt.remoteSequence]))
+    const acceptedAfterBase = new Map<string, Operation[]>()
+    for (const checkpoint of page.records) {
+      const base = checkpoint.record
+      this.kernel.observeTimestamp(base.version)
+      evictions.push({ scope: this.scope, collection, recordId: base.key.record_id, deferred: false })
+      const accepted = await this.storage.loadAcceptedOperations(this.scope, collection, base.key.record_id)
+      const after = accepted.filter(op => op.remoteSequence !== null && op.remoteSequence > checkpoint.sequence).map(op => op.operation)
+      acceptedAfterBase.set(base.key.record_id, after)
+      members.push({ scope: this.scope, subscriptionId: state.id, collection, recordId: base.key.record_id })
+      let projected = this.kernel.replay(base, after) ?? base
+      for (const entry of this.pending.values()) {
+        if (!this.durableOperationIds.has(entry.operation.id) || (receipts.get(entry.operation.id) ?? Infinity) <= checkpoint.sequence) continue
+        if (entry.operation.key.collection === collection && entry.operation.key.record_id === base.key.record_id) {
+          projected = this.kernel.applyOperation(projected, entry.operation)
+        }
+      }
+      records.push(projected)
+    }
+    for (const removal of page.removals) {
+      const target = { scope: this.scope, collection, recordId: removal.recordId }
+      const memberships = await this.storage.getRecordMemberships!(this.scope, collection, removal.recordId)
+      if (removal.reason === 'out_of_scope') {
+        members.push({ ...target, subscriptionId: state.id, remove: true })
+        if (memberships.some(id => id !== state.id)) continue
+      } else {
+        // Deletion/revocation invalidates every interest, not just this query.
+        for (const id of memberships) members.push({ ...target, subscriptionId: id, remove: true })
+      }
+      const pending = [...this.pending.values()].filter(entry => !receipts.has(entry.operation.id) && entry.operation.key.collection === collection && entry.operation.key.record_id === removal.recordId)
+      if (removal.reason === 'out_of_scope' && pending.length) { evictions.push({ ...target, deferred: true }); continue }
+      const quarantine = new Map(pending.map(entry => [entry.operation.id, entry]))
+      for (const entry of pending) {
+        const batch = (entry.operation.metadata as { photon_batch?: { operationIds: string[] } } | undefined)?.photon_batch
+        for (const id of batch?.operationIds ?? []) {
+          const sibling = this.pending.get(id)
+          if (sibling && !receipts.has(id)) quarantine.set(id, sibling)
+        }
+      }
+      for (const entry of quarantine.values()) {
+        const conflict: Conflict = {
+          id: `${entry.operation.id}:conflict`, key: entry.operation.key, operationId: entry.operation.id,
+          reason: removal.reason, localValue: this.projection.get(entry.operation.key.collection, entry.operation.key.record_id)?.value ?? null,
+          remoteValue: null, createdAtMs: this.clock(),
+        }
+        conflicts.push(conflict)
+        statusUpdates.push({ operationId: entry.operation.id, status: 'conflict' })
+      }
+      deleteRecords.push(target)
+      deleteBases.push(target)
+    }
+    for (const [operationId, remoteSequence] of receipts) {
+      if (this.pending.has(operationId)) statusUpdates.push({ operationId, status: 'accepted', remoteSequence })
+    }
+    await this.storage.commit({ evictions, records, bases: page.records, memberships: members, selectionStates: [state], deleteRecords, deleteBases, conflicts, statusUpdates })
+    for (const conflict of conflicts) {
+      const entry = this.pending.get(conflict.operationId)
+      if (entry) {
+        this.pending.delete(conflict.operationId)
+        this.projection.releasePending(conflict.key.collection, conflict.key.record_id)
+        entry.resolve({ status: 'conflict', operationId: conflict.operationId, conflictId: conflict.id })
+      }
+    }
+    const known = new Set(this.conflictRows.map(row => row.id))
+    this.conflictRows = [...this.conflictRows, ...conflicts.filter(row => !known.has(row.id))]
+    const changes: RecordChange[] = []
+    for (const record of records) {
+      if (this.onDemandCollections.has(collection) && !this.projection.get(collection, record.key.record_id)) continue
+      // A new mutation may have arrived while the durable commit was pending.
+      const checkpoint = page.records.find(base => base.record.key.record_id === record.key.record_id)!
+      let projected = this.kernel.replay(checkpoint.record, acceptedAfterBase.get(record.key.record_id) ?? []) ?? checkpoint.record
+      for (const entry of this.pending.values()) {
+        if ((receipts.get(entry.operation.id) ?? Infinity) <= checkpoint.sequence) continue
+        if (entry.operation.key.collection === collection && entry.operation.key.record_id === record.key.record_id) projected = this.kernel.applyOperation(projected, entry.operation)
+      }
+      const change = this.projection.set(projected, { durable: true })
+      if (change) changes.push(change)
+    }
+    for (const target of deleteRecords) {
+      const change = this.projection.remove(collection, target.recordId)
+      if (change) changes.push(change)
+    }
+    for (const [operationId, remoteSequence] of receipts) this.handleDecision({ kind: 'accepted', operationId, remoteSequence })
+    this.emit('remote', changes)
+    this.trimCache()
+  }
+
   // -------------------------------------------------------------------------
   // Conflicts
   // -------------------------------------------------------------------------
@@ -1081,9 +1379,10 @@ class PhotonClientImpl implements PhotonClient {
     const { collection, record_id: recordId } = conflict.key
     if (resolution.keep === 'local') {
       const local = this.projection.get(collection, recordId)
-      if (local) this.upsert(collection, recordId, local.value)
+      this.upsert(collection, recordId, local?.value ?? conflict.localValue)
       return
     }
+    if (resolution.keep === 'remote' && ['revoked', 'deleted'].includes(conflict.reason)) return
     const value = resolution.keep === 'remote' ? conflict.remoteValue : resolution.value
     this.upsert(collection, recordId, value)
   }
@@ -1107,6 +1406,10 @@ class PhotonClientImpl implements PhotonClient {
     if (this.closed) return
     this.closed = true
     this.sync.stop()
+    this.selections?.close()
+    await this.sync.drain()
+    await this.selections?.drain()
+    await this.writeTail
     this.unsubscribeStorage?.()
     this.unsubscribeStorage = null
     liveClients.delete(this.registryKey)
@@ -1130,9 +1433,91 @@ class PhotonClientImpl implements PhotonClient {
     }
   }
 
+  private enqueueWrite<T>(run: () => Promise<T>): Promise<T> {
+    const committed = this.writeTail.then(run)
+    this.writeTail = committed.then(() => {}, () => {})
+    return committed
+  }
+
+  private async storedRecord(collection: Collection, recordId: RecordId): Promise<EngineRecord | null> {
+    if (this.storage.readRecordPage) {
+      const page = await this.storage.readRecordPage(this.scope, { collection, recordIds: [recordId], includeDeleted: true, limit: 1 })
+      return page.records[0] ?? null
+    }
+    // Compatibility for pre-extension stores. On-demand/scoped mode requires
+    // bounded reads, so this fallback is never used for those collections.
+    return (await this.storage.loadRecords(this.scope, { collection })).find(r => r.key.record_id === recordId) ?? null
+  }
+
+  private persistLocalOperations(operations: readonly Operation[]): Promise<void> {
+    return this.enqueueWrite(async () => {
+      const records = new Map<string, EngineRecord>()
+      for (const operation of operations) {
+        const key = JSON.stringify([operation.key.collection, operation.key.record_id])
+        const previous = records.get(key) ?? await this.storedRecord(operation.key.collection, operation.key.record_id)
+        records.set(key, this.kernel.applyOperation(previous, operation))
+      }
+      // Rebase on the last durable projection, not the optimistic snapshot
+      // captured before an in-flight rejection or pull finished.
+      await this.storage.commit({ operations, records: [...records.values()] })
+    })
+  }
+
+  private commitDecisions(decisions: readonly PushDecision[], statusUpdates: NonNullable<StoreWrite['statusUpdates']>): Promise<void> {
+    return this.enqueueWrite(async () => {
+      const verdicts = new Map(decisions.map(decision => [decision.operationId, decision]))
+      const targets = new Map<string, { collection: Collection; recordId: RecordId }>()
+      for (const decision of decisions) {
+        const entry = this.pending.get(decision.operationId)
+        if (entry && decision.kind === 'rejected') {
+          const target = { collection: entry.operation.key.collection, recordId: entry.operation.key.record_id }
+          targets.set(JSON.stringify(target), target)
+        }
+      }
+      const records: EngineRecord[] = []
+      const deleteRecords: NonNullable<StoreWrite['deleteRecords']>[number][] = []
+      for (const { collection, recordId } of targets.values()) {
+        const accepted = await this.storage.loadAcceptedOperations(this.scope, collection, recordId)
+        const base = this.selections ? await this.storage.getRecordBase!(this.scope, collection, recordId) : null
+        let rebuilt = base ? this.kernel.replay(base.record, accepted.filter(op => op.remoteSequence !== null && op.remoteSequence > base.sequence).map(op => op.operation)) : this.kernel.replay(null, accepted.map(op => op.operation))
+        for (const entry of this.pending.values()) {
+          if (entry.operation.key.collection !== collection || entry.operation.key.record_id !== recordId ||
+              !this.durableOperationIds.has(entry.operation.id) || verdicts.get(entry.operation.id)?.kind === 'rejected') continue
+          rebuilt = this.kernel.applyOperation(rebuilt, entry.operation)
+        }
+        if (rebuilt) records.push(rebuilt)
+        else deleteRecords.push({ scope: this.scope, collection, recordId })
+      }
+      const conflicts: Conflict[] = decisions.flatMap(decision => {
+        const entry = this.pending.get(decision.operationId)
+        return decision.kind === 'conflict' && entry ? [{
+          id: `${decision.operationId}:conflict`, key: entry.operation.key,
+          operationId: decision.operationId, reason: decision.reason,
+          localValue: this.projection.get(entry.operation.key.collection, entry.operation.key.record_id)?.value ?? null,
+          remoteValue: decision.remoteValue ?? null, createdAtMs: this.clock(),
+        }] : []
+      })
+      // Status, conflict evidence and rollback projection survive a crash together.
+      await this.storage.commit({ statusUpdates, records, deleteRecords, conflicts })
+      for (const decision of decisions) this.handleDecision(decision, true)
+      const changes: RecordChange[] = []
+      for (const target of targets.values()) {
+        let projected = records.find(r => r.key.collection === target.collection && r.key.record_id === target.recordId) ?? null
+        for (const entry of this.pending.values()) {
+          if (entry.operation.key.collection === target.collection && entry.operation.key.record_id === target.recordId && !this.durableOperationIds.has(entry.operation.id)) {
+            projected = this.kernel.applyOperation(projected, entry.operation)
+          }
+        }
+        const change = projected ? this.projection.set(projected, { durable: true }) : this.projection.remove(target.collection, target.recordId)
+        if (change) changes.push(change)
+      }
+      this.emit('rollback', changes)
+    })
+  }
+
   private async commit(write: StoreWrite): Promise<void> {
     try {
-      await this.storage.commit(write)
+      await this.enqueueWrite(() => this.storage.commit(write))
     } catch (error) {
       // A failed durable write must not silently look like a success: the
       // record stays `durable: false` so the UI can tell.

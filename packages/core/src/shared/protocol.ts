@@ -40,6 +40,12 @@ export type RemoteMethod =
   | 'loadOperationIds'
   | 'loadConflicts'
   | 'getCursor'
+  | 'readRecordPage'
+  | 'getSelectionState'
+  | 'getSelectionMembers'
+  | 'getRecordMemberships'
+  | 'getRecordBase'
+  | 'getDeferredEviction'
   | 'commit'
   | 'stats'
 

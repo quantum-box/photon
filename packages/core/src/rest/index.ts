@@ -1,3 +1,4 @@
+import type { SelectionPullRequest, SelectionPullResult } from '../selection.js'
 /**
  * Running the engine against a plain REST API.
  *
@@ -44,17 +45,27 @@ export interface RestListResult<T> {
  * Nothing here takes a client, a base URL, or headers: the closure already has
  * whatever the app uses. The engine deliberately does not want to know.
  */
+export interface RestOperationContext {
+  readonly operationId: string
+  readonly scope: string
+  readonly actorId: string
+  readonly expectedVersion?: string | number
+  readonly signal?: AbortSignal
+}
+
 export interface RestResource<T> {
+  /** Optional host change-feed adapter; never inferred from a paginated list. */
+  pullSelection?(request: SelectionPullRequest): Promise<SelectionPullResult>
   list(): Promise<RestListResult<T> | readonly T[]>
-  create(value: T): Promise<T | void>
+  create(value: T, context: RestOperationContext): Promise<T | void>
   /**
    * Create-or-replace, when the backend has PUT-style semantics. Preferred for
    * `upsert` operations, because the client cannot tell a first write from an
    * edit: the optimistic value is in the projection either way.
    */
-  upsert?(recordId: RecordId, value: T): Promise<T | void>
-  update(recordId: RecordId, fields: Partial<T>): Promise<T | void>
-  remove(recordId: RecordId): Promise<void>
+  upsert?(recordId: RecordId, value: T, context: RestOperationContext): Promise<T | void>
+  update(recordId: RecordId, fields: Partial<T>, context: RestOperationContext): Promise<T | void>
+  remove(recordId: RecordId, context: RestOperationContext): Promise<void>
   /** Map one item to its record id and stored value. */
   toRecord(item: T): { recordId: RecordId; value: unknown; deleted?: boolean }
 }
@@ -203,7 +214,13 @@ export function createRestTransport(options: RestTransportOptions): SyncTranspor
   let pullCursor = 0
 
   return {
+    async pullSelection(request) {
+      const resource = options.resources[request.selector.collection]
+      if (!resource?.pullSelection) throw new Error('REST resource does not implement partial sync')
+      return resource.pullSelection(request)
+    },
     async push(request: PushRequest): Promise<PushResult> {
+      if (request.atomicBatchId) throw new Error('REST transport does not support atomic batches')
       // Group by record: REST has no notion of operation order, so a create
       // must land before the patch that follows it. Different records are
       // independent and run concurrently.
@@ -216,7 +233,7 @@ export function createRestTransport(options: RestTransportOptions): SyncTranspor
       }
 
       const results = await Promise.all(
-        [...byRecord.values()].map((operations) => pushRecord(operations)),
+        [...byRecord.values()].map((operations) => pushRecord(operations, request.signal)),
       )
       return { decisions: results.flat() }
     },
@@ -259,7 +276,7 @@ export function createRestTransport(options: RestTransportOptions): SyncTranspor
     },
   }
 
-  async function pushRecord(operations: readonly Operation[]): Promise<PushDecision[]> {
+  async function pushRecord(operations: readonly Operation[], signal?: AbortSignal): Promise<PushDecision[]> {
     const decisions: PushDecision[] = []
 
     for (const operation of operations) {
@@ -275,6 +292,12 @@ export function createRestTransport(options: RestTransportOptions): SyncTranspor
         continue
       }
 
+      const version = (operation.metadata as { photon_context?: { expectedVersion?: string | number } } | undefined)?.photon_context?.expectedVersion
+      const context: RestOperationContext = Object.freeze({
+        operationId: operation.id, scope: operation.key.scope, actorId: operation.actor_id,
+        ...(version === undefined ? {} : { expectedVersion: version }),
+        ...(signal ? { signal } : {}),
+      })
       const kind = operation.kind
 
       try {
@@ -284,7 +307,7 @@ export function createRestTransport(options: RestTransportOptions): SyncTranspor
           // it. Without this, a first write goes out as an update against an id
           // the server has never seen: a 404, which `decisionForError` maps to
           // `rejected`, silently dropping the record the user just made.
-          const saved: unknown = await resource.upsert(recordId, kind.value as never)
+          const saved: unknown = await resource.upsert(recordId, kind.value as never, context)
           decisions.push(acceptance(operation.id, recordId, resource, saved))
           continue
         }
@@ -292,18 +315,18 @@ export function createRestTransport(options: RestTransportOptions): SyncTranspor
         const change = toRestChange(operation, readRecord(collection, recordId))
 
         if (change.type === 'delete') {
-          await resource.remove(recordId)
+          await resource.remove(recordId, context)
           decisions.push({ kind: 'accepted', operationId: operation.id })
           continue
         }
 
         if (change.type === 'create') {
-          const created: unknown = await resource.create(change.fields as never)
+          const created: unknown = await resource.create(change.fields as never, context)
           decisions.push(acceptance(operation.id, recordId, resource, created))
           continue
         }
 
-        await resource.update(recordId, change.fields as never)
+        await resource.update(recordId, change.fields as never, context)
         decisions.push({ kind: 'accepted', operationId: operation.id })
       } catch (error) {
         const decision = decisionForError(operation.id, error)

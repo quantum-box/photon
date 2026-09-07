@@ -1,3 +1,4 @@
+import type { SelectionPullRequest, SelectionPullResult } from '../selection.js'
 /**
  * The sync boundary.
  *
@@ -19,6 +20,7 @@ import type {
 export interface PushRequest {
   readonly scope: Scope
   readonly operations: readonly Operation[]
+  readonly atomicBatchId?: string
   readonly signal?: AbortSignal
 }
 
@@ -86,6 +88,8 @@ export type PullResult =
     }
 
 export interface SyncTransport {
+  readonly supportsAtomic?: boolean
+  pullSelection?(request: SelectionPullRequest): Promise<SelectionPullResult>
   push(request: PushRequest): Promise<PushResult>
   pull(request: PullRequest): Promise<PullResult>
 }
