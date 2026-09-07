@@ -38,3 +38,7 @@ packages/core、packages/store-pglite、shared-store、crates/photon-engine、cr
 最初のBrowser E2Eは24/25成功。2つのオフラインwriterの再読込で片方のレコードが消えた。databases routeが作成Promiseを返さずモーダルのawaitを無効化していたため、Promiseを返し戻り型も明記した。保存完了まで閉じない回帰テストを追加。見た目の変更はない。修正後のCIで再検証する。
 
 追加のCreateRecordModalテスト5件と対象ESLintが成功。ローカルPlaywrightはRustサーバの初回コンパイル中にwebServer起動上限120秒に達し、ブラウザテスト未実行。修正後CIのBrowser E2Eを確認する。
+
+2回目CIではオフラインwriterの再読込は成功し、同一ブラウザ2タブのモーダル待ちが15秒でタイムアウトした。再実行CIは全件成功。ローカル計測で、画面描画後の共有PGlite初回起動が28〜31秒かかり、起動後の保存と同期は成功することを確認。該当E2Eの保存完了待ちを60秒、全体上限を180秒へ調整し、永続化・他タブ同期のassertionは維持した。診断ログは除去。
+
+調整後の同一ブラウザ2タブE2Eは、診断コードなしで3回連続成功（44.9秒、44.4秒、33.8秒）。対象ESLintとdiff checkも成功。

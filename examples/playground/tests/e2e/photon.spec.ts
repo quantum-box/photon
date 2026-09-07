@@ -377,10 +377,9 @@ test.describe('Photon shell', () => {
   })
 
   test('syncs record creation between browser tabs', async ({ page, context }) => {
-    // The default 60s cap cannot hold a 60s toPass plus everything before
-    // it, so this test could only ever pass when convergence landed on the
-    // retry loop's first attempt.
-    test.setTimeout(120_000)
+    // Allow the cold shared-store startup, durable write, and convergence
+    // checks to each finish within their own bounded deadline.
+    test.setTimeout(180_000)
 
     const title = `E2E synced record ${Date.now()}`
 
@@ -392,7 +391,10 @@ test.describe('Photon shell', () => {
     await page.getByLabel(/Record title/i).fill(title)
     await page.getByLabel('Description').fill('Created in the first tab and observed in the second tab')
     await page.getByTestId('create-record-submit').click()
-    await expect(page.getByTestId('create-record-modal')).toBeHidden()
+    // The shell paints before PhotonBoot resolves. Two cold tabs can take
+    // over 30s to open their shared PGlite store; closing the modal also
+    // waits for that startup and the durable write, not just a UI transition.
+    await expect(page.getByTestId('create-record-modal')).toBeHidden({ timeout: 60_000 })
 
     await expect(async () => {
       await secondPage.reload()
