@@ -463,6 +463,40 @@ describe('rest-backed specifics', () => {
     expect(query.getSnapshot().data[0]?.value.title).toBe('my unsaved edit')
     query.destroy()
   })
+
+  /**
+   * A pulled listing reached the projection only, so a reload came back
+   * without it until the next pull -- and an offline start never did.
+   */
+  it('stores a pulled listing, so a reopened client still has it', async () => {
+    const store = memoryStore()
+    const photon = await client(
+      {
+        async push() {
+          return { decisions: [] }
+        },
+        async pull() {
+          return {
+            kind: 'snapshot',
+            collection: 'issues',
+            records: [{ collection: 'issues', recordId: 'r1', value: { id: 'r1', title: 'from server' } }],
+            complete: true,
+          }
+        },
+      },
+      { storage: store },
+    )
+    await photon.sync.syncNow('manual')
+    await photon.close()
+
+    const reopened = await client(undefined, { storage: store })
+    const query = reopened.query<{ title: string }>({ collection: 'issues' })
+    await query.ready()
+    await tick()
+    expect(query.getSnapshot().data.map((row) => row.value.title)).toEqual(['from server'])
+    query.destroy()
+    await reopened.close()
+  })
 })
 
 async function tick(): Promise<void> {

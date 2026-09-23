@@ -462,6 +462,137 @@ describe('ingest', () => {
     expect(query.getSnapshot().data).toHaveLength(1)
     query.destroy()
   })
+
+  /** What the reopened client shows for one collection, once it has hydrated. */
+  async function reopenedRows<T>(store: LocalStore, collection: string) {
+    const reopened = await makeClient({ storage: store })
+    const query = reopened.query<T>({ collection })
+    await query.ready()
+    const rows = query.getSnapshot().data
+    query.destroy()
+    await reopened.close()
+    return rows
+  }
+
+  /**
+   * The projection is memory. Rows that only ever reached it came back missing
+   * after a reload, so an app could draw nothing from Photon until the network
+   * answered again -- and an offline start could draw nothing at all.
+   */
+  it('stores what it ingests, so a reopened client still has it', async () => {
+    const store = memoryStore()
+    const client = await makeClient({ storage: store })
+    client.ingest('issues', [{ recordId: 'i1', value: { title: 'from REST' } }])
+    await client.close()
+
+    const rows = await reopenedRows<{ title: string }>(store, 'issues')
+    expect(rows.map((row) => row.value)).toEqual([{ title: 'from REST' }])
+    expect(rows[0]?.durable).toBe(true)
+  })
+
+  it('reports a row durable only once it is stored', async () => {
+    const client = await makeClient()
+    client.ingest('issues', [{ recordId: 'i1', value: { title: 'from REST' } }])
+    const query = client.query({ collection: 'issues' })
+    await query.ready()
+    await tick()
+
+    await vi.waitFor(() => {
+      expect(query.getSnapshot().data[0]?.durable).toBe(true)
+    })
+    query.destroy()
+    await client.close()
+  })
+
+  it('removes from storage what a complete listing no longer has', async () => {
+    const store = memoryStore()
+    const client = await makeClient({ storage: store })
+    client.ingest('issues', [
+      { recordId: 'i1', value: { n: 1 } },
+      { recordId: 'i2', value: { n: 2 } },
+    ])
+    client.ingest('issues', [{ recordId: 'i1', value: { n: 1 } }], { complete: true })
+    await client.close()
+
+    const rows = await reopenedRows(store, 'issues')
+    expect(rows.map((row) => row.key.record_id)).toEqual(['i1'])
+  })
+
+  /**
+   * A local write rebases on the stored record. With nothing stored under an
+   * ingested row, it stored a record made of only the fields it changed, and
+   * that is what a reload showed.
+   */
+  it('lets a local write on an ingested row keep the rest of the row', async () => {
+    const store = memoryStore()
+    const client = await makeClient({ storage: store })
+    client.ingest('issues', [{ recordId: 'i1', value: { title: 'from REST', status: 'todo' } }])
+    await client.patch('issues', 'i1', { status: 'done' }).local
+    await client.close()
+
+    const rows = await reopenedRows<{ title: string; status: string }>(store, 'issues')
+    expect(rows[0]?.value).toEqual({ title: 'from REST', status: 'done' })
+  })
+
+  it('keeps an unacknowledged local edit over a row it lists, in memory and on disk', async () => {
+    const store = memoryStore()
+    const client = await makeClient({ storage: store })
+    await client.upsert('issues', 'i1', { title: 'my unsaved edit' }).local
+    client.ingest('issues', [{ recordId: 'i1', value: { title: 'from REST' } }])
+
+    const query = client.query<{ title: string }>({ collection: 'issues' })
+    await query.ready()
+    await tick()
+    expect(query.getSnapshot().data[0]?.value.title).toBe('my unsaved edit')
+    query.destroy()
+    await client.close()
+
+    const rows = await reopenedRows<{ title: string }>(store, 'issues')
+    expect(rows[0]?.value.title).toBe('my unsaved edit')
+  })
+
+  it('does not apply a pending operation twice to a row the listing left out', async () => {
+    const client = await makeClient()
+    client.ingest('issues', [{ recordId: 'i1', value: { n: 1 } }])
+    client.increment('issues', 'i1', 'n', 1)
+    client.ingest('issues', [{ recordId: 'i2', value: { n: 0 } }])
+
+    const query = client.query<{ n: number }>({ collection: 'issues' })
+    await query.ready()
+    await tick()
+    expect(query.getSnapshot().data.find((row) => row.key.record_id === 'i1')?.value.n).toBe(2)
+    query.destroy()
+    await client.close()
+  })
+
+  it('does not apply a pending operation twice when a pull lists other rows', async () => {
+    const client = await makeClient({
+      transport: {
+        async push() {
+          return { decisions: [] }
+        },
+        async pull() {
+          return {
+            kind: 'snapshot',
+            collection: 'issues',
+            records: [{ collection: 'issues', recordId: 'i2', value: { n: 0 } }],
+            complete: false,
+          }
+        },
+      },
+      sync: { autoStart: false },
+    })
+    client.ingest('issues', [{ recordId: 'i1', value: { n: 1 } }])
+    await client.increment('issues', 'i1', 'n', 1).local
+    await client.sync.syncNow('manual')
+
+    const query = client.query<{ n: number }>({ collection: 'issues' })
+    await query.ready()
+    await tick()
+    expect(query.getSnapshot().data.find((row) => row.key.record_id === 'i1')?.value.n).toBe(2)
+    query.destroy()
+    await client.close()
+  })
 })
 
 describe('lazy hydration', () => {

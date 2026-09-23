@@ -195,7 +195,13 @@ export interface PhotonClient {
   /** uuid v7, so the id is final from the moment of creation. */
   newId(prefix?: string): RecordId
 
-  /** Feed externally fetched data in without writing operations. */
+  /**
+   * Feed externally fetched data in without writing operations.
+   *
+   * The rows are stored as well as projected, so they are there after a
+   * reload -- and, with a shared store, in the other tabs. They never enter
+   * the push queue. A row reads `durable: false` until the write lands.
+   */
   ingest<T = unknown>(
     collection: Collection,
     items: readonly { recordId: RecordId; value: T; deleted?: boolean }[],
@@ -914,37 +920,145 @@ class PhotonClientImpl implements PhotonClient {
     items: readonly { recordId: RecordId; value: T; deleted?: boolean }[],
     options?: { complete?: boolean },
   ): void {
+    this.applyListing(collection, items, options?.complete ?? false, 'ingest')
+  }
+
+  /**
+   * Fold a listing from an authority elsewhere into the projection and into
+   * storage.
+   *
+   * `ingest()` and a REST snapshot pull are one thing arriving by two routes:
+   * rows an authority vouches for, with no operations behind them. Both used
+   * to reach the projection only. The projection is memory, so a reload came
+   * back without them -- an app that read its screens from Photon had nothing
+   * to draw until the network answered again, and an offline start had
+   * nothing at all. A local write on such a row fared worse: it rebased on
+   * the stored record, found none, and stored a record made of nothing but
+   * the fields it changed.
+   *
+   * Unacknowledged local work is re-applied on top, in the projection and in
+   * what is stored, as every stored record carries it: a refetch never wipes
+   * out an optimistic edit, and a reload never loses one from view.
+   */
+  private applyListing(
+    collection: Collection,
+    rows: readonly { recordId: RecordId; value: unknown; deleted?: boolean }[],
+    complete: boolean,
+    origin: 'ingest' | 'remote',
+  ): void {
     const changes: RecordChange[] = []
+    const listed: EngineRecord[] = []
     const seen = new Set<RecordId>()
 
-    for (const item of items) {
-      seen.add(item.recordId)
-      const key = { scope: this.scope, collection, record_id: item.recordId }
+    // A complete listing plus the re-applied pending operations below is a
+    // superset of what stored-record hydration would load, so it counts as
+    // hydration -- and marking it now stops a slower loadRecords() from
+    // resurrecting rows this listing deletes.
+    if (complete && this.lazyCollections.has(collection)) {
+      this.hydratedLazyCollections.add(collection)
+    }
+
+    for (const row of rows) {
+      seen.add(row.recordId)
       const version = this.kernel.currentTimestamp()
       const engine: EngineRecord = {
-        key,
-        value: item.value,
+        key: { scope: this.scope, collection, record_id: row.recordId },
+        value: row.value,
         version,
         field_versions: {},
-        deleted_at: item.deleted ? version : null,
-        updated_by: 'ingest',
+        deleted_at: row.deleted ? version : null,
+        updated_by: origin,
       }
+      listed.push(engine)
       const change = this.projection.set(engine, { durable: false })
       if (change) changes.push(change)
     }
 
-    // Only a complete listing can distinguish "deleted upstream" from
-    // "not on this page", so tombstone reconciliation is gated on it.
-    if (options?.complete) {
+    // Only a complete listing can tell "deleted upstream" from "not on this
+    // page", so tombstone reconciliation is gated on the claim.
+    const removed: RecordId[] = []
+    if (complete) {
       for (const record of [...this.projection.recordsIn(collection)]) {
         if (!seen.has(record.key.record_id) && !record.pending) {
+          removed.push(record.key.record_id)
           const change = this.projection.remove(collection, record.key.record_id)
           if (change) changes.push(change)
         }
       }
     }
 
-    this.emit('ingest', changes)
+    // Re-apply unacknowledged local work over the listed rows. Only those: a
+    // pending record the listing did not mention still holds its own
+    // optimistic value, and applying its operations again would count an
+    // increment twice.
+    for (const entry of this.pending.values()) {
+      const { collection: target, record_id: recordId } = entry.operation.key
+      if (target !== collection || !seen.has(recordId)) continue
+      const current = this.toEngineRecord(collection, recordId)
+      const projected = this.kernel.applyOperation(current, entry.operation)
+      const change = this.projection.set(projected, { durable: false })
+      if (change) changes.push(change)
+    }
+
+    this.emit(origin, changes)
+    if (!this.closed && (listed.length || removed.length)) {
+      void this.persistListing(collection, listed, removed, origin)
+    }
+  }
+
+  /**
+   * Store what `applyListing` projected, then say so.
+   *
+   * Queued behind the other durable writes, and the stored record is built
+   * when its turn comes rather than now: only then is it known which local
+   * operations over it are durable, and a stored record carries exactly
+   * those -- it is what `persistLocalOperations` rebases the next one on.
+   *
+   * A row is marked durable only if the projection still holds the version
+   * that was stored. Anything that has moved it since is newer than what is
+   * on disk, and says so itself.
+   */
+  private persistListing(
+    collection: Collection,
+    listed: readonly EngineRecord[],
+    removed: readonly RecordId[],
+    origin: 'ingest' | 'remote',
+  ): Promise<void> {
+    return this.enqueueWrite(async () => {
+      const records = listed.map((record) => {
+        let stored = record
+        for (const entry of this.pending.values()) {
+          if (
+            entry.operation.key.collection === collection &&
+            entry.operation.key.record_id === record.key.record_id &&
+            this.durableOperationIds.has(entry.operation.id)
+          ) {
+            stored = this.kernel.applyOperation(stored, entry.operation)
+          }
+        }
+        return stored
+      })
+      await this.storage.commit({
+        records,
+        deleteRecords: removed.map((recordId) => ({ scope: this.scope, collection, recordId })),
+      })
+    }).then(
+      () => {
+        const changes: RecordChange[] = []
+        for (const record of listed) {
+          const current = this.projection.get(collection, record.key.record_id)
+          if (!current || current.pending || !sameTimestamp(current.version, record.version)) continue
+          const change = this.projection.markDurable(collection, record.key.record_id)
+          if (change) changes.push(change)
+        }
+        this.emit(origin, changes)
+      },
+      (error: unknown) => {
+        // The rows stay `durable: false`, which is the truth: they are on
+        // screen and not on disk. The next listing writes them again.
+        console.error('Photon: durable write failed', error)
+      },
+    )
   }
 
   // -------------------------------------------------------------------------
@@ -1078,60 +1192,9 @@ class PhotonClientImpl implements PhotonClient {
     this.emit(origin, changes)
   }
 
-  /**
-   * Fold a current-state listing into the projection.
-   *
-   * Pending local operations are re-applied on top afterwards, so a refetch
-   * never wipes out an optimistic edit that has not been acknowledged yet.
-   */
+  /** A REST pull's listing: see `applyListing`. */
   private applySnapshot(page: Extract<PullResult, { kind: 'snapshot' }>): void {
-    const changes: RecordChange[] = []
-    const seen = new Set<RecordId>()
-
-    // A complete server snapshot plus the re-applied pending operations below
-    // is a superset of what stored-record hydration would load, so it counts
-    // as hydration — and marking it now stops a slower loadRecords() from
-    // resurrecting rows this snapshot deletes.
-    if (page.complete && this.lazyCollections.has(page.collection)) {
-      this.hydratedLazyCollections.add(page.collection)
-    }
-
-    for (const remote of page.records) {
-      seen.add(remote.recordId)
-      const version = this.kernel.currentTimestamp()
-      const engine: EngineRecord = {
-        key: { scope: this.scope, collection: remote.collection, record_id: remote.recordId },
-        value: remote.value,
-        version,
-        field_versions: {},
-        deleted_at: remote.deleted ? version : null,
-        updated_by: 'remote',
-      }
-      const change = this.projection.set(engine, { durable: true })
-      if (change) changes.push(change)
-    }
-
-    // Only a complete listing can tell "deleted upstream" from "not on this
-    // page", so tombstone reconciliation is gated on the claim.
-    if (page.complete) {
-      for (const record of [...this.projection.recordsIn(page.collection)]) {
-        if (!seen.has(record.key.record_id) && !record.pending) {
-          const change = this.projection.remove(page.collection, record.key.record_id)
-          if (change) changes.push(change)
-        }
-      }
-    }
-
-    // Re-apply unacknowledged local work over the server's view.
-    for (const entry of this.pending.values()) {
-      if (entry.operation.key.collection !== page.collection) continue
-      const current = this.toEngineRecord(page.collection, entry.operation.key.record_id)
-      const projected = this.kernel.applyOperation(current, entry.operation)
-      const change = this.projection.set(projected, { durable: false })
-      if (change) changes.push(change)
-    }
-
-    this.emit('remote', changes)
+    this.applyListing(page.collection, page.records, page.complete, 'remote')
   }
 
   private async applyRemoteOperations(
@@ -1619,6 +1682,10 @@ function isNewerVersion(candidate: HybridTimestamp, current: HybridTimestamp): b
   }
   if (candidate.counter !== current.counter) return candidate.counter > current.counter
   return candidate.actor_id > current.actor_id
+}
+
+function sameTimestamp(a: HybridTimestamp, b: HybridTimestamp): boolean {
+  return a.wall_time_ms === b.wall_time_ms && a.counter === b.counter && a.actor_id === b.actor_id
 }
 
 export type { QueryDescriptor, QueryState, LiveQuery }
