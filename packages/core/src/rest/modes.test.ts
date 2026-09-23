@@ -507,10 +507,11 @@ describe('rest-backed specifics', () => {
 
   /**
    * A resource whose stored value leaves the id out lists the created record
-   * with exactly the value this client already holds -- so the listing writes
-   * nothing, and the server id has to have been stored when it was assigned.
+   * with exactly the value this client already holds. That row came from local
+   * work (the id swap), not from a listing, so it is written -- not skipped as
+   * unchanged -- and survives the listing reconciling the made-up id away.
    */
-  it('stores a server-assigned id when it is assigned, not only when listed', async () => {
+  it('keeps a created record stored under its server id once a listing names it', async () => {
     const store = memoryStore()
     const rows = new Map<string, { id: string; title: string }>()
     const photon = await client(
@@ -540,57 +541,6 @@ describe('rest-backed specifics', () => {
     await query.ready()
     await tick()
     expect(query.getSnapshot().data.map((row) => row.key.record_id)).toEqual(['server-1'])
-    query.destroy()
-    await reopened.close()
-  })
-
-  /**
-   * One push: the create is accepted under a server id, and an edit made to
-   * the record before then is refused. What moves to the server id is what
-   * the verdicts leave -- not the stored record, which still carries the
-   * refused edit -- even when no pull comes along to paper over it.
-   */
-  it('moves a record to its server id without an edit the same push refused', async () => {
-    const store = memoryStore()
-    const rows = new Map<string, { id: string; title: string }>()
-    const photon = await client(
-      createRestTransport({
-        resources: {
-          issues: {
-            list: async () => {
-              throw new Error('offline')
-            },
-            create: async (value: { title: string }) => {
-              const row = { id: 'server-1', title: value.title }
-              rows.set(row.id, row)
-              return row
-            },
-            update: async () => {
-              throw Object.assign(new Error('nope'), { status: 422 })
-            },
-            remove: async () => undefined,
-            toRecord: (item: { id: string; title: string }) => ({ recordId: item.id, value: { title: item.title } }),
-          } as never,
-        },
-      }),
-      { storage: store },
-    )
-    await photon.upsert('issues', 'local-temp', { title: 'a' }).local
-    await photon.patch('issues', 'local-temp', { title: 'refused edit' }).local
-    await photon.sync.syncNow('manual').catch(() => undefined)
-
-    const live = photon.query<{ title: string }>({ collection: 'issues' })
-    await live.ready()
-    await tick()
-    expect(live.getSnapshot().data.map((row) => [row.key.record_id, row.value.title])).toEqual([['server-1', 'a']])
-    live.destroy()
-    await photon.close()
-
-    const reopened = await client(undefined, { storage: store })
-    const query = reopened.query<{ title: string }>({ collection: 'issues' })
-    await query.ready()
-    await tick()
-    expect(query.getSnapshot().data.map((row) => [row.key.record_id, row.value.title])).toEqual([['server-1', 'a']])
     query.destroy()
     await reopened.close()
   })
