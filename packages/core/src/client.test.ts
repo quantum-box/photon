@@ -504,6 +504,29 @@ describe('ingest', () => {
     await client.close()
   })
 
+  /**
+   * An app that re-lists everything it knows on every start must not rewrite
+   * its whole store each time: a local write queued behind that would wait.
+   */
+  it('does not store a row again when a listing repeats it unchanged', async () => {
+    const store = memoryStore()
+    const client = await makeClient({ storage: store })
+    client.ingest('issues', [{ recordId: 'i1', value: { title: 'from REST' } }])
+    await vi.waitFor(() => {
+      expect(store.writes.some((write) => write.records?.length)).toBe(true)
+    })
+    const writes = store.writes.length
+
+    client.ingest('issues', [{ recordId: 'i1', value: { title: 'from REST' } }])
+    await client.close()
+    expect(store.writes.length).toBe(writes)
+
+    const changed = await makeClient({ storage: store })
+    changed.ingest('issues', [{ recordId: 'i1', value: { title: 'edited upstream' } }])
+    await changed.close()
+    expect(store.writes.length).toBe(writes + 1)
+  })
+
   it('removes from storage what a complete listing no longer has', async () => {
     const store = memoryStore()
     const client = await makeClient({ storage: store })

@@ -960,6 +960,19 @@ class PhotonClientImpl implements PhotonClient {
 
     for (const row of rows) {
       seen.add(row.recordId)
+      // A row this client already holds, on disk and unchanged, is left as it
+      // is. An app that re-lists everything it knows on every start would
+      // otherwise rewrite its whole store each time -- and every local write
+      // queued behind that rewrite would wait for it.
+      const held = this.projection.get(collection, row.recordId)
+      if (
+        held?.durable &&
+        !held.pending &&
+        (held.deletedAt != null) === Boolean(row.deleted) &&
+        sameValue(held.value, row.value)
+      ) {
+        continue
+      }
       const version = this.kernel.currentTimestamp()
       const engine: EngineRecord = {
         key: { scope: this.scope, collection, record_id: row.recordId },
@@ -1682,6 +1695,22 @@ function isNewerVersion(candidate: HybridTimestamp, current: HybridTimestamp): b
   }
   if (candidate.counter !== current.counter) return candidate.counter > current.counter
   return candidate.actor_id > current.actor_id
+}
+
+/**
+ * Whether a listed value is the one already held.
+ *
+ * Structural, because a listing is parsed afresh every time and is never the
+ * same object. A difference in key order reads as a change, which costs one
+ * redundant write and nothing else.
+ */
+function sameValue(a: unknown, b: unknown): boolean {
+  if (a === b) return true
+  try {
+    return JSON.stringify(a) === JSON.stringify(b)
+  } catch {
+    return false
+  }
 }
 
 function sameTimestamp(a: HybridTimestamp, b: HybridTimestamp): boolean {

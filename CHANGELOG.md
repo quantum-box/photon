@@ -19,6 +19,9 @@ by that much.
   on disk. Both are now stored, a row reads `durable: false` until the write
   lands, and a complete listing removes from storage what it no longer lists.
   With a shared store, one tab's ingest reaches the others.
+  A row that is already stored with the same value is not written again, so
+  an app that re-lists everything it knows on every start does not rewrite
+  its whole store each time.
 - **A local write on an ingested row keeps the rest of the row.** A write
   rebases on the stored record, and an ingested row had none, so a `patch`
   stored a record made of nothing but the fields it changed — and that is what
