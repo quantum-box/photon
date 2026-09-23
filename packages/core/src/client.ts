@@ -274,6 +274,11 @@ class PhotonClientImpl implements PhotonClient {
   private readonly localWrites = new Set<Promise<unknown>>()
   private writeTail: Promise<void> = Promise.resolve()
   private readonly durableOperationIds = new Set<string>()
+  /**
+   * Operations the authority refused. A listing queued behind their verdict
+   * re-applies the local work it was drawn with, and must leave these out.
+   */
+  private readonly refusedOperationIds = new Set<string>()
   private readonly hydratedLazyCollections = new Set<Collection>()
   private readonly hydrationInFlight = new Map<Collection, Promise<void>>()
   /** Resources of rest-backed and passthrough collections, added to as the
@@ -493,7 +498,22 @@ class PhotonClientImpl implements PhotonClient {
       ) {
         continue
       }
-      const change = this.projection.set(record, { durable: true })
+      // What another context stored carries the local work it knew of, which
+      // is everything durable. This client's own unsent work is not in it, and
+      // is re-applied here -- otherwise the edit leaves the screen, and its own
+      // write, which is never echoed back, only marks the stale row durable.
+      let projected = record
+      let durable = true
+      for (const entry of this.pending.values()) {
+        if (
+          entry.operation.key.collection !== record.key.collection ||
+          entry.operation.key.record_id !== record.key.record_id ||
+          this.durableOperationIds.has(entry.operation.id)
+        ) continue
+        projected = this.kernel.applyOperation(projected, entry.operation)
+        durable = false
+      }
+      const change = this.projection.set(projected, { durable })
       if (change) changes.push(change)
     }
 
@@ -1018,9 +1038,11 @@ class PhotonClientImpl implements PhotonClient {
     // pending record the listing did not mention still holds its own
     // optimistic value, and applying its operations again would count an
     // increment twice.
+    const overlaid: Operation[] = []
     for (const entry of this.pending.values()) {
       const { collection: target, record_id: recordId } = entry.operation.key
       if (target !== collection || !seen.has(recordId)) continue
+      overlaid.push(entry.operation)
       const current = this.toEngineRecord(collection, recordId)
       const projected = this.kernel.applyOperation(current, entry.operation)
       const change = this.projection.set(projected, { durable: false })
@@ -1032,7 +1054,7 @@ class PhotonClientImpl implements PhotonClient {
     // backend's, served fresh, and a stored copy would outlive them.
     if (this.closed || mode === 'passthrough') return Promise.resolve()
     if (!listed.length && !removed.length && !complete) return Promise.resolve()
-    return this.persistListing(collection, listed, removed, complete ? seen : null, origin)
+    return this.persistListing(collection, listed, removed, complete ? seen : null, overlaid, origin)
   }
 
   /**
@@ -1061,6 +1083,8 @@ class PhotonClientImpl implements PhotonClient {
     removed: readonly RecordId[],
     /** Every id a complete listing named; null for a partial one. */
     completeIds: ReadonlySet<RecordId> | null,
+    /** The local work the listing was drawn with, in the order it was applied. */
+    overlaid: readonly Operation[],
     origin: 'ingest' | 'remote',
   ): Promise<void> {
     return this.enqueueWrite(async () => {
@@ -1077,16 +1101,27 @@ class PhotonClientImpl implements PhotonClient {
           deleted.add(recordId)
         }
       }
+      // The local work the listing was drawn with, even where its verdict has
+      // landed since: an operation accepted while this write waited has left
+      // `pending`, and it is not replayed at start -- stored without it, the
+      // accepted edit would be gone after a reload. Refused work is left out,
+      // and work still unsent is left to its own write, which rebases on this
+      // one. Durable work that arrived after the listing (a sibling context's)
+      // is kept too, as it is already in what this write replaces.
+      const carried = new Set(overlaid.map((operation) => operation.id))
       const records = listed.map((record) => {
         let stored = record
+        const onRecord = (operation: Operation) =>
+          operation.key.collection === collection && operation.key.record_id === record.key.record_id
+        for (const operation of overlaid) {
+          if (!onRecord(operation) || this.refusedOperationIds.has(operation.id)) continue
+          if (this.pending.has(operation.id) && !this.durableOperationIds.has(operation.id)) continue
+          stored = this.kernel.applyOperation(stored, operation)
+        }
         for (const entry of this.pending.values()) {
-          if (
-            entry.operation.key.collection === collection &&
-            entry.operation.key.record_id === record.key.record_id &&
-            this.durableOperationIds.has(entry.operation.id)
-          ) {
-            stored = this.kernel.applyOperation(stored, entry.operation)
-          }
+          if (!onRecord(entry.operation) || carried.has(entry.operation.id)) continue
+          if (!this.durableOperationIds.has(entry.operation.id)) continue
+          stored = this.kernel.applyOperation(stored, entry.operation)
         }
         return stored
       })
@@ -1161,6 +1196,7 @@ class PhotonClientImpl implements PhotonClient {
       }
 
       case 'rejected': {
+        this.refusedOperationIds.add(decision.operationId)
         entry.resolve({
           status: 'rejected',
           operationId: decision.operationId,

@@ -490,6 +490,57 @@ describe('ingest', () => {
     expect(rows[0]?.durable).toBe(true)
   })
 
+  /**
+   * A listing drawn over a pending edit is stored behind the push that
+   * carries the edit. If the edit is accepted while the listing waits, it has
+   * left `pending` by the time the listing is written -- and accepted work is
+   * not replayed at start, so the listing has to carry it.
+   */
+  it('keeps an edit accepted while a listing waited to be stored', async () => {
+    const store = memoryStore()
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let hold = false
+    const commit = store.commit.bind(store)
+    store.commit = async (write) => {
+      if (hold && write.statusUpdates?.length) {
+        hold = false
+        await gate
+      }
+      await commit(write)
+    }
+    const client = await makeClient({
+      storage: store,
+      transport: {
+        async push(request) {
+          return { decisions: request.operations.map((o) => ({ kind: 'accepted' as const, operationId: o.id })) }
+        },
+        async pull(request) {
+          return { kind: 'operations', operations: [], cursor: request.cursor }
+        },
+      },
+      sync: { autoStart: false },
+    })
+    client.ingest('issues', [{ recordId: 'i1', value: { title: 't', status: 'todo' } }])
+    await client.patch('issues', 'i1', { status: 'done' }).local
+
+    hold = true
+    const syncing = client.sync.syncNow('manual')
+    await vi.waitFor(() => {
+      expect(hold).toBe(false)
+    })
+    // Drawn before the server took the edit, so it does not have it.
+    client.ingest('issues', [{ recordId: 'i1', value: { title: 't2', status: 'todo' } }])
+    release()
+    await syncing
+    await client.close()
+
+    const rows = await reopenedRows<{ title: string; status: string }>(store, 'issues')
+    expect(rows[0]?.value).toEqual({ title: 't2', status: 'done' })
+  })
+
   it('reports a row durable only once it is stored', async () => {
     const client = await makeClient()
     client.ingest('issues', [{ recordId: 'i1', value: { title: 'from REST' } }])
@@ -985,6 +1036,49 @@ describe('writes from another context', () => {
     expect(row.getSnapshot().data?.value).toEqual({ n: 2 })
     expect(client.evictRecords('records', ['unloaded'])).toBe(0)
     row.destroy()
+    await client.close()
+  })
+
+  /**
+   * Another context stores what it knows of, which is everything durable. An
+   * edit of this client's that has not reached storage yet is not in it, and
+   * has to stay on screen over it -- this client's own write is never echoed
+   * back to repair it.
+   */
+  it("keeps this client's unsent edit over a record another context stored", async () => {
+    const store = sharedStore()
+    store.seedRecord(engineRecord('issues', 'i1', { title: 'base', status: 'todo' }))
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let hold = true
+    const commit = store.commit.bind(store)
+    store.commit = async (write) => {
+      if (hold && write.operations?.length) {
+        hold = false
+        await gate
+      }
+      await commit(write)
+    }
+    const client = await makeClient({ storage: store, sync: { autoStart: false } })
+    const edit = client.patch('issues', 'i1', { status: 'done' })
+    await vi.waitFor(() => {
+      expect(hold).toBe(false)
+    })
+
+    await store.fromAnotherContext({ records: [engineRecord('issues', 'i1', { title: 'listed', status: 'todo' })] })
+    const query = client.query<{ title: string; status: string }>({ collection: 'issues' })
+    await query.ready()
+    await tick()
+    expect(query.getSnapshot().data[0]?.value).toEqual({ title: 'listed', status: 'done' })
+
+    release()
+    await edit.local
+    await tick()
+    expect(query.getSnapshot().data[0]?.value).toEqual({ title: 'listed', status: 'done' })
+    expect(query.getSnapshot().data[0]?.durable).toBe(true)
+    query.destroy()
     await client.close()
   })
 
