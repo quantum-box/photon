@@ -518,6 +518,11 @@ class PhotonClientImpl implements PhotonClient {
     }
 
     for (const target of write.deleteRecords ?? []) {
+      // Another context removes only what it knew to be unclaimed. This
+      // client's own unsent work on the row is not something it could have
+      // known, so the row stays -- the write carrying that work is on its way
+      // to storage, and it is never echoed back to put the row on screen again.
+      if (this.hasUnsentWork(target.collection, target.recordId)) continue
       this.accessOrder.delete(JSON.stringify([target.collection, target.recordId]))
       const change = this.projection.remove(target.collection, target.recordId)
       if (change) changes.push(change)
@@ -542,6 +547,9 @@ class PhotonClientImpl implements PhotonClient {
 
     for (const update of write.statusUpdates ?? []) {
       if (update.status === 'pending') continue
+      // Refused here as surely as if this client had heard it: a listing
+      // waiting to be stored must not re-apply it.
+      if (update.status === 'rejected') this.refusedOperationIds.add(update.operationId)
       const entry = this.pending.get(update.operationId)
       if (!entry) continue
       this.pending.delete(update.operationId)
@@ -1596,6 +1604,18 @@ class PhotonClientImpl implements PhotonClient {
     this.unsubscribeStorage = null
     liveClients.delete(this.registryKey)
     await this.storage.close()
+  }
+
+  /** Whether this client has work on the record that has not reached storage. */
+  private hasUnsentWork(collection: Collection, recordId: RecordId): boolean {
+    for (const entry of this.pending.values()) {
+      if (
+        entry.operation.key.collection === collection &&
+        entry.operation.key.record_id === recordId &&
+        !this.durableOperationIds.has(entry.operation.id)
+      ) return true
+    }
+    return false
   }
 
   private registerPending(operation: Operation): void {

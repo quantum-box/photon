@@ -1082,6 +1082,98 @@ describe('writes from another context', () => {
     await client.close()
   })
 
+  /**
+   * A complete listing in another context removes the rows it knew to be
+   * unclaimed. A row this client is still writing is not one it could know
+   * about, and has to stay.
+   */
+  it("keeps a row this client is still writing when another context removes it", async () => {
+    const store = sharedStore()
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let hold = true
+    const commit = store.commit.bind(store)
+    store.commit = async (write) => {
+      if (hold && write.operations?.length) {
+        hold = false
+        await gate
+      }
+      await commit(write)
+    }
+    const client = await makeClient({ storage: store, sync: { autoStart: false } })
+    const create = client.upsert('issues', 'local-1', { title: 'mine' })
+    await vi.waitFor(() => {
+      expect(hold).toBe(false)
+    })
+
+    await store.fromAnotherContext({
+      deleteRecords: [{ scope: 'workspace:test', collection: 'issues', recordId: 'local-1' }],
+    })
+    const query = client.query<{ title: string }>({ collection: 'issues' })
+    await query.ready()
+    await tick()
+    expect(query.getSnapshot().data.map((row) => row.value.title)).toEqual(['mine'])
+
+    release()
+    await create.local
+    await tick()
+    expect(query.getSnapshot().data[0]?.durable).toBe(true)
+    query.destroy()
+    await client.close()
+  })
+
+  /**
+   * A listing waiting to be stored re-applies the local work it was drawn
+   * with -- minus what was refused. A refusal heard by another context counts.
+   */
+  it('leaves out an edit another context heard refused while a listing waited', async () => {
+    const store = sharedStore()
+    store.seedRecord(engineRecord('issues', 'i1', { title: 't', status: 'todo' }))
+    store.seedRecord(engineRecord('issues', 'i2', { n: 0 }))
+    const client = await makeClient({ storage: store, sync: { autoStart: false } })
+    const edit = client.patch('issues', 'i1', { status: 'done' })
+    await edit.local
+
+    // Hold the write queue on an unrelated local write, so the listing below
+    // waits its turn -- the window in which the refusal arrives.
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let hold = true
+    const commit = store.commit.bind(store)
+    store.commit = async (write) => {
+      if (hold && write.operations?.length) {
+        hold = false
+        await gate
+      }
+      await commit(write)
+    }
+    const unrelated = client.patch('issues', 'i2', { n: 1 })
+    await vi.waitFor(() => {
+      expect(hold).toBe(false)
+    })
+    client.ingest('issues', [{ recordId: 'i1', value: { title: 't2', status: 'todo' } }])
+
+    await store.fromAnotherContext({
+      statusUpdates: [{ operationId: edit.operationId, status: 'rejected' }],
+      records: [engineRecord('issues', 'i1', { title: 't', status: 'todo' })],
+    })
+    release()
+    await unrelated.local
+    await client.close()
+
+    const reopened = await makeClient({ storage: store, sync: { autoStart: false } })
+    const query = reopened.query<{ title: string; status: string }>({ collection: 'issues' })
+    await query.ready()
+    await tick()
+    expect(query.getSnapshot().data.find((row) => row.key.record_id === 'i1')?.value).toEqual({ title: 't2', status: 'todo' })
+    query.destroy()
+    await reopened.close()
+  })
+
   it("projects another context's record without waiting for the server", async () => {
     const store = sharedStore()
     const client = await makeClient({ storage: store })
