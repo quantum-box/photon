@@ -95,6 +95,30 @@ function fakeKernelModule(): PhotonKernelModule {
   return { PhotonKernel } as unknown as PhotonKernelModule
 }
 
+/**
+ * The fake kernel, but with the real one's rule for whole-record operations:
+ * an upsert, delete or restore applies only over a record no newer than it.
+ */
+function lwwKernelModule(): PhotonKernelModule {
+  const Base = (fakeKernelModule() as unknown as {
+    PhotonKernel: new (actor: string, wall: number) => { applyOperation(current: string | null | undefined, operation: string): string }
+  }).PhotonKernel
+  const older = (a: EngineRecord['version'], b: EngineRecord['version']) =>
+    a.wall_time_ms !== b.wall_time_ms ? a.wall_time_ms < b.wall_time_ms
+      : a.counter !== b.counter ? a.counter < b.counter
+        : a.actor_id < b.actor_id
+  const PhotonKernel = class extends Base {
+    applyOperation(currentJson: string | null | undefined, operationJson: string) {
+      const operation: Operation = JSON.parse(operationJson)
+      const current: EngineRecord | null = currentJson ? JSON.parse(currentJson) : null
+      const whole = operation.kind.type === 'upsert' || operation.kind.type === 'delete' || operation.kind.type === 'restore'
+      if (whole && current && older(operation.timestamp, current.version)) return JSON.stringify(current)
+      return super.applyOperation(currentJson, operationJson)
+    }
+  }
+  return { PhotonKernel } as unknown as PhotonKernelModule
+}
+
 function index(key: EngineRecord['key']) {
   return `${key.scope}/${key.collection}/${key.record_id}`
 }
@@ -269,7 +293,7 @@ async function makeClient(
   overrides: Partial<
     Pick<
       PhotonClientOptions,
-      'storage' | 'transport' | 'sync' | 'collections' | 'resolveCollection' | 'cache'
+      'storage' | 'transport' | 'sync' | 'collections' | 'resolveCollection' | 'cache' | 'kernel'
     >
   > = {},
 ): Promise<PhotonClient> {
@@ -461,6 +485,471 @@ describe('ingest', () => {
     await tick()
     expect(query.getSnapshot().data).toHaveLength(1)
     query.destroy()
+  })
+
+  /** What the reopened client shows for one collection, once it has hydrated. */
+  async function reopenedRows<T>(store: LocalStore, collection: string) {
+    const reopened = await makeClient({ storage: store })
+    const query = reopened.query<T>({ collection })
+    await query.ready()
+    const rows = query.getSnapshot().data
+    query.destroy()
+    await reopened.close()
+    return rows
+  }
+
+  /**
+   * The projection is memory. Rows that only ever reached it came back missing
+   * after a reload, so an app could draw nothing from Photon until the network
+   * answered again -- and an offline start could draw nothing at all.
+   */
+  it('stores what it ingests, so a reopened client still has it', async () => {
+    const store = memoryStore()
+    const client = await makeClient({ storage: store })
+    client.ingest('issues', [{ recordId: 'i1', value: { title: 'from REST' } }])
+    await client.close()
+
+    const rows = await reopenedRows<{ title: string }>(store, 'issues')
+    expect(rows.map((row) => row.value)).toEqual([{ title: 'from REST' }])
+    expect(rows[0]?.durable).toBe(true)
+  })
+
+  /**
+   * A listing drawn over a pending edit is stored behind the push that
+   * carries the edit. If the edit is accepted while the listing waits, it has
+   * left `pending` by the time the listing is written -- and accepted work is
+   * not replayed at start, so the listing has to carry it.
+   */
+  it('keeps an edit accepted while a listing waited to be stored', async () => {
+    const store = memoryStore()
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let hold = false
+    const commit = store.commit.bind(store)
+    store.commit = async (write) => {
+      if (hold && write.statusUpdates?.length) {
+        hold = false
+        await gate
+      }
+      await commit(write)
+    }
+    const client = await makeClient({
+      storage: store,
+      transport: {
+        async push(request) {
+          return { decisions: request.operations.map((o) => ({ kind: 'accepted' as const, operationId: o.id })) }
+        },
+        async pull(request) {
+          return { kind: 'operations', operations: [], cursor: request.cursor }
+        },
+      },
+      sync: { autoStart: false },
+    })
+    client.ingest('issues', [{ recordId: 'i1', value: { title: 't', status: 'todo' } }])
+    await client.patch('issues', 'i1', { status: 'done' }).local
+
+    hold = true
+    const syncing = client.sync.syncNow('manual')
+    await vi.waitFor(() => {
+      expect(hold).toBe(false)
+    })
+    // Drawn before the server took the edit, so it does not have it.
+    client.ingest('issues', [{ recordId: 'i1', value: { title: 't2', status: 'todo' } }])
+    release()
+    await syncing
+    await client.close()
+
+    const rows = await reopenedRows<{ title: string; status: string }>(store, 'issues')
+    expect(rows[0]?.value).toEqual({ title: 't2', status: 'done' })
+  })
+
+  /**
+   * The kernel applies a whole-record operation only over an older record. A
+   * listing that arrives after later edits reads the clock at a time newer
+   * than a pending upsert, and would drop it -- from the screen, then from disk.
+   */
+  it('keeps a pending upsert over a listing that arrives after later edits', async () => {
+    const store = memoryStore()
+    const client = await makeClient({ storage: store, kernel: lwwKernelModule() })
+    await client.upsert('issues', 'i1', { title: 'mine' }).local
+    await client.upsert('issues', 'i2', { title: 'later' }).local
+    client.ingest('issues', [{ recordId: 'i1', value: { title: 'listed' } }])
+
+    const query = client.query<{ title: string }>({ collection: 'issues' })
+    await query.ready()
+    await tick()
+    expect(query.getSnapshot().data.find((row) => row.key.record_id === 'i1')?.value.title).toBe('mine')
+    query.destroy()
+    await client.close()
+
+    const reopened = await makeClient({ storage: store, kernel: lwwKernelModule() })
+    const again = reopened.query<{ title: string }>({ collection: 'issues' })
+    await again.ready()
+    await tick()
+    expect(again.getSnapshot().data.find((row) => row.key.record_id === 'i1')?.value.title).toBe('mine')
+    again.destroy()
+    await reopened.close()
+  })
+
+  /**
+   * A complete listing leaves a row alone while work is pending on it. If the
+   * work settles before the listing is stored, the row is still one the
+   * listing kept -- not one it deleted.
+   */
+  it('keeps a row a complete listing left for work that settled before it was stored', async () => {
+    const store = memoryStore()
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let hold = false
+    const commit = store.commit.bind(store)
+    store.commit = async (write) => {
+      if (hold && write.statusUpdates?.length) {
+        hold = false
+        await gate
+      }
+      await commit(write)
+    }
+    const client = await makeClient({
+      storage: store,
+      transport: {
+        async push(request) {
+          return { decisions: request.operations.map((o) => ({ kind: 'accepted' as const, operationId: o.id })) }
+        },
+        async pull(request) {
+          return { kind: 'operations', operations: [], cursor: request.cursor }
+        },
+      },
+      sync: { autoStart: false },
+    })
+    await client.upsert('issues', 'local-1', { title: 'mine' }).local
+
+    hold = true
+    const syncing = client.sync.syncNow('manual')
+    await vi.waitFor(() => {
+      expect(hold).toBe(false)
+    })
+    // Drawn before the create reached the server, so it does not name it.
+    client.ingest('issues', [], { complete: true })
+    release()
+    await syncing
+    await client.close()
+
+    const rows = await reopenedRows<{ title: string }>(store, 'issues')
+    expect(rows.map((row) => row.key.record_id)).toEqual(['local-1'])
+  })
+
+  /**
+   * A listing's version is read from the clock, not stamped, so two in a row
+   * can share one. The first one's write landing must not vouch for the
+   * second's value -- here the second never lands at all.
+   */
+  it('does not report a later listing durable when an earlier one lands', async () => {
+    const store = memoryStore()
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let writes = 0
+    const commit = store.commit.bind(store)
+    store.commit = async (write) => {
+      if (write.records?.some((record) => record.key.record_id === 'i1')) {
+        writes += 1
+        if (writes === 1) await gate
+        if (writes === 2) throw new Error('disk full')
+      }
+      await commit(write)
+    }
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const client = await makeClient({ storage: store })
+    client.ingest('issues', [{ recordId: 'i1', value: { v: 1 } }])
+    await vi.waitFor(() => {
+      expect(writes).toBe(1)
+    })
+    client.ingest('issues', [{ recordId: 'i1', value: { v: 2 } }])
+    release()
+    await vi.waitFor(() => {
+      expect(writes).toBe(2)
+    })
+
+    const query = client.query<{ v: number }>({ collection: 'issues' })
+    await query.ready()
+    await tick()
+    expect(query.getSnapshot().data[0]?.value.v).toBe(2)
+    expect(query.getSnapshot().data[0]?.durable).toBe(false)
+    query.destroy()
+    await client.close()
+    errors.mockRestore()
+  })
+
+  /** A pull still in flight when `close()` is called is part of what it drains. */
+  it('stores a pull that finishes while the client is closing', async () => {
+    const store = memoryStore()
+    let answer!: (page: unknown) => void
+    const pulled = new Promise((resolve) => {
+      answer = resolve
+    })
+    let asked = false
+    const client = await makeClient({
+      storage: store,
+      transport: {
+        async push() {
+          return { decisions: [] }
+        },
+        pull: (() => {
+          asked = true
+          return pulled
+        }) as never,
+      },
+      sync: { autoStart: false },
+    })
+    const syncing = client.sync.syncNow('manual').catch(() => undefined)
+    await vi.waitFor(() => {
+      expect(asked).toBe(true)
+    })
+    const closing = client.close()
+    answer({
+      kind: 'snapshot',
+      collection: 'issues',
+      records: [{ collection: 'issues', recordId: 'r1', value: { title: 'last' } }],
+      complete: true,
+    })
+    await syncing
+    await closing
+
+    const rows = await reopenedRows<{ title: string }>(store, 'issues')
+    expect(rows.map((row) => row.value.title)).toEqual(['last'])
+  })
+
+  /**
+   * A listener that ingests in response to an ingest must not get its newer
+   * listing onto disk ahead of the older one it is responding to.
+   */
+  it('leaves the newer of two nested listings on disk', async () => {
+    const store = memoryStore()
+    const client = await makeClient({ storage: store })
+    let nested = false
+    client.subscribeChanges((changes) => {
+      if (nested || changes.origin !== 'ingest') return
+      nested = true
+      client.ingest('issues', [{ recordId: 'i1', value: { v: 2 } }])
+    })
+    client.ingest('issues', [{ recordId: 'i1', value: { v: 1 } }])
+    await client.close()
+
+    const rows = await reopenedRows<{ v: number }>(store, 'issues')
+    expect(rows[0]?.value.v).toBe(2)
+  })
+
+  it('reports a row durable only once it is stored', async () => {
+    const client = await makeClient()
+    client.ingest('issues', [{ recordId: 'i1', value: { title: 'from REST' } }])
+    const query = client.query({ collection: 'issues' })
+    await query.ready()
+    await tick()
+
+    await vi.waitFor(() => {
+      expect(query.getSnapshot().data[0]?.durable).toBe(true)
+    })
+    query.destroy()
+    await client.close()
+  })
+
+  /**
+   * An app that re-lists everything it knows on every start must not rewrite
+   * its whole store each time: a local write queued behind that would wait.
+   */
+  it('does not store a row again when a listing repeats it unchanged', async () => {
+    const store = memoryStore()
+    const client = await makeClient({ storage: store })
+    client.ingest('issues', [{ recordId: 'i1', value: { title: 'from REST' } }])
+    await vi.waitFor(() => {
+      expect(store.writes.some((write) => write.records?.length)).toBe(true)
+    })
+    const writes = store.writes.length
+
+    client.ingest('issues', [{ recordId: 'i1', value: { title: 'from REST' } }])
+    await client.close()
+    expect(store.writes.length).toBe(writes)
+
+    const changed = await makeClient({ storage: store })
+    changed.ingest('issues', [{ recordId: 'i1', value: { title: 'edited upstream' } }])
+    await changed.close()
+    expect(store.writes.length).toBe(writes + 1)
+  })
+
+  it('removes from storage what a complete listing no longer has', async () => {
+    const store = memoryStore()
+    const client = await makeClient({ storage: store })
+    client.ingest('issues', [
+      { recordId: 'i1', value: { n: 1 } },
+      { recordId: 'i2', value: { n: 2 } },
+    ])
+    client.ingest('issues', [{ recordId: 'i1', value: { n: 1 } }], { complete: true })
+    await client.close()
+
+    const rows = await reopenedRows(store, 'issues')
+    expect(rows.map((row) => row.key.record_id)).toEqual(['i1'])
+  })
+
+  /**
+   * What storage holds is not always in memory. A complete listing has to
+   * reconcile against storage too, or a row the authority dropped comes back
+   * on the next start.
+   */
+  it('removes stored rows a complete listing leaves out, even ones not in memory', async () => {
+    const store = memoryStore()
+    const lazy = { issues: { mode: 'engine-native', hydration: 'lazy' } } as const
+    const first = await makeClient({ storage: store, collections: lazy })
+    first.ingest('issues', [
+      { recordId: 'i1', value: { n: 1 } },
+      { recordId: 'i2', value: { n: 2 } },
+    ])
+    await first.close()
+
+    // Not hydrated, so i2 is on disk and nowhere else.
+    const second = await makeClient({ storage: store, collections: lazy })
+    second.ingest('issues', [{ recordId: 'i1', value: { n: 1 } }], { complete: true })
+    await second.close()
+
+    const third = await makeClient({ storage: store, collections: lazy })
+    const query = third.query({ collection: 'issues' })
+    await query.ready()
+    await tick()
+    expect(query.getSnapshot().data.map((row) => row.key.record_id)).toEqual(['i1'])
+    query.destroy()
+    await third.close()
+  })
+
+  /**
+   * A collection that `resolveCollection` makes lazy is only known to be lazy
+   * once something asks. A complete listing that is the first to ask still
+   * counts as its hydration, or a query right after it loads the rows the
+   * listing is about to delete from storage and shows them again.
+   */
+  it('counts a first complete listing as hydration for a resolved lazy collection', async () => {
+    const store = memoryStore()
+    store.seedRecord({
+      key: { scope: 'workspace:test', collection: 'issues', record_id: 'i2' },
+      value: { n: 2 },
+      version: { wall_time_ms: 1, counter: 0, actor_id: 'earlier' },
+      field_versions: {},
+      deleted_at: null,
+      updated_by: 'ingest',
+    })
+    const client = await makeClient({
+      storage: store,
+      resolveCollection: (collection) =>
+        collection === 'issues' ? { mode: 'engine-native', hydration: 'lazy' } : undefined,
+    })
+    client.ingest('issues', [{ recordId: 'i1', value: { n: 1 } }], { complete: true })
+
+    const query = client.query({ collection: 'issues' })
+    await query.ready()
+    await tick()
+    expect(query.getSnapshot().data.map((row) => row.key.record_id)).toEqual(['i1'])
+    query.destroy()
+    await client.close()
+  })
+
+  /**
+   * A local write rebases on the stored record. With nothing stored under an
+   * ingested row, it stored a record made of only the fields it changed, and
+   * that is what a reload showed.
+   */
+  it('lets a local write on an ingested row keep the rest of the row', async () => {
+    const store = memoryStore()
+    const client = await makeClient({ storage: store })
+    client.ingest('issues', [{ recordId: 'i1', value: { title: 'from REST', status: 'todo' } }])
+    await client.patch('issues', 'i1', { status: 'done' }).local
+    await client.close()
+
+    const rows = await reopenedRows<{ title: string; status: string }>(store, 'issues')
+    expect(rows[0]?.value).toEqual({ title: 'from REST', status: 'done' })
+  })
+
+  it('keeps an unacknowledged local edit over a row it lists, in memory and on disk', async () => {
+    const store = memoryStore()
+    const client = await makeClient({ storage: store })
+    await client.upsert('issues', 'i1', { title: 'my unsaved edit' }).local
+    client.ingest('issues', [{ recordId: 'i1', value: { title: 'from REST' } }])
+
+    const query = client.query<{ title: string }>({ collection: 'issues' })
+    await query.ready()
+    await tick()
+    expect(query.getSnapshot().data[0]?.value.title).toBe('my unsaved edit')
+    query.destroy()
+    await client.close()
+
+    const rows = await reopenedRows<{ title: string }>(store, 'issues')
+    expect(rows[0]?.value.title).toBe('my unsaved edit')
+  })
+
+  /**
+   * A listed row with a local write over it is stored with that write, so what
+   * is on screen is what is on disk -- and has to say so, pending or not.
+   */
+  it('reports a listed row with a stored local write over it as durable', async () => {
+    const client = await makeClient()
+    client.ingest('issues', [{ recordId: 'i1', value: { title: 'a', status: 'todo' } }])
+    await client.patch('issues', 'i1', { status: 'done' }).local
+    client.ingest('issues', [{ recordId: 'i1', value: { title: 'b', status: 'todo' } }])
+
+    const query = client.query<{ title: string; status: string }>({ collection: 'issues' })
+    await query.ready()
+    await vi.waitFor(() => {
+      expect(query.getSnapshot().data[0]?.durable).toBe(true)
+    })
+    expect(query.getSnapshot().data[0]?.value).toEqual({ title: 'b', status: 'done' })
+    expect(query.getSnapshot().data[0]?.pending).toBe(true)
+    query.destroy()
+    await client.close()
+  })
+
+  it('does not apply a pending operation twice to a row the listing left out', async () => {
+    const client = await makeClient()
+    client.ingest('issues', [{ recordId: 'i1', value: { n: 1 } }])
+    client.increment('issues', 'i1', 'n', 1)
+    client.ingest('issues', [{ recordId: 'i2', value: { n: 0 } }])
+
+    const query = client.query<{ n: number }>({ collection: 'issues' })
+    await query.ready()
+    await tick()
+    expect(query.getSnapshot().data.find((row) => row.key.record_id === 'i1')?.value.n).toBe(2)
+    query.destroy()
+    await client.close()
+  })
+
+  it('does not apply a pending operation twice when a pull lists other rows', async () => {
+    const client = await makeClient({
+      transport: {
+        async push() {
+          return { decisions: [] }
+        },
+        async pull() {
+          return {
+            kind: 'snapshot',
+            collection: 'issues',
+            records: [{ collection: 'issues', recordId: 'i2', value: { n: 0 } }],
+            complete: false,
+          }
+        },
+      },
+      sync: { autoStart: false },
+    })
+    client.ingest('issues', [{ recordId: 'i1', value: { n: 1 } }])
+    await client.increment('issues', 'i1', 'n', 1).local
+    await client.sync.syncNow('manual')
+
+    const query = client.query<{ n: number }>({ collection: 'issues' })
+    await query.ready()
+    await tick()
+    expect(query.getSnapshot().data.find((row) => row.key.record_id === 'i1')?.value.n).toBe(2)
+    query.destroy()
+    await client.close()
   })
 })
 
@@ -751,6 +1240,141 @@ describe('writes from another context', () => {
     expect(client.evictRecords('records', ['unloaded'])).toBe(0)
     row.destroy()
     await client.close()
+  })
+
+  /**
+   * Another context stores what it knows of, which is everything durable. An
+   * edit of this client's that has not reached storage yet is not in it, and
+   * has to stay on screen over it -- this client's own write is never echoed
+   * back to repair it.
+   */
+  it("keeps this client's unsent edit over a record another context stored", async () => {
+    const store = sharedStore()
+    store.seedRecord(engineRecord('issues', 'i1', { title: 'base', status: 'todo' }))
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let hold = true
+    const commit = store.commit.bind(store)
+    store.commit = async (write) => {
+      if (hold && write.operations?.length) {
+        hold = false
+        await gate
+      }
+      await commit(write)
+    }
+    const client = await makeClient({ storage: store, sync: { autoStart: false } })
+    const edit = client.patch('issues', 'i1', { status: 'done' })
+    await vi.waitFor(() => {
+      expect(hold).toBe(false)
+    })
+
+    await store.fromAnotherContext({ records: [engineRecord('issues', 'i1', { title: 'listed', status: 'todo' })] })
+    const query = client.query<{ title: string; status: string }>({ collection: 'issues' })
+    await query.ready()
+    await tick()
+    expect(query.getSnapshot().data[0]?.value).toEqual({ title: 'listed', status: 'done' })
+
+    release()
+    await edit.local
+    await tick()
+    expect(query.getSnapshot().data[0]?.value).toEqual({ title: 'listed', status: 'done' })
+    expect(query.getSnapshot().data[0]?.durable).toBe(true)
+    query.destroy()
+    await client.close()
+  })
+
+  /**
+   * A complete listing in another context removes the rows it knew to be
+   * unclaimed. A row this client is still writing is not one it could know
+   * about, and has to stay.
+   */
+  it("keeps a row this client is still writing when another context removes it", async () => {
+    const store = sharedStore()
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let hold = true
+    const commit = store.commit.bind(store)
+    store.commit = async (write) => {
+      if (hold && write.operations?.length) {
+        hold = false
+        await gate
+      }
+      await commit(write)
+    }
+    const client = await makeClient({ storage: store, sync: { autoStart: false } })
+    const create = client.upsert('issues', 'local-1', { title: 'mine' })
+    await vi.waitFor(() => {
+      expect(hold).toBe(false)
+    })
+
+    await store.fromAnotherContext({
+      deleteRecords: [{ scope: 'workspace:test', collection: 'issues', recordId: 'local-1' }],
+    })
+    const query = client.query<{ title: string }>({ collection: 'issues' })
+    await query.ready()
+    await tick()
+    expect(query.getSnapshot().data.map((row) => row.value.title)).toEqual(['mine'])
+
+    release()
+    await create.local
+    await tick()
+    expect(query.getSnapshot().data[0]?.durable).toBe(true)
+    query.destroy()
+    await client.close()
+  })
+
+  /**
+   * A listing waiting to be stored re-applies the local work it was drawn
+   * with -- minus what was refused. A refusal heard by another context counts.
+   */
+  it('leaves out an edit another context heard refused while a listing waited', async () => {
+    const store = sharedStore()
+    store.seedRecord(engineRecord('issues', 'i1', { title: 't', status: 'todo' }))
+    store.seedRecord(engineRecord('issues', 'i2', { n: 0 }))
+    const client = await makeClient({ storage: store, sync: { autoStart: false } })
+    const edit = client.patch('issues', 'i1', { status: 'done' })
+    await edit.local
+
+    // Hold the write queue on an unrelated local write, so the listing below
+    // waits its turn -- the window in which the refusal arrives.
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let hold = true
+    const commit = store.commit.bind(store)
+    store.commit = async (write) => {
+      if (hold && write.operations?.length) {
+        hold = false
+        await gate
+      }
+      await commit(write)
+    }
+    const unrelated = client.patch('issues', 'i2', { n: 1 })
+    await vi.waitFor(() => {
+      expect(hold).toBe(false)
+    })
+    client.ingest('issues', [{ recordId: 'i1', value: { title: 't2', status: 'todo' } }])
+
+    await store.fromAnotherContext({
+      statusUpdates: [{ operationId: edit.operationId, status: 'rejected' }],
+      records: [engineRecord('issues', 'i1', { title: 't', status: 'todo' })],
+    })
+    release()
+    await unrelated.local
+    await client.close()
+
+    const reopened = await makeClient({ storage: store, sync: { autoStart: false } })
+    const query = reopened.query<{ title: string; status: string }>({ collection: 'issues' })
+    await query.ready()
+    await tick()
+    expect(query.getSnapshot().data.find((row) => row.key.record_id === 'i1')?.value).toEqual({ title: 't2', status: 'todo' })
+    query.destroy()
+    await reopened.close()
   })
 
   it("projects another context's record without waiting for the server", async () => {

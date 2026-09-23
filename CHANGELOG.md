@@ -3,10 +3,48 @@
 Photon ships as a Git tag, so a release is what an app gets when it moves its
 dependency to the next tag. App-facing changes are separated from internals.
 
-## Unreleased
+## 0.5.0
+
+A minor bump: rows an app used to hold only in memory now take up storage, and
+an app that ingests a large listing should expect its local database to grow
+by that much.
 
 ### App-facing
 
+- **Ingested rows and pulled listings survive a reload.** `ingest()` and a
+  `rest-backed` snapshot pull reached the in-memory projection only, so a
+  reload came back without them: an app that drew its screens from Photon had
+  nothing to draw until the network answered again, and an offline start had
+  nothing at all. A pulled row even reported `durable: true` while it was not
+  on disk. Both are now stored, and a row reads `durable: false` until the
+  write lands. A complete listing removes from storage whatever it no longer
+  lists, including rows that were on disk but not in memory. `passthrough`
+  collections stay memory-only, as their mode promises.
+  A pull does not finish until the rows it pulled are stored, and one whose
+  rows cannot be stored fails rather than reporting success.
+  With a shared store, one tab's ingest reaches the others. In a shared
+  multi-context store a listing can still miss work another context has not
+  broadcast yet; the local value is then stale until the next listing or
+  sync.
+  A row that is already stored with the same value is not written again, so
+  an app that re-lists everything it knows on every start does not rewrite
+  its whole store each time.
+- **A local write on an ingested row keeps the rest of the row.** A write
+  rebases on the stored record, and an ingested row had none, so a `patch`
+  stored a record made of nothing but the fields it changed — and that is what
+  a reload showed.
+- **`ingest()` keeps unacknowledged local edits over the rows it lists**, as a
+  snapshot pull already did, instead of replacing them with the listed value.
+- **A listing no longer applies a pending operation twice.** Pending work was
+  re-applied over every record in the collection, including ones the listing
+  did not touch, so an `increment` counted twice on the next pull.
+
+## 0.4.0
+
+### App-facing
+
+- **Scoped sync, paged local reads and atomic writes.** See
+  [`docs/scoped-sync.md`](docs/scoped-sync.md).
 - **A push the client did not hear the answer to no longer poisons its sync.**
   The authority stamps its own audit metadata — a request id and a receive
   timestamp — onto every operation before storing it, and then compared the

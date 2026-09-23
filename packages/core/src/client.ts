@@ -195,7 +195,13 @@ export interface PhotonClient {
   /** uuid v7, so the id is final from the moment of creation. */
   newId(prefix?: string): RecordId
 
-  /** Feed externally fetched data in without writing operations. */
+  /**
+   * Feed externally fetched data in without writing operations.
+   *
+   * The rows are stored as well as projected, so they are there after a
+   * reload -- and, with a shared store, in the other tabs. They never enter
+   * the push queue. A row reads `durable: false` until the write lands.
+   */
   ingest<T = unknown>(
     collection: Collection,
     items: readonly { recordId: RecordId; value: T; deleted?: boolean }[],
@@ -268,6 +274,13 @@ class PhotonClientImpl implements PhotonClient {
   private readonly localWrites = new Set<Promise<unknown>>()
   private writeTail: Promise<void> = Promise.resolve()
   private readonly durableOperationIds = new Set<string>()
+  /**
+   * Operations the authority refused. A listing queued behind their verdict
+   * re-applies the local work it was drawn with, and must leave these out.
+   */
+  private readonly refusedOperationIds = new Set<string>()
+  /** Set once `close()` has drained the write queue and is closing the store. */
+  private storageClosing = false
   private readonly hydratedLazyCollections = new Set<Collection>()
   private readonly hydrationInFlight = new Map<Collection, Promise<void>>()
   /** Resources of rest-backed and passthrough collections, added to as the
@@ -487,11 +500,31 @@ class PhotonClientImpl implements PhotonClient {
       ) {
         continue
       }
-      const change = this.projection.set(record, { durable: true })
+      // What another context stored carries the local work it knew of, which
+      // is everything durable. This client's own unsent work is not in it, and
+      // is re-applied here -- otherwise the edit leaves the screen, and its own
+      // write, which is never echoed back, only marks the stale row durable.
+      let projected = record
+      let durable = true
+      for (const entry of this.pending.values()) {
+        if (
+          entry.operation.key.collection !== record.key.collection ||
+          entry.operation.key.record_id !== record.key.record_id ||
+          this.durableOperationIds.has(entry.operation.id)
+        ) continue
+        projected = this.kernel.applyOperation(projected, entry.operation)
+        durable = false
+      }
+      const change = this.projection.set(projected, { durable })
       if (change) changes.push(change)
     }
 
     for (const target of write.deleteRecords ?? []) {
+      // Another context removes only what it knew to be unclaimed. This
+      // client's own unsent work on the row is not something it could have
+      // known, so the row stays -- the write carrying that work is on its way
+      // to storage, and it is never echoed back to put the row on screen again.
+      if (this.hasUnsentWork(target.collection, target.recordId)) continue
       this.accessOrder.delete(JSON.stringify([target.collection, target.recordId]))
       const change = this.projection.remove(target.collection, target.recordId)
       if (change) changes.push(change)
@@ -516,6 +549,9 @@ class PhotonClientImpl implements PhotonClient {
 
     for (const update of write.statusUpdates ?? []) {
       if (update.status === 'pending') continue
+      // Refused here as surely as if this client had heard it: a listing
+      // waiting to be stored must not re-apply it.
+      if (update.status === 'rejected') this.refusedOperationIds.add(update.operationId)
       const entry = this.pending.get(update.operationId)
       if (!entry) continue
       this.pending.delete(update.operationId)
@@ -914,37 +950,235 @@ class PhotonClientImpl implements PhotonClient {
     items: readonly { recordId: RecordId; value: T; deleted?: boolean }[],
     options?: { complete?: boolean },
   ): void {
+    // Fire and forget: the rows are on screen now, and `durable` says when
+    // they are on disk. A failed write leaves them `durable: false` until the
+    // next listing writes them again.
+    void this.applyListing(collection, items, options?.complete ?? false, 'ingest').catch((error: unknown) => {
+      console.error('Photon: durable write failed', error)
+    })
+  }
+
+  /**
+   * Fold a listing from an authority elsewhere into the projection and into
+   * storage.
+   *
+   * `ingest()` and a REST snapshot pull are one thing arriving by two routes:
+   * rows an authority vouches for, with no operations behind them. Both used
+   * to reach the projection only. The projection is memory, so a reload came
+   * back without them -- an app that read its screens from Photon had nothing
+   * to draw until the network answered again, and an offline start had
+   * nothing at all. A local write on such a row fared worse: it rebased on
+   * the stored record, found none, and stored a record made of nothing but
+   * the fields it changed.
+   *
+   * Unacknowledged local work is re-applied on top, in the projection and in
+   * what is stored, as every stored record carries it: a refetch never wipes
+   * out an optimistic edit, and a reload never loses one from view.
+   */
+  private applyListing(
+    collection: Collection,
+    rows: readonly { recordId: RecordId; value: unknown; deleted?: boolean }[],
+    complete: boolean,
+    origin: 'ingest' | 'remote',
+  ): Promise<void> {
+    // Resolved first: a collection configured by `resolveCollection` is not
+    // known to be lazy until something asks, and the hydration check below
+    // has to know.
+    const mode = this.modeOf(collection)
     const changes: RecordChange[] = []
+    const listed: EngineRecord[] = []
     const seen = new Set<RecordId>()
 
-    for (const item of items) {
-      seen.add(item.recordId)
-      const key = { scope: this.scope, collection, record_id: item.recordId }
-      const version = this.kernel.currentTimestamp()
+    // A complete listing plus the re-applied pending operations below is a
+    // superset of what stored-record hydration would load, so it counts as
+    // hydration -- and marking it now stops a slower loadRecords() from
+    // resurrecting rows this listing deletes.
+    if (complete && this.lazyCollections.has(collection)) {
+      this.hydratedLazyCollections.add(collection)
+    }
+
+    for (const row of rows) {
+      seen.add(row.recordId)
+      // A row this client already holds, on disk and unchanged, is left as it
+      // is. An app that re-lists everything it knows on every start would
+      // otherwise rewrite its whole store each time -- and every local write
+      // queued behind that rewrite would wait for it.
+      //
+      // Only a row a listing wrote: that is the one case where `durable` is
+      // known to mean "stored under this id with this value". A row that came
+      // from local work -- an alias swap, a rollback -- is written again.
+      const held = this.projection.get(collection, row.recordId)
+      if (
+        held?.durable &&
+        !held.pending &&
+        (held.updatedBy === 'ingest' || held.updatedBy === 'remote') &&
+        (held.deletedAt != null) === Boolean(row.deleted) &&
+        sameValue(held.value, row.value)
+      ) {
+        continue
+      }
+      const version = this.listedVersion(collection, row.recordId)
       const engine: EngineRecord = {
-        key,
-        value: item.value,
+        key: { scope: this.scope, collection, record_id: row.recordId },
+        value: row.value,
         version,
         field_versions: {},
-        deleted_at: item.deleted ? version : null,
-        updated_by: 'ingest',
+        deleted_at: row.deleted ? version : null,
+        updated_by: origin,
       }
+      listed.push(engine)
       const change = this.projection.set(engine, { durable: false })
       if (change) changes.push(change)
     }
 
-    // Only a complete listing can distinguish "deleted upstream" from
-    // "not on this page", so tombstone reconciliation is gated on it.
-    if (options?.complete) {
+    // Only a complete listing can tell "deleted upstream" from "not on this
+    // page", so tombstone reconciliation is gated on the claim.
+    const removed: RecordId[] = []
+    // Kept because work was pending on them when the listing arrived. That
+    // work may settle before the listing is stored, and the row it kept here
+    // must not be deleted there on the strength of the listing alone.
+    const kept = new Set<RecordId>()
+    if (complete) {
+      for (const entry of this.pending.values()) {
+        if (entry.operation.key.collection === collection) kept.add(entry.operation.key.record_id)
+      }
       for (const record of [...this.projection.recordsIn(collection)]) {
         if (!seen.has(record.key.record_id) && !record.pending) {
+          removed.push(record.key.record_id)
           const change = this.projection.remove(collection, record.key.record_id)
           if (change) changes.push(change)
         }
       }
     }
 
-    this.emit('ingest', changes)
+    // Re-apply unacknowledged local work over the listed rows. Only those: a
+    // pending record the listing did not mention still holds its own
+    // optimistic value, and applying its operations again would count an
+    // increment twice.
+    const overlaid: Operation[] = []
+    for (const entry of this.pending.values()) {
+      const { collection: target, record_id: recordId } = entry.operation.key
+      if (target !== collection || !seen.has(recordId)) continue
+      overlaid.push(entry.operation)
+      const current = this.toEngineRecord(collection, recordId)
+      const projected = this.kernel.applyOperation(current, entry.operation)
+      const change = this.projection.set(projected, { durable: false })
+      if (change) changes.push(change)
+    }
+
+    // Queued before anyone hears of the change: a listener that ingests in
+    // response would otherwise queue its newer listing ahead of this one, and
+    // this older value would be the one left on disk.
+    //
+    // Passthrough is memory-only by contract (ADR-0002): its rows are the REST
+    // backend's, served fresh, and a stored copy would outlive them. A client
+    // that is closing still stores what reaches it -- a pull finishing while
+    // `close()` drains is exactly that -- until the store itself is closing.
+    const persisted =
+      this.storageClosing || mode === 'passthrough' || (!listed.length && !removed.length && !complete)
+        ? Promise.resolve()
+        : this.persistListing(collection, listed, removed, complete ? new Set([...seen, ...kept]) : null, overlaid, origin)
+    this.emit(origin, changes)
+    return persisted
+  }
+
+  /**
+   * Store what `applyListing` projected, then say so.
+   *
+   * Queued behind the other durable writes, and the stored record is built
+   * when its turn comes rather than now: only then is it known which local
+   * operations over it are durable, and a stored record carries exactly
+   * those -- it is what `persistLocalOperations` rebases the next one on.
+   *
+   * A complete listing is reconciled against storage as well as against the
+   * projection. What storage holds is not always in memory -- a lazy
+   * collection that has not hydrated, or the row a server-assigned id moved a
+   * record away from -- and a row left behind there comes back on the next
+   * start as a record the authority no longer has.
+   *
+   * A row is marked durable only if the projection still holds the version
+   * that was stored. Anything that has moved it since is newer than what is
+   * on disk, and says so itself. A failed write rejects, and the rows stay
+   * `durable: false` -- on screen, not on disk -- until a listing writes them
+   * again.
+   */
+  private persistListing(
+    collection: Collection,
+    listed: readonly EngineRecord[],
+    removed: readonly RecordId[],
+    /** Every id a complete listing named; null for a partial one. */
+    completeIds: ReadonlySet<RecordId> | null,
+    /** The local work the listing was drawn with, in the order it was applied. */
+    overlaid: readonly Operation[],
+    origin: 'ingest' | 'remote',
+  ): Promise<void> {
+    return this.enqueueWrite(async () => {
+      const deleted = new Set(removed)
+      if (completeIds) {
+        const pendingIds = new Set(
+          [...this.pending.values()]
+            .filter((entry) => entry.operation.key.collection === collection)
+            .map((entry) => entry.operation.key.record_id),
+        )
+        for (const stored of await this.storage.loadRecords(this.scope, { collection })) {
+          const recordId = stored.key.record_id
+          if (stored.key.collection !== collection || completeIds.has(recordId) || pendingIds.has(recordId)) continue
+          deleted.add(recordId)
+        }
+      }
+      // The local work the listing was drawn with, even where its verdict has
+      // landed since: an operation accepted while this write waited has left
+      // `pending`, and it is not replayed at start -- stored without it, the
+      // accepted edit would be gone after a reload. Refused work is left out,
+      // and work still unsent is left to its own write, which rebases on this
+      // one. Durable work that arrived after the listing (a sibling context's)
+      // is kept too, as it is already in what this write replaces.
+      const carried = new Set(overlaid.map((operation) => operation.id))
+      const records = listed.map((record) => {
+        let stored = record
+        const onRecord = (operation: Operation) =>
+          operation.key.collection === collection && operation.key.record_id === record.key.record_id
+        for (const operation of overlaid) {
+          if (!onRecord(operation) || this.refusedOperationIds.has(operation.id)) continue
+          if (this.pending.has(operation.id) && !this.durableOperationIds.has(operation.id)) continue
+          stored = this.kernel.applyOperation(stored, operation)
+        }
+        for (const entry of this.pending.values()) {
+          if (!onRecord(entry.operation) || carried.has(entry.operation.id)) continue
+          if (!this.durableOperationIds.has(entry.operation.id)) continue
+          stored = this.kernel.applyOperation(stored, entry.operation)
+        }
+        return stored
+      })
+      // A complete listing that changed nothing -- the usual case for a
+      // repeated one -- has nothing to write.
+      if (!records.length && !deleted.size) return records
+      await this.storage.commit({
+        records,
+        deleteRecords: [...deleted].map((recordId) => ({ scope: this.scope, collection, recordId })),
+      })
+      return records
+    }).then((stored) => {
+      // Durable means what is on screen is what is on disk, which holds for a
+      // pending row too once its operations are in the stored record -- the
+      // same version on both sides says exactly that.
+      const changes: RecordChange[] = []
+      for (const record of stored) {
+        const current = this.projection.get(collection, record.key.record_id)
+        // Content as well as version: a listing's version is read from the
+        // clock, not stamped, so two listings in a row can share one -- and
+        // the first one's write landing must not vouch for the second's value.
+        if (
+          !current ||
+          !sameTimestamp(current.version, record.version) ||
+          (current.deletedAt != null) !== (record.deleted_at != null) ||
+          !sameValue(current.value, record.value)
+        ) continue
+        const change = this.projection.markDurable(collection, record.key.record_id)
+        if (change) changes.push(change)
+      }
+      this.emit(origin, changes)
+    })
   }
 
   // -------------------------------------------------------------------------
@@ -995,6 +1229,7 @@ class PhotonClientImpl implements PhotonClient {
       }
 
       case 'rejected': {
+        this.refusedOperationIds.add(decision.operationId)
         entry.resolve({
           status: 'rejected',
           operationId: decision.operationId,
@@ -1078,60 +1313,9 @@ class PhotonClientImpl implements PhotonClient {
     this.emit(origin, changes)
   }
 
-  /**
-   * Fold a current-state listing into the projection.
-   *
-   * Pending local operations are re-applied on top afterwards, so a refetch
-   * never wipes out an optimistic edit that has not been acknowledged yet.
-   */
-  private applySnapshot(page: Extract<PullResult, { kind: 'snapshot' }>): void {
-    const changes: RecordChange[] = []
-    const seen = new Set<RecordId>()
-
-    // A complete server snapshot plus the re-applied pending operations below
-    // is a superset of what stored-record hydration would load, so it counts
-    // as hydration — and marking it now stops a slower loadRecords() from
-    // resurrecting rows this snapshot deletes.
-    if (page.complete && this.lazyCollections.has(page.collection)) {
-      this.hydratedLazyCollections.add(page.collection)
-    }
-
-    for (const remote of page.records) {
-      seen.add(remote.recordId)
-      const version = this.kernel.currentTimestamp()
-      const engine: EngineRecord = {
-        key: { scope: this.scope, collection: remote.collection, record_id: remote.recordId },
-        value: remote.value,
-        version,
-        field_versions: {},
-        deleted_at: remote.deleted ? version : null,
-        updated_by: 'remote',
-      }
-      const change = this.projection.set(engine, { durable: true })
-      if (change) changes.push(change)
-    }
-
-    // Only a complete listing can tell "deleted upstream" from "not on this
-    // page", so tombstone reconciliation is gated on the claim.
-    if (page.complete) {
-      for (const record of [...this.projection.recordsIn(page.collection)]) {
-        if (!seen.has(record.key.record_id) && !record.pending) {
-          const change = this.projection.remove(page.collection, record.key.record_id)
-          if (change) changes.push(change)
-        }
-      }
-    }
-
-    // Re-apply unacknowledged local work over the server's view.
-    for (const entry of this.pending.values()) {
-      if (entry.operation.key.collection !== page.collection) continue
-      const current = this.toEngineRecord(page.collection, entry.operation.key.record_id)
-      const projected = this.kernel.applyOperation(current, entry.operation)
-      const change = this.projection.set(projected, { durable: false })
-      if (change) changes.push(change)
-    }
-
-    this.emit('remote', changes)
+  /** A REST pull's listing: see `applyListing`. The pull waits for the write. */
+  private applySnapshot(page: Extract<PullResult, { kind: 'snapshot' }>): Promise<void> {
+    return this.applyListing(page.collection, page.records, page.complete, 'remote')
   }
 
   private async applyRemoteOperations(
@@ -1440,11 +1624,52 @@ class PhotonClientImpl implements PhotonClient {
     this.selections?.close()
     await this.sync.drain()
     await this.selections?.drain()
-    await this.writeTail
+    // Until the queue stops growing: a write that settles can queue another
+    // (a listing that finished during the drain, say), and the store must
+    // outlive all of them.
+    for (let tail = this.writeTail; ; tail = this.writeTail) {
+      await tail
+      if (tail === this.writeTail) break
+    }
+    this.storageClosing = true
     this.unsubscribeStorage?.()
     this.unsubscribeStorage = null
     liveClients.delete(this.registryKey)
     await this.storage.close()
+  }
+
+  /**
+   * The version a listed row is written with.
+   *
+   * The clock's current reading -- unless local work is pending on the row,
+   * in which case just before the oldest of it. The kernel applies a
+   * whole-record operation (upsert, delete, restore) only over an older
+   * record, and a listing that arrives after later edits would otherwise read
+   * newer than a pending upsert and silently drop it from the overlay, and
+   * then from storage.
+   */
+  private listedVersion(collection: Collection, recordId: RecordId): HybridTimestamp {
+    let oldest: HybridTimestamp | null = null
+    for (const entry of this.pending.values()) {
+      if (entry.operation.key.collection !== collection || entry.operation.key.record_id !== recordId) continue
+      if (!oldest || isNewerVersion(oldest, entry.operation.timestamp)) oldest = entry.operation.timestamp
+    }
+    if (!oldest) return this.kernel.currentTimestamp()
+    return oldest.counter > 0
+      ? { ...oldest, counter: oldest.counter - 1 }
+      : { wall_time_ms: oldest.wall_time_ms - 1, counter: 0, actor_id: oldest.actor_id }
+  }
+
+  /** Whether this client has work on the record that has not reached storage. */
+  private hasUnsentWork(collection: Collection, recordId: RecordId): boolean {
+    for (const entry of this.pending.values()) {
+      if (
+        entry.operation.key.collection === collection &&
+        entry.operation.key.record_id === recordId &&
+        !this.durableOperationIds.has(entry.operation.id)
+      ) return true
+    }
+    return false
   }
 
   private registerPending(operation: Operation): void {
@@ -1619,6 +1844,26 @@ function isNewerVersion(candidate: HybridTimestamp, current: HybridTimestamp): b
   }
   if (candidate.counter !== current.counter) return candidate.counter > current.counter
   return candidate.actor_id > current.actor_id
+}
+
+/**
+ * Whether a listed value is the one already held.
+ *
+ * Structural, because a listing is parsed afresh every time and is never the
+ * same object. A difference in key order reads as a change, which costs one
+ * redundant write and nothing else.
+ */
+function sameValue(a: unknown, b: unknown): boolean {
+  if (a === b) return true
+  try {
+    return JSON.stringify(a) === JSON.stringify(b)
+  } catch {
+    return false
+  }
+}
+
+function sameTimestamp(a: HybridTimestamp, b: HybridTimestamp): boolean {
+  return a.wall_time_ms === b.wall_time_ms && a.counter === b.counter && a.actor_id === b.actor_id
 }
 
 export type { QueryDescriptor, QueryState, LiveQuery }
