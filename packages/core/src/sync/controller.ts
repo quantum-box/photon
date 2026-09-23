@@ -56,8 +56,14 @@ export interface SyncEngineOptions {
   applyRemote(
     operations: readonly Operation[],
   ): readonly EngineRecord[] | Promise<readonly EngineRecord[]>
-  /** A server with no operation log returned current state instead. */
-  applySnapshot(page: Extract<PullResult, { kind: 'snapshot' }>): void
+  /**
+   * A server with no operation log returned current state instead.
+   *
+   * Awaited: the pull is not done until the rows are stored, so a cycle that
+   * reports success has not left them in memory only, and a failed write
+   * fails the cycle rather than a log line after it.
+   */
+  applySnapshot(page: Extract<PullResult, { kind: 'snapshot' }>): void | Promise<void>
   knownOperationIds(): ReadonlySet<string>
   pendingCount(): number
   conflictCount(): number
@@ -350,7 +356,7 @@ export class SyncEngine implements SyncController {
       })
 
       if (page.kind === 'snapshot') {
-        this.options.applySnapshot(page)
+        await this.options.applySnapshot(page)
         summary.pulled += page.records.length
         cursor = page.cursor ?? cursor
         break

@@ -920,7 +920,12 @@ class PhotonClientImpl implements PhotonClient {
     items: readonly { recordId: RecordId; value: T; deleted?: boolean }[],
     options?: { complete?: boolean },
   ): void {
-    this.applyListing(collection, items, options?.complete ?? false, 'ingest')
+    // Fire and forget: the rows are on screen now, and `durable` says when
+    // they are on disk. A failed write leaves them `durable: false` until the
+    // next listing writes them again.
+    void this.applyListing(collection, items, options?.complete ?? false, 'ingest').catch((error: unknown) => {
+      console.error('Photon: durable write failed', error)
+    })
   }
 
   /**
@@ -945,7 +950,7 @@ class PhotonClientImpl implements PhotonClient {
     rows: readonly { recordId: RecordId; value: unknown; deleted?: boolean }[],
     complete: boolean,
     origin: 'ingest' | 'remote',
-  ): void {
+  ): Promise<void> {
     const changes: RecordChange[] = []
     const listed: EngineRecord[] = []
     const seen = new Set<RecordId>()
@@ -1016,10 +1021,9 @@ class PhotonClientImpl implements PhotonClient {
     this.emit(origin, changes)
     // Passthrough is memory-only by contract (ADR-0002): its rows are the REST
     // backend's, served fresh, and a stored copy would outlive them.
-    if (this.closed || this.modeOf(collection) === 'passthrough') return
-    if (listed.length || removed.length || complete) {
-      void this.persistListing(collection, listed, removed, complete ? seen : null, origin)
-    }
+    if (this.closed || this.modeOf(collection) === 'passthrough') return Promise.resolve()
+    if (!listed.length && !removed.length && !complete) return Promise.resolve()
+    return this.persistListing(collection, listed, removed, complete ? seen : null, origin)
   }
 
   /**
@@ -1038,7 +1042,9 @@ class PhotonClientImpl implements PhotonClient {
    *
    * A row is marked durable only if the projection still holds the version
    * that was stored. Anything that has moved it since is newer than what is
-   * on disk, and says so itself.
+   * on disk, and says so itself. A failed write rejects, and the rows stay
+   * `durable: false` -- on screen, not on disk -- until a listing writes them
+   * again.
    */
   private persistListing(
     collection: Collection,
@@ -1077,28 +1083,25 @@ class PhotonClientImpl implements PhotonClient {
       })
       // A complete listing that changed nothing -- the usual case for a
       // repeated one -- has nothing to write.
-      if (!records.length && !deleted.size) return
+      if (!records.length && !deleted.size) return records
       await this.storage.commit({
         records,
         deleteRecords: [...deleted].map((recordId) => ({ scope: this.scope, collection, recordId })),
       })
-    }).then(
-      () => {
-        const changes: RecordChange[] = []
-        for (const record of listed) {
-          const current = this.projection.get(collection, record.key.record_id)
-          if (!current || current.pending || !sameTimestamp(current.version, record.version)) continue
-          const change = this.projection.markDurable(collection, record.key.record_id)
-          if (change) changes.push(change)
-        }
-        this.emit(origin, changes)
-      },
-      (error: unknown) => {
-        // The rows stay `durable: false`, which is the truth: they are on
-        // screen and not on disk. The next listing writes them again.
-        console.error('Photon: durable write failed', error)
-      },
-    )
+      return records
+    }).then((stored) => {
+      // Durable means what is on screen is what is on disk, which holds for a
+      // pending row too once its operations are in the stored record -- the
+      // same version on both sides says exactly that.
+      const changes: RecordChange[] = []
+      for (const record of stored) {
+        const current = this.projection.get(collection, record.key.record_id)
+        if (!current || !sameTimestamp(current.version, record.version)) continue
+        const change = this.projection.markDurable(collection, record.key.record_id)
+        if (change) changes.push(change)
+      }
+      this.emit(origin, changes)
+    })
   }
 
   // -------------------------------------------------------------------------
@@ -1232,9 +1235,9 @@ class PhotonClientImpl implements PhotonClient {
     this.emit(origin, changes)
   }
 
-  /** A REST pull's listing: see `applyListing`. */
-  private applySnapshot(page: Extract<PullResult, { kind: 'snapshot' }>): void {
-    this.applyListing(page.collection, page.records, page.complete, 'remote')
+  /** A REST pull's listing: see `applyListing`. The pull waits for the write. */
+  private applySnapshot(page: Extract<PullResult, { kind: 'snapshot' }>): Promise<void> {
+    return this.applyListing(page.collection, page.records, page.complete, 'remote')
   }
 
   private async applyRemoteOperations(

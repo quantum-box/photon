@@ -505,6 +505,38 @@ describe('rest-backed specifics', () => {
     await reopened.close()
   })
 
+  /**
+   * A pull that reports success has stored what it pulled, and one whose
+   * rows could not be stored does not report success.
+   */
+  it('does not finish a pull before its listing is stored', async () => {
+    const store = memoryStore()
+    const commit = store.commit.bind(store)
+    store.commit = async (write) => {
+      if (write.records?.length) throw new Error('disk full')
+      await commit(write)
+    }
+    const photon = await client(
+      {
+        async push() {
+          return { decisions: [] }
+        },
+        async pull() {
+          return {
+            kind: 'snapshot',
+            collection: 'issues',
+            records: [{ collection: 'issues', recordId: 'r1', value: { id: 'r1' } }],
+            complete: true,
+          }
+        },
+      },
+      { storage: store },
+    )
+    await photon.sync.syncNow('manual').catch(() => undefined)
+    expect(photon.sync.getStatus().lastError).not.toBeNull()
+    await photon.close()
+  })
+
   /** ADR-0002: passthrough has no local durability, pulled rows included. */
   it('keeps a passthrough listing in memory only', async () => {
     const store = memoryStore()

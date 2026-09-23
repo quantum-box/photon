@@ -20,6 +20,8 @@ by that much.
   write lands. A complete listing removes from storage whatever it no longer
   lists, including rows that were on disk but not in memory. `passthrough`
   collections stay memory-only, as their mode promises.
+  A pull does not finish until the rows it pulled are stored, and one whose
+  rows cannot be stored fails rather than reporting success.
   With a shared store, one tab's ingest reaches the others.
   A row that is already stored with the same value is not written again, so
   an app that re-lists everything it knows on every start does not rewrite

@@ -603,6 +603,27 @@ describe('ingest', () => {
     expect(rows[0]?.value.title).toBe('my unsaved edit')
   })
 
+  /**
+   * A listed row with a local write over it is stored with that write, so what
+   * is on screen is what is on disk -- and has to say so, pending or not.
+   */
+  it('reports a listed row with a stored local write over it as durable', async () => {
+    const client = await makeClient()
+    client.ingest('issues', [{ recordId: 'i1', value: { title: 'a', status: 'todo' } }])
+    await client.patch('issues', 'i1', { status: 'done' }).local
+    client.ingest('issues', [{ recordId: 'i1', value: { title: 'b', status: 'todo' } }])
+
+    const query = client.query<{ title: string; status: string }>({ collection: 'issues' })
+    await query.ready()
+    await vi.waitFor(() => {
+      expect(query.getSnapshot().data[0]?.durable).toBe(true)
+    })
+    expect(query.getSnapshot().data[0]?.value).toEqual({ title: 'b', status: 'done' })
+    expect(query.getSnapshot().data[0]?.pending).toBe(true)
+    query.destroy()
+    await client.close()
+  })
+
   it('does not apply a pending operation twice to a row the listing left out', async () => {
     const client = await makeClient()
     client.ingest('issues', [{ recordId: 'i1', value: { n: 1 } }])
