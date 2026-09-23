@@ -30,6 +30,9 @@ by that much.
   rebases on the stored record, and an ingested row had none, so a `patch`
   stored a record made of nothing but the fields it changed — and that is what
   a reload showed.
+- **A server-assigned id is stored when it is assigned.** A `rest-backed`
+  create whose backend mints its own id moved the record to that id in memory
+  only, so a reload brought back the id the client had made up.
 - **`ingest()` keeps unacknowledged local edits over the rows it lists**, as a
   snapshot pull already did, instead of replacing them with the listed value.
 - **A listing no longer applies a pending operation twice.** Pending work was
