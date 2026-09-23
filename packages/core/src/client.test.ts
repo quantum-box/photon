@@ -685,6 +685,65 @@ describe('ingest', () => {
     errors.mockRestore()
   })
 
+  /** A pull still in flight when `close()` is called is part of what it drains. */
+  it('stores a pull that finishes while the client is closing', async () => {
+    const store = memoryStore()
+    let answer!: (page: unknown) => void
+    const pulled = new Promise((resolve) => {
+      answer = resolve
+    })
+    let asked = false
+    const client = await makeClient({
+      storage: store,
+      transport: {
+        async push() {
+          return { decisions: [] }
+        },
+        pull: (() => {
+          asked = true
+          return pulled
+        }) as never,
+      },
+      sync: { autoStart: false },
+    })
+    const syncing = client.sync.syncNow('manual').catch(() => undefined)
+    await vi.waitFor(() => {
+      expect(asked).toBe(true)
+    })
+    const closing = client.close()
+    answer({
+      kind: 'snapshot',
+      collection: 'issues',
+      records: [{ collection: 'issues', recordId: 'r1', value: { title: 'last' } }],
+      complete: true,
+    })
+    await syncing
+    await closing
+
+    const rows = await reopenedRows<{ title: string }>(store, 'issues')
+    expect(rows.map((row) => row.value.title)).toEqual(['last'])
+  })
+
+  /**
+   * A listener that ingests in response to an ingest must not get its newer
+   * listing onto disk ahead of the older one it is responding to.
+   */
+  it('leaves the newer of two nested listings on disk', async () => {
+    const store = memoryStore()
+    const client = await makeClient({ storage: store })
+    let nested = false
+    client.subscribeChanges((changes) => {
+      if (nested || changes.origin !== 'ingest') return
+      nested = true
+      client.ingest('issues', [{ recordId: 'i1', value: { v: 2 } }])
+    })
+    client.ingest('issues', [{ recordId: 'i1', value: { v: 1 } }])
+    await client.close()
+
+    const rows = await reopenedRows<{ v: number }>(store, 'issues')
+    expect(rows[0]?.value.v).toBe(2)
+  })
+
   it('reports a row durable only once it is stored', async () => {
     const client = await makeClient()
     client.ingest('issues', [{ recordId: 'i1', value: { title: 'from REST' } }])

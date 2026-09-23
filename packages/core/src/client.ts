@@ -279,6 +279,8 @@ class PhotonClientImpl implements PhotonClient {
    * re-applies the local work it was drawn with, and must leave these out.
    */
   private readonly refusedOperationIds = new Set<string>()
+  /** Set once `close()` has drained the write queue and is closing the store. */
+  private storageClosing = false
   private readonly hydratedLazyCollections = new Set<Collection>()
   private readonly hydrationInFlight = new Map<Collection, Promise<void>>()
   /** Resources of rest-backed and passthrough collections, added to as the
@@ -1064,12 +1066,20 @@ class PhotonClientImpl implements PhotonClient {
       if (change) changes.push(change)
     }
 
-    this.emit(origin, changes)
+    // Queued before anyone hears of the change: a listener that ingests in
+    // response would otherwise queue its newer listing ahead of this one, and
+    // this older value would be the one left on disk.
+    //
     // Passthrough is memory-only by contract (ADR-0002): its rows are the REST
-    // backend's, served fresh, and a stored copy would outlive them.
-    if (this.closed || mode === 'passthrough') return Promise.resolve()
-    if (!listed.length && !removed.length && !complete) return Promise.resolve()
-    return this.persistListing(collection, listed, removed, complete ? new Set([...seen, ...kept]) : null, overlaid, origin)
+    // backend's, served fresh, and a stored copy would outlive them. A client
+    // that is closing still stores what reaches it -- a pull finishing while
+    // `close()` drains is exactly that -- until the store itself is closing.
+    const persisted =
+      this.storageClosing || mode === 'passthrough' || (!listed.length && !removed.length && !complete)
+        ? Promise.resolve()
+        : this.persistListing(collection, listed, removed, complete ? new Set([...seen, ...kept]) : null, overlaid, origin)
+    this.emit(origin, changes)
+    return persisted
   }
 
   /**
@@ -1614,7 +1624,14 @@ class PhotonClientImpl implements PhotonClient {
     this.selections?.close()
     await this.sync.drain()
     await this.selections?.drain()
-    await this.writeTail
+    // Until the queue stops growing: a write that settles can queue another
+    // (a listing that finished during the drain, say), and the store must
+    // outlive all of them.
+    for (let tail = this.writeTail; ; tail = this.writeTail) {
+      await tail
+      if (tail === this.writeTail) break
+    }
+    this.storageClosing = true
     this.unsubscribeStorage?.()
     this.unsubscribeStorage = null
     liveClients.delete(this.registryKey)
