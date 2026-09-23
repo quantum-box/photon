@@ -22,7 +22,10 @@ by that much.
   collections stay memory-only, as their mode promises.
   A pull does not finish until the rows it pulled are stored, and one whose
   rows cannot be stored fails rather than reporting success.
-  With a shared store, one tab's ingest reaches the others.
+  With a shared store, one tab's ingest reaches the others. In a shared
+  multi-context store a listing can still miss work another context has not
+  broadcast yet; the local value is then stale until the next listing or
+  sync.
   A row that is already stored with the same value is not written again, so
   an app that re-lists everything it knows on every start does not rewrite
   its whole store each time.
