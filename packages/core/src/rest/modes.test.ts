@@ -545,6 +545,57 @@ describe('rest-backed specifics', () => {
   })
 
   /**
+   * One push: the create is accepted under a server id, and an edit made to
+   * the record before then is refused. What moves to the server id is what
+   * the verdicts leave -- not the stored record, which still carries the
+   * refused edit -- even when no pull comes along to paper over it.
+   */
+  it('moves a record to its server id without an edit the same push refused', async () => {
+    const store = memoryStore()
+    const rows = new Map<string, { id: string; title: string }>()
+    const photon = await client(
+      createRestTransport({
+        resources: {
+          issues: {
+            list: async () => {
+              throw new Error('offline')
+            },
+            create: async (value: { title: string }) => {
+              const row = { id: 'server-1', title: value.title }
+              rows.set(row.id, row)
+              return row
+            },
+            update: async () => {
+              throw Object.assign(new Error('nope'), { status: 422 })
+            },
+            remove: async () => undefined,
+            toRecord: (item: { id: string; title: string }) => ({ recordId: item.id, value: { title: item.title } }),
+          } as never,
+        },
+      }),
+      { storage: store },
+    )
+    await photon.upsert('issues', 'local-temp', { title: 'a' }).local
+    await photon.patch('issues', 'local-temp', { title: 'refused edit' }).local
+    await photon.sync.syncNow('manual').catch(() => undefined)
+
+    const live = photon.query<{ title: string }>({ collection: 'issues' })
+    await live.ready()
+    await tick()
+    expect(live.getSnapshot().data.map((row) => [row.key.record_id, row.value.title])).toEqual([['server-1', 'a']])
+    live.destroy()
+    await photon.close()
+
+    const reopened = await client(undefined, { storage: store })
+    const query = reopened.query<{ title: string }>({ collection: 'issues' })
+    await query.ready()
+    await tick()
+    expect(query.getSnapshot().data.map((row) => [row.key.record_id, row.value.title])).toEqual([['server-1', 'a']])
+    query.destroy()
+    await reopened.close()
+  })
+
+  /**
    * A pull that reports success has stored what it pulled, and one whose
    * rows could not be stored does not report success.
    */

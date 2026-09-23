@@ -571,6 +571,37 @@ describe('ingest', () => {
   })
 
   /**
+   * A collection that `resolveCollection` makes lazy is only known to be lazy
+   * once something asks. A complete listing that is the first to ask still
+   * counts as its hydration, or a query right after it loads the rows the
+   * listing is about to delete from storage and shows them again.
+   */
+  it('counts a first complete listing as hydration for a resolved lazy collection', async () => {
+    const store = memoryStore()
+    store.seedRecord({
+      key: { scope: 'workspace:test', collection: 'issues', record_id: 'i2' },
+      value: { n: 2 },
+      version: { wall_time_ms: 1, counter: 0, actor_id: 'earlier' },
+      field_versions: {},
+      deleted_at: null,
+      updated_by: 'ingest',
+    })
+    const client = await makeClient({
+      storage: store,
+      resolveCollection: (collection) =>
+        collection === 'issues' ? { mode: 'engine-native', hydration: 'lazy' } : undefined,
+    })
+    client.ingest('issues', [{ recordId: 'i1', value: { n: 1 } }], { complete: true })
+
+    const query = client.query({ collection: 'issues' })
+    await query.ready()
+    await tick()
+    expect(query.getSnapshot().data.map((row) => row.key.record_id)).toEqual(['i1'])
+    query.destroy()
+    await client.close()
+  })
+
+  /**
    * A local write rebases on the stored record. With nothing stored under an
    * ingested row, it stored a record made of only the fields it changed, and
    * that is what a reload showed.

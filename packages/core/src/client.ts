@@ -951,6 +951,10 @@ class PhotonClientImpl implements PhotonClient {
     complete: boolean,
     origin: 'ingest' | 'remote',
   ): Promise<void> {
+    // Resolved first: a collection configured by `resolveCollection` is not
+    // known to be lazy until something asks, and the hydration check below
+    // has to know.
+    const mode = this.modeOf(collection)
     const changes: RecordChange[] = []
     const listed: EngineRecord[] = []
     const seen = new Set<RecordId>()
@@ -1026,7 +1030,7 @@ class PhotonClientImpl implements PhotonClient {
     this.emit(origin, changes)
     // Passthrough is memory-only by contract (ADR-0002): its rows are the REST
     // backend's, served fresh, and a stored copy would outlive them.
-    if (this.closed || this.modeOf(collection) === 'passthrough') return Promise.resolve()
+    if (this.closed || mode === 'passthrough') return Promise.resolve()
     if (!listed.length && !removed.length && !complete) return Promise.resolve()
     return this.persistListing(collection, listed, removed, complete ? seen : null, origin)
   }
@@ -1608,17 +1612,35 @@ class PhotonClientImpl implements PhotonClient {
   private commitDecisions(decisions: readonly PushDecision[], statusUpdates: NonNullable<StoreWrite['statusUpdates']>): Promise<void> {
     return this.enqueueWrite(async () => {
       const verdicts = new Map(decisions.map(decision => [decision.operationId, decision]))
+      const keyOf = (collection: Collection, recordId: RecordId) => JSON.stringify({ collection, recordId })
+
+      // Records a server-assigned id moves, by where they are now. A server
+      // id moves the record on disk as well as on screen: left under the id
+      // this client made up, it is found under neither once a complete
+      // listing names the real one -- the listing reconciles the made-up id
+      // away, and a row it lists unchanged is not written again.
+      const aliases = new Map<string, { collection: Collection; recordId: RecordId; aliasId: RecordId }>()
+      for (const decision of decisions) {
+        if (decision.kind !== 'accepted' || !decision.aliasRecordId) continue
+        const entry = this.pending.get(decision.operationId)
+        if (!entry || this.modeOf(entry.operation.key.collection) === 'passthrough') continue
+        const { collection, record_id: recordId } = entry.operation.key
+        if (decision.aliasRecordId === recordId) continue
+        aliases.set(keyOf(collection, recordId), { collection, recordId, aliasId: decision.aliasRecordId })
+      }
+
       const targets = new Map<string, { collection: Collection; recordId: RecordId }>()
       for (const decision of decisions) {
         const entry = this.pending.get(decision.operationId)
         if (entry && decision.kind === 'rejected') {
           const target = { collection: entry.operation.key.collection, recordId: entry.operation.key.record_id }
-          targets.set(JSON.stringify(target), target)
+          // A record an alias moves is rebuilt at its new id below instead.
+          if (!aliases.has(keyOf(target.collection, target.recordId))) targets.set(keyOf(target.collection, target.recordId), target)
         }
       }
-      const records: EngineRecord[] = []
-      const deleteRecords: NonNullable<StoreWrite['deleteRecords']>[number][] = []
-      for (const { collection, recordId } of targets.values()) {
+
+      /** The record as the verdicts leave it: accepted work plus durable pending work nobody refused. */
+      const rebuild = async (collection: Collection, recordId: RecordId): Promise<EngineRecord | null> => {
         const accepted = await this.storage.loadAcceptedOperations(this.scope, collection, recordId)
         const base = this.selections ? await this.storage.getRecordBase!(this.scope, collection, recordId) : null
         let rebuilt = base ? this.kernel.replay(base.record, accepted.filter(op => op.remoteSequence !== null && op.remoteSequence > base.sequence).map(op => op.operation)) : this.kernel.replay(null, accepted.map(op => op.operation))
@@ -1627,9 +1649,30 @@ class PhotonClientImpl implements PhotonClient {
               !this.durableOperationIds.has(entry.operation.id) || verdicts.get(entry.operation.id)?.kind === 'rejected') continue
           rebuilt = this.kernel.applyOperation(rebuilt, entry.operation)
         }
+        return rebuilt
+      }
+
+      const records: EngineRecord[] = []
+      const deleteRecords: NonNullable<StoreWrite['deleteRecords']>[number][] = []
+      for (const { collection, recordId } of targets.values()) {
+        const rebuilt = await rebuild(collection, recordId)
         if (rebuilt) records.push(rebuilt)
         else deleteRecords.push({ scope: this.scope, collection, recordId })
       }
+
+      // Built from the verdicts, not copied from what is stored: the stored
+      // record carries every durable pending operation, including one this
+      // same batch refuses.
+      const moved: { record: EngineRecord; from: RecordId }[] = []
+      for (const { collection, recordId, aliasId } of aliases.values()) {
+        deleteRecords.push({ scope: this.scope, collection, recordId })
+        const rebuilt = await rebuild(collection, recordId)
+        if (!rebuilt) continue
+        const record = { ...rebuilt, key: { ...rebuilt.key, record_id: aliasId } }
+        records.push(record)
+        moved.push({ record, from: recordId })
+      }
+
       const conflicts: Conflict[] = decisions.flatMap(decision => {
         const entry = this.pending.get(decision.operationId)
         return decision.kind === 'conflict' && entry ? [{
@@ -1639,21 +1682,6 @@ class PhotonClientImpl implements PhotonClient {
           remoteValue: decision.remoteValue ?? null, createdAtMs: this.clock(),
         }] : []
       })
-      // A server-assigned id moves the record on disk as well as on screen.
-      // Left under the id this client made up, it is found under neither once
-      // a complete listing names the real one: the listing reconciles the
-      // made-up id away, and a row it lists unchanged is not written again.
-      for (const decision of decisions) {
-        if (decision.kind !== 'accepted' || !decision.aliasRecordId) continue
-        const entry = this.pending.get(decision.operationId)
-        if (!entry || this.modeOf(entry.operation.key.collection) === 'passthrough') continue
-        const { collection, record_id: recordId } = entry.operation.key
-        if (decision.aliasRecordId === recordId) continue
-        const stored = await this.storedRecord(collection, recordId)
-        if (!stored) continue
-        records.push({ ...stored, key: { ...stored.key, record_id: decision.aliasRecordId } })
-        deleteRecords.push({ scope: this.scope, collection, recordId })
-      }
       // Status, conflict evidence and rollback projection survive a crash together.
       await this.storage.commit({ statusUpdates, records, deleteRecords, conflicts })
       for (const decision of decisions) this.handleDecision(decision, true)
@@ -1666,6 +1694,12 @@ class PhotonClientImpl implements PhotonClient {
           }
         }
         const change = projected ? this.projection.set(projected, { durable: true }) : this.projection.remove(target.collection, target.recordId)
+        if (change) changes.push(change)
+      }
+      // `handleDecision` moved the optimistic value; what the verdicts left is
+      // what was stored, and is what the moved record shows.
+      for (const { record, from } of moved) {
+        const change = this.projection.set(record, { durable: true, aliasOf: from })
         if (change) changes.push(change)
       }
       this.emit('rollback', changes)
