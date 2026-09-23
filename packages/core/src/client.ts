@@ -1014,8 +1014,11 @@ class PhotonClientImpl implements PhotonClient {
     }
 
     this.emit(origin, changes)
-    if (!this.closed && (listed.length || removed.length)) {
-      void this.persistListing(collection, listed, removed, origin)
+    // Passthrough is memory-only by contract (ADR-0002): its rows are the REST
+    // backend's, served fresh, and a stored copy would outlive them.
+    if (this.closed || this.modeOf(collection) === 'passthrough') return
+    if (listed.length || removed.length || complete) {
+      void this.persistListing(collection, listed, removed, complete ? seen : null, origin)
     }
   }
 
@@ -1027,6 +1030,12 @@ class PhotonClientImpl implements PhotonClient {
    * operations over it are durable, and a stored record carries exactly
    * those -- it is what `persistLocalOperations` rebases the next one on.
    *
+   * A complete listing is reconciled against storage as well as against the
+   * projection. What storage holds is not always in memory -- a lazy
+   * collection that has not hydrated, or the row a server-assigned id moved a
+   * record away from -- and a row left behind there comes back on the next
+   * start as a record the authority no longer has.
+   *
    * A row is marked durable only if the projection still holds the version
    * that was stored. Anything that has moved it since is newer than what is
    * on disk, and says so itself.
@@ -1035,9 +1044,24 @@ class PhotonClientImpl implements PhotonClient {
     collection: Collection,
     listed: readonly EngineRecord[],
     removed: readonly RecordId[],
+    /** Every id a complete listing named; null for a partial one. */
+    completeIds: ReadonlySet<RecordId> | null,
     origin: 'ingest' | 'remote',
   ): Promise<void> {
     return this.enqueueWrite(async () => {
+      const deleted = new Set(removed)
+      if (completeIds) {
+        const pendingIds = new Set(
+          [...this.pending.values()]
+            .filter((entry) => entry.operation.key.collection === collection)
+            .map((entry) => entry.operation.key.record_id),
+        )
+        for (const stored of await this.storage.loadRecords(this.scope, { collection })) {
+          const recordId = stored.key.record_id
+          if (stored.key.collection !== collection || completeIds.has(recordId) || pendingIds.has(recordId)) continue
+          deleted.add(recordId)
+        }
+      }
       const records = listed.map((record) => {
         let stored = record
         for (const entry of this.pending.values()) {
@@ -1051,9 +1075,12 @@ class PhotonClientImpl implements PhotonClient {
         }
         return stored
       })
+      // A complete listing that changed nothing -- the usual case for a
+      // repeated one -- has nothing to write.
+      if (!records.length && !deleted.size) return
       await this.storage.commit({
         records,
-        deleteRecords: removed.map((recordId) => ({ scope: this.scope, collection, recordId })),
+        deleteRecords: [...deleted].map((recordId) => ({ scope: this.scope, collection, recordId })),
       })
     }).then(
       () => {

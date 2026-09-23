@@ -13,7 +13,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { createPhotonClient, type PhotonClient, type PhotonClientOptions } from '../client.js'
 import { createRestTransport, type RestResource } from './index.js'
 import type { PhotonKernelModule } from '../kernel.js'
-import type { LocalStore } from '../store.js'
+import type { LocalStore, StoreWrite } from '../store.js'
 import type { SyncTransport } from '../sync/types.js'
 import type { EngineRecord, Operation } from '../types.js'
 
@@ -162,6 +162,9 @@ function memoryStore(): LocalStore {
         }
       }
       for (const record of write.records ?? []) records.set(key(record.key), record)
+      for (const target of write.deleteRecords ?? []) {
+        records.delete(key({ scope: target.scope, collection: target.collection, record_id: target.recordId }))
+      }
       for (const update of write.statusUpdates ?? []) {
         const existing = operations.get(update.operationId)
         if (existing) existing.status = update.status
@@ -468,6 +471,68 @@ describe('rest-backed specifics', () => {
    * A pulled listing reached the projection only, so a reload came back
    * without it until the next pull -- and an offline start never did.
    */
+  it('does not leave the row a server-assigned id replaced on disk', async () => {
+    const store = memoryStore()
+    const rows = new Map<string, Record<string, unknown>>()
+    const photon = await client(
+      createRestTransport({
+        resources: {
+          issues: {
+            list: async () => ({ items: [...rows.values()], complete: true }),
+            create: async (value: Record<string, unknown>) => {
+              const row = { ...value, id: 'server-1' }
+              rows.set('server-1', row)
+              return row
+            },
+            update: async () => undefined,
+            remove: async () => undefined,
+            toRecord: (item: { id: string }) => ({ recordId: item.id, value: item }),
+          } as never,
+        },
+      }),
+      { storage: store },
+    )
+    await photon.upsert('issues', 'local-temp', { title: 'a' }).local
+    await photon.sync.syncNow('manual')
+    await photon.close()
+
+    const reopened = await client(undefined, { storage: store })
+    const query = reopened.query({ collection: 'issues' })
+    await query.ready()
+    await tick()
+    expect(query.getSnapshot().data.map((row) => row.key.record_id)).toEqual(['server-1'])
+    query.destroy()
+    await reopened.close()
+  })
+
+  /** ADR-0002: passthrough has no local durability, pulled rows included. */
+  it('keeps a passthrough listing in memory only', async () => {
+    const store = memoryStore()
+    const commits: StoreWrite[] = []
+    const commit = store.commit.bind(store)
+    store.commit = async (write) => {
+      commits.push(write)
+      await commit(write)
+    }
+    const { resource, rows } = issuesResource()
+    rows.set('r1', { id: 'r1', title: 'from server' })
+    const photon = await client(undefined, {
+      storage: store,
+      collections: { issues: { mode: 'passthrough', resource } },
+    })
+    await photon.sync.syncNow('manual')
+    photon.ingest('issues', [{ recordId: 'r2', value: { id: 'r2', title: 'ingested' } }])
+
+    const query = photon.query<{ title: string }>({ collection: 'issues' })
+    await query.ready()
+    await tick()
+    expect(query.getSnapshot().data.map((row) => row.key.record_id).sort()).toEqual(['r1', 'r2'])
+    expect(query.getSnapshot().data.every((row) => !row.durable)).toBe(true)
+    query.destroy()
+    await photon.close()
+    expect(commits.some((write) => write.records?.length || write.deleteRecords?.length)).toBe(false)
+  })
+
   it('stores a pulled listing, so a reopened client still has it', async () => {
     const store = memoryStore()
     const photon = await client(

@@ -16,8 +16,10 @@ by that much.
   reload came back without them: an app that drew its screens from Photon had
   nothing to draw until the network answered again, and an offline start had
   nothing at all. A pulled row even reported `durable: true` while it was not
-  on disk. Both are now stored, a row reads `durable: false` until the write
-  lands, and a complete listing removes from storage what it no longer lists.
+  on disk. Both are now stored, and a row reads `durable: false` until the
+  write lands. A complete listing removes from storage whatever it no longer
+  lists, including rows that were on disk but not in memory. `passthrough`
+  collections stay memory-only, as their mode promises.
   With a shared store, one tab's ingest reaches the others.
   A row that is already stored with the same value is not written again, so
   an app that re-lists everything it knows on every start does not rewrite

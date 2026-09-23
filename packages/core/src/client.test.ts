@@ -542,6 +542,35 @@ describe('ingest', () => {
   })
 
   /**
+   * What storage holds is not always in memory. A complete listing has to
+   * reconcile against storage too, or a row the authority dropped comes back
+   * on the next start.
+   */
+  it('removes stored rows a complete listing leaves out, even ones not in memory', async () => {
+    const store = memoryStore()
+    const lazy = { issues: { mode: 'engine-native', hydration: 'lazy' } } as const
+    const first = await makeClient({ storage: store, collections: lazy })
+    first.ingest('issues', [
+      { recordId: 'i1', value: { n: 1 } },
+      { recordId: 'i2', value: { n: 2 } },
+    ])
+    await first.close()
+
+    // Not hydrated, so i2 is on disk and nowhere else.
+    const second = await makeClient({ storage: store, collections: lazy })
+    second.ingest('issues', [{ recordId: 'i1', value: { n: 1 } }], { complete: true })
+    await second.close()
+
+    const third = await makeClient({ storage: store, collections: lazy })
+    const query = third.query({ collection: 'issues' })
+    await query.ready()
+    await tick()
+    expect(query.getSnapshot().data.map((row) => row.key.record_id)).toEqual(['i1'])
+    query.destroy()
+    await third.close()
+  })
+
+  /**
    * A local write rebases on the stored record. With nothing stored under an
    * ingested row, it stored a record made of only the fields it changed, and
    * that is what a reload showed.
