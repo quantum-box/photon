@@ -506,6 +506,45 @@ describe('rest-backed specifics', () => {
   })
 
   /**
+   * A resource whose stored value leaves the id out lists the created record
+   * with exactly the value this client already holds -- so the listing writes
+   * nothing, and the server id has to have been stored when it was assigned.
+   */
+  it('stores a server-assigned id when it is assigned, not only when listed', async () => {
+    const store = memoryStore()
+    const rows = new Map<string, { id: string; title: string }>()
+    const photon = await client(
+      createRestTransport({
+        resources: {
+          issues: {
+            list: async () => ({ items: [...rows.values()], complete: true }),
+            create: async (value: { title: string }) => {
+              const row = { id: 'server-1', title: value.title }
+              rows.set(row.id, row)
+              return row
+            },
+            update: async () => undefined,
+            remove: async () => undefined,
+            toRecord: (item: { id: string; title: string }) => ({ recordId: item.id, value: { title: item.title } }),
+          } as never,
+        },
+      }),
+      { storage: store },
+    )
+    await photon.upsert('issues', 'local-temp', { title: 'a' }).local
+    await photon.sync.syncNow('manual')
+    await photon.close()
+
+    const reopened = await client(undefined, { storage: store })
+    const query = reopened.query({ collection: 'issues' })
+    await query.ready()
+    await tick()
+    expect(query.getSnapshot().data.map((row) => row.key.record_id)).toEqual(['server-1'])
+    query.destroy()
+    await reopened.close()
+  })
+
+  /**
    * A pull that reports success has stored what it pulled, and one whose
    * rows could not be stored does not report success.
    */

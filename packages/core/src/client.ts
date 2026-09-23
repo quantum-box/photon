@@ -969,10 +969,15 @@ class PhotonClientImpl implements PhotonClient {
       // is. An app that re-lists everything it knows on every start would
       // otherwise rewrite its whole store each time -- and every local write
       // queued behind that rewrite would wait for it.
+      //
+      // Only a row a listing wrote: that is the one case where `durable` is
+      // known to mean "stored under this id with this value". A row that came
+      // from local work -- an alias swap, a rollback -- is written again.
       const held = this.projection.get(collection, row.recordId)
       if (
         held?.durable &&
         !held.pending &&
+        (held.updatedBy === 'ingest' || held.updatedBy === 'remote') &&
         (held.deletedAt != null) === Boolean(row.deleted) &&
         sameValue(held.value, row.value)
       ) {
@@ -1634,6 +1639,21 @@ class PhotonClientImpl implements PhotonClient {
           remoteValue: decision.remoteValue ?? null, createdAtMs: this.clock(),
         }] : []
       })
+      // A server-assigned id moves the record on disk as well as on screen.
+      // Left under the id this client made up, it is found under neither once
+      // a complete listing names the real one: the listing reconciles the
+      // made-up id away, and a row it lists unchanged is not written again.
+      for (const decision of decisions) {
+        if (decision.kind !== 'accepted' || !decision.aliasRecordId) continue
+        const entry = this.pending.get(decision.operationId)
+        if (!entry || this.modeOf(entry.operation.key.collection) === 'passthrough') continue
+        const { collection, record_id: recordId } = entry.operation.key
+        if (decision.aliasRecordId === recordId) continue
+        const stored = await this.storedRecord(collection, recordId)
+        if (!stored) continue
+        records.push({ ...stored, key: { ...stored.key, record_id: decision.aliasRecordId } })
+        deleteRecords.push({ scope: this.scope, collection, recordId })
+      }
       // Status, conflict evidence and rollback projection survive a crash together.
       await this.storage.commit({ statusUpdates, records, deleteRecords, conflicts })
       for (const decision of decisions) this.handleDecision(decision, true)
