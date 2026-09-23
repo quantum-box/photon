@@ -1015,7 +1015,7 @@ class PhotonClientImpl implements PhotonClient {
       ) {
         continue
       }
-      const version = this.kernel.currentTimestamp()
+      const version = this.listedVersion(collection, row.recordId)
       const engine: EngineRecord = {
         key: { scope: this.scope, collection, record_id: row.recordId },
         value: row.value,
@@ -1032,7 +1032,14 @@ class PhotonClientImpl implements PhotonClient {
     // Only a complete listing can tell "deleted upstream" from "not on this
     // page", so tombstone reconciliation is gated on the claim.
     const removed: RecordId[] = []
+    // Kept because work was pending on them when the listing arrived. That
+    // work may settle before the listing is stored, and the row it kept here
+    // must not be deleted there on the strength of the listing alone.
+    const kept = new Set<RecordId>()
     if (complete) {
+      for (const entry of this.pending.values()) {
+        if (entry.operation.key.collection === collection) kept.add(entry.operation.key.record_id)
+      }
       for (const record of [...this.projection.recordsIn(collection)]) {
         if (!seen.has(record.key.record_id) && !record.pending) {
           removed.push(record.key.record_id)
@@ -1062,7 +1069,7 @@ class PhotonClientImpl implements PhotonClient {
     // backend's, served fresh, and a stored copy would outlive them.
     if (this.closed || mode === 'passthrough') return Promise.resolve()
     if (!listed.length && !removed.length && !complete) return Promise.resolve()
-    return this.persistListing(collection, listed, removed, complete ? seen : null, overlaid, origin)
+    return this.persistListing(collection, listed, removed, complete ? new Set([...seen, ...kept]) : null, overlaid, origin)
   }
 
   /**
@@ -1148,7 +1155,15 @@ class PhotonClientImpl implements PhotonClient {
       const changes: RecordChange[] = []
       for (const record of stored) {
         const current = this.projection.get(collection, record.key.record_id)
-        if (!current || !sameTimestamp(current.version, record.version)) continue
+        // Content as well as version: a listing's version is read from the
+        // clock, not stamped, so two listings in a row can share one -- and
+        // the first one's write landing must not vouch for the second's value.
+        if (
+          !current ||
+          !sameTimestamp(current.version, record.version) ||
+          (current.deletedAt != null) !== (record.deleted_at != null) ||
+          !sameValue(current.value, record.value)
+        ) continue
         const change = this.projection.markDurable(collection, record.key.record_id)
         if (change) changes.push(change)
       }
@@ -1604,6 +1619,28 @@ class PhotonClientImpl implements PhotonClient {
     this.unsubscribeStorage = null
     liveClients.delete(this.registryKey)
     await this.storage.close()
+  }
+
+  /**
+   * The version a listed row is written with.
+   *
+   * The clock's current reading -- unless local work is pending on the row,
+   * in which case just before the oldest of it. The kernel applies a
+   * whole-record operation (upsert, delete, restore) only over an older
+   * record, and a listing that arrives after later edits would otherwise read
+   * newer than a pending upsert and silently drop it from the overlay, and
+   * then from storage.
+   */
+  private listedVersion(collection: Collection, recordId: RecordId): HybridTimestamp {
+    let oldest: HybridTimestamp | null = null
+    for (const entry of this.pending.values()) {
+      if (entry.operation.key.collection !== collection || entry.operation.key.record_id !== recordId) continue
+      if (!oldest || isNewerVersion(oldest, entry.operation.timestamp)) oldest = entry.operation.timestamp
+    }
+    if (!oldest) return this.kernel.currentTimestamp()
+    return oldest.counter > 0
+      ? { ...oldest, counter: oldest.counter - 1 }
+      : { wall_time_ms: oldest.wall_time_ms - 1, counter: 0, actor_id: oldest.actor_id }
   }
 
   /** Whether this client has work on the record that has not reached storage. */
