@@ -23,7 +23,7 @@ concurrency:
 jobs:
   tauri-smoke:
     name: Tauri smoke build
-    runs-on: ubuntu-22.04
+    runs-on: tachyoncloud-4vcpu
 
     steps:
       - uses: actions/checkout@v6
@@ -46,7 +46,8 @@ jobs:
             libwebkit2gtk-4.1-dev \
             libappindicator3-dev \
             librsvg2-dev \
-            patchelf
+            patchelf \
+            file
 
       - name: Install dependencies
         run: npm ci
@@ -55,11 +56,16 @@ jobs:
         # Run from the workspace itself: `npm run x -- --flag` through a
         # delegating root script hands --flag to npm, not to the tauri CLI.
         working-directory: examples/playground
+        env:
+          # linuxdeploy and its AppImage plugin are themselves AppImages, and
+          # the self-hosted runner container has no FUSE to mount them with.
+          # Extracting instead of mounting is the supported fallback.
+          APPIMAGE_EXTRACT_AND_RUN: "1"
         run: npm run tauri:build
 
   tauri-android-smoke:
     name: Tauri Android smoke build
-    runs-on: ubuntu-latest
+    runs-on: tachyoncloud-4vcpu
 
     steps:
       - uses: actions/checkout@v6
